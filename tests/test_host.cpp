@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <cstdio>
 
 using InitFn = void(__cdecl*)(const char*);
@@ -34,3 +34,4 @@ int main(int argc, char** argv) {
     FreeLibrary(h);
     return 0;
 }
+
