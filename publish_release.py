@@ -91,7 +91,7 @@ def bump_version(current: str, part: str) -> str:
 
 
 def compile_hook() -> None:
-    print_banner("1. Compiling C++ In-Game Hook DLLs (MinGW-w64)")
+    print_banner("1. Compiling C++ In-Game Hook DLLs & Test Host (MinGW-w64)")
     os.makedirs(os.path.join(ROOT_DIR, "build"), exist_ok=True)
     gxx = r"C:\msys64\mingw64\bin\g++.exe"
     if not os.path.isfile(gxx):
@@ -107,6 +107,19 @@ def compile_hook() -> None:
     src_dll = os.path.join(ROOT_DIR, "build", "croc2_ap_hook.dll")
     dst_dll = os.path.join(ROOT_DIR, "build", "version.dll")
     shutil.copy2(src_dll, dst_dll)
+
+    host_cpp = os.path.join(ROOT_DIR, "tests", "test_host.cpp")
+    if os.path.isfile(host_cpp):
+        host_cmd = (
+            f'& "{gxx}" -std=c++17 -O2 -s -Wall -Wextra -static -static-libgcc -static-libstdc++ '
+            f'"tests/test_host.cpp" -o "build/test_host.exe"'
+        )
+        try:
+            run_command(host_cmd)
+            print(f"[Hook] Successfully built test host: build/test_host.exe")
+        except Exception as ex:
+            print(f"[Hook] Note: Could not compile test_host.exe ({ex})")
+
     print(f"[Hook] Successfully built: {src_dll} and {dst_dll}")
 
 
@@ -125,8 +138,15 @@ def build_apworld() -> str:
     return apworld_path
 
 
+def compile_setup() -> None:
+    print_banner("4. Compiling 1-Click Installer Setup EXE (Croc2AP_Setup.exe)")
+    cmd = "& cmd.exe /c build_setup.bat"
+    run_command(cmd)
+    print("[Setup] Successfully built: Croc2AP_Setup.exe")
+
+
 def run_tests() -> None:
-    print_banner("4. Running Automated Verification Test Suite")
+    print_banner("5. Running Automated Verification Test Suite")
     python_exe = r"C:\msys64\usr\bin\python.exe" if os.path.isfile(r"C:\msys64\usr\bin\python.exe") else sys.executable
     cmd = f'& "{python_exe}" -m unittest tests/test_croc2_ap.py'
     run_command(cmd)
@@ -134,18 +154,20 @@ def run_tests() -> None:
 
 
 def package_release_zip(version: str) -> str:
-    print_banner("5. Creating Release Distribution ZIP Archive")
+    print_banner("6. Creating Release Distribution ZIP Archive")
     dist_dir = os.path.join(ROOT_DIR, "dist")
     os.makedirs(dist_dir, exist_ok=True)
     zip_filename = f"Croc2Archipelago-v{version}.zip"
     zip_path = os.path.join(dist_dir, zip_filename)
 
     files_to_pack = [
+        ("Croc2AP_Setup.exe", "Croc2AP_Setup.exe"),
         ("Croc2ArchipelagoLauncher.exe", "Croc2ArchipelagoLauncher.exe"),
         (os.path.join("build", "version.dll"), "version.dll"),
         ("croc2_mod.ini", "croc2_mod.ini"),
         (os.path.join("dist", "croc2.apworld"), "croc2.apworld"),
         (os.path.join("templates", "Croc 2.yaml"), "Croc 2.yaml"),
+        ("INSTALL_INSTRUCTIONS.txt", "INSTALL_INSTRUCTIONS.txt"),
         ("Install_Croc2AP.bat", "Install_Croc2AP.bat"),
         ("Uninstall_Croc2AP.bat", "Uninstall_Croc2AP.bat"),
         ("Toggle_Vanilla_Mode.bat", "Toggle_Vanilla_Mode.bat"),
@@ -210,21 +232,27 @@ def git_operations(version: str, notes: str, push: bool = True) -> None:
     gh_check = shutil.which("gh")
     if gh_check and push:
         print("\n[GitHub CLI] Detected gh tool. Attempting to create GitHub Release...")
+        setup_exe = os.path.join(ROOT_DIR, "Croc2AP_Setup.exe")
         zip_path = os.path.join(ROOT_DIR, "dist", f"Croc2Archipelago-v{version}.zip")
         apworld_path = os.path.join(ROOT_DIR, "dist", "croc2.apworld")
+        yaml_path = os.path.join(ROOT_DIR, "templates", "Croc 2.yaml")
         dll_path = os.path.join(ROOT_DIR, "build", "version.dll")
         exe_path = os.path.join(ROOT_DIR, "Croc2ArchipelagoLauncher.exe")
 
         gh_cmd = (
-            f'gh release create {tag} "{zip_path}" "{exe_path}" "{apworld_path}" "{dll_path}" '
+            f'gh release create {tag} "{setup_exe}" "{zip_path}" "{apworld_path}" "{yaml_path}" "{exe_path}" "{dll_path}" '
             f'--title "Croc 2 Archipelago Randomizer {tag}" '
             f'--notes "{notes or "Croc 2 Archipelago Randomizer and Standalone Launcher release."}"'
         )
         try:
             run_command(gh_cmd)
-            print(f"[GitHub CLI] Release {tag} successfully created!")
+            print(f"[GitHub CLI] Release {tag} successfully created on GitHub!")
         except Exception as e:
             print(f"[GitHub CLI] Notice: Could not automatically create release via gh ({e}).")
+    elif push:
+        print(f"\n[GitHub Actions] Release tag {tag} pushed! GitHub Actions will automatically")
+        print(f"publish the release with Croc2AP_Setup.exe, distribution zip, croc2.apworld,")
+        print(f"and default Croc 2.yaml at: https://github.com/{DEFAULT_REPO}/releases")
 
 
 def main() -> None:
@@ -257,6 +285,7 @@ def main() -> None:
     compile_hook()
     compile_launcher()
     build_apworld()
+    compile_setup()
     run_tests()
     zip_path = package_release_zip(target_ver)
 

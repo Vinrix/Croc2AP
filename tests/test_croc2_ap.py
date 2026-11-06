@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -477,43 +478,39 @@ class TestCroc2Archipelago(unittest.TestCase):
         self.assertTrue(mw.completion_condition[1](state))
 
     def test_hook_dll_tcp_protocol_and_mechanics(self):
-        # Compile a tiny C++ host executable that loads build/croc2_ap_hook.dll and starts its TCP server on port 43829
-        host_cpp = os.path.join(ROOT_DIR, "build", "test_host.cpp")
+        # Compile or locate test_host.exe that loads build/croc2_ap_hook.dll and starts its TCP server on port 43829
+        host_cpp = os.path.join(ROOT_DIR, "tests", "test_host.cpp")
         host_exe = os.path.join(ROOT_DIR, "build", "test_host.exe")
-        with open(host_cpp, "w", encoding="utf-8") as f:
-            f.write(
-                '#include <windows.h>\n'
-                '#include <cstdio>\n'
-                'using InitFn = void(__cdecl*)(const char*);\n'
-                'using ShutFn = void(__cdecl*)();\n'
-                'int main(int argc, char** argv) {\n'
-                '    const char* ini = (argc > 1) ? argv[1] : "croc2_mod.ini";\n'
-                '    HMODULE h = LoadLibraryA("build/croc2_ap_hook.dll");\n'
-                '    if (!h) return 1;\n'
-                '    auto init = reinterpret_cast<InitFn>(reinterpret_cast<void*>(GetProcAddress(h, "Croc2AP_Initialize")));\n'
-                '    auto shut = reinterpret_cast<ShutFn>(reinterpret_cast<void*>(GetProcAddress(h, "Croc2AP_Shutdown")));\n'
-                '    init(ini);\n'
-                '    Sleep(12000);\n'
-                '    shut();\n'
-                '    FreeLibrary(h);\n'
-                '    return 0;\n'
-                '}\n'
-            )
+        os.makedirs(os.path.join(ROOT_DIR, "build"), exist_ok=True)
+
+        if not os.path.isfile(host_exe):
+            gpp_candidates = [
+                shutil.which("g++"),
+                r"C:\msys64\mingw64\bin\g++.exe",
+                "/mingw64/bin/g++.exe",
+                r"D:\a\_temp\setup-msys2\mingw64\bin\g++.exe",
+            ]
+            gpp_path = next((p for p in gpp_candidates if p and os.path.isfile(p)), None)
+            if not gpp_path:
+                gpp_path = "g++"
+
+            env = os.environ.copy()
+            env["PATH"] = "/mingw64/bin:" + r"C:\msys64\mingw64\bin;" + env.get("PATH", "")
+            try:
+                subprocess.run(
+                    [gpp_path, "-std=c++17", "-static", "-static-libgcc", "-static-libstdc++", host_cpp, "-o", host_exe],
+                    cwd=ROOT_DIR,
+                    env=env,
+                    check=True,
+                )
+            except Exception as e:
+                self.skipTest(f"Skipping hook TCP protocol test: g++ compiler unavailable ({e})")
 
         test_ini = os.path.join(ROOT_DIR, "build", "test_mod.ini")
         with open(test_ini, "w", encoding="utf-8") as f:
             f.write("[ArchipelagoMod]\nenabled = true\nport = 43829\nfire_trap_tick_ms = 1500\n")
 
         env = os.environ.copy()
-        gpp_path = "/mingw64/bin/g++.exe" if os.path.exists("/mingw64/bin/g++.exe") else r"C:\msys64\mingw64\bin\g++.exe"
-        env["PATH"] = "/mingw64/bin:" + r"C:\msys64\mingw64\bin;" + env.get("PATH", "")
-        subprocess.run(
-            [gpp_path, "-std=c++17", "-static", "-static-libgcc", "-static-libstdc++", host_cpp, "-o", host_exe],
-            cwd=ROOT_DIR,
-            env=env,
-            check=True,
-        )
-
         proc = subprocess.Popen([host_exe, test_ini], cwd=ROOT_DIR, env=env)
         try:
             async def run_tcp_checks():

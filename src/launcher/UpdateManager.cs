@@ -16,14 +16,17 @@ namespace Croc2Launcher
         public string ReleaseNotes { get; set; }
         public string ReleaseUrl { get; set; }
         public string LauncherDownloadUrl { get; set; }
+        public string SetupDownloadUrl { get; set; }
+        public string ZipDownloadUrl { get; set; }
         public string ApworldDownloadUrl { get; set; }
+        public string YamlDownloadUrl { get; set; }
         public string HookDllDownloadUrl { get; set; }
         public string ErrorMessage { get; set; }
     }
 
     public static class UpdateManager
     {
-        public const string CurrentVersion = "1.0.1";
+        public const string CurrentVersion = "1.0.2";
         public const string DefaultRepo = "Vinrix/Croc2AP";
 
         static UpdateManager()
@@ -82,13 +85,25 @@ namespace Croc2Launcher
                                     string aName = aDict.ContainsKey("name") && aDict["name"] != null ? aDict["name"].ToString() : "";
                                     string aUrl = aDict.ContainsKey("browser_download_url") && aDict["browser_download_url"] != null ? aDict["browser_download_url"].ToString() : "";
 
-                                    if (aName.IndexOf("launcher", StringComparison.OrdinalIgnoreCase) >= 0 && aName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                                    if (aName.IndexOf("setup", StringComparison.OrdinalIgnoreCase) >= 0 || aName.IndexOf("installer", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        info.SetupDownloadUrl = aUrl;
+                                    }
+                                    else if (aName.IndexOf("launcher", StringComparison.OrdinalIgnoreCase) >= 0 && aName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                                     {
                                         info.LauncherDownloadUrl = aUrl;
+                                    }
+                                    else if (aName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        info.ZipDownloadUrl = aUrl;
                                     }
                                     else if (aName.EndsWith(".apworld", StringComparison.OrdinalIgnoreCase))
                                     {
                                         info.ApworldDownloadUrl = aUrl;
+                                    }
+                                    else if (aName.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) || aName.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        info.YamlDownloadUrl = aUrl;
                                     }
                                     else if (aName.Equals("version.dll", StringComparison.OrdinalIgnoreCase) || aName.Equals("croc2_ap_hook.dll", StringComparison.OrdinalIgnoreCase))
                                     {

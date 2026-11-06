@@ -61,21 +61,34 @@ Featuring memory-hooked item injection, door locking logic, interactive player t
 
 ##  Quickstart & Installation
 
-### Option A: Automatic One-Click Setup
-1. Download the latest **`Croc2Archipelago-vX.X.X.zip`** from [GitHub Releases](https://github.com/Vinrix/Croc2AP/releases).
-2. Extract the archive into a folder of your choice.
-3. Right-click **`Install_Croc2AP.bat`** and select **Run as Administrator**.
-   - Automatically installs `version.dll` and `croc2_mod.ini` into your Croc 2 Steam folder.
-   - Automatically installs `croc2.apworld` into `C:\ProgramData\Archipelago\custom_worlds\`.
-   - Automatically installs the YAML template into `C:\ProgramData\Archipelago\Players\Templates\`.
-4. Double-click **`Croc2ArchipelagoLauncher.exe`** to start!
+Each release on [GitHub Releases](https://github.com/Vinrix/Croc2AP/releases) provides multiple convenient ways to get set up:
 
-### Option B: Using the Standalone Launcher
-1. Place **`Croc2ArchipelagoLauncher.exe`** in your Croc 2 game directory (or any preferred folder).
-2. Open the launcher. It automatically detects `croc2.exe` from default Steam library paths.
-3. Switch to the **⚙️ Randomizer Settings & YAML Export** tab, customize your seed rules, and click **💾 Save & Export YAML to Archipelago Players**.
-4. Generate your multiworld seed using Archipelago (`Generate.py` or the Archipelago Web Host).
-5. Switch to **🎮 Play & Connect**, enter your room host/port/slot, and click **🌐 Play Archipelago**!
+| Release Asset | Description |
+| :--- | :--- |
+| **`Croc2AP_Setup.exe`** | **1-Click Self-Contained Installer**. Automatically detects Steam and Archipelago folders, extracts all files, creates Desktop shortcuts, and sets up everything in seconds. |
+| **`Croc2Archipelago-vX.X.X.zip`** | **Full Distribution Package**. Contains `Croc2AP_Setup.exe`, `Croc2ArchipelagoLauncher.exe`, `version.dll`, `croc2_mod.ini`, `croc2.apworld`, `Croc 2.yaml`, `INSTALL_INSTRUCTIONS.txt`, and batch install/uninstall scripts. |
+| **`croc2.apworld`** | **Archipelago World File**. Direct download for Archipelago server hosts / generators (drop into `custom_worlds/`). |
+| **`Croc 2.yaml`** | **Default Player Options Template**. Direct download for generating multiworld seeds. |
+| **`Croc2ArchipelagoLauncher.exe`** | **Standalone UI Launcher**. Direct download for updating your launcher executable. |
+
+---
+
+### Option 1: 1-Click Auto-Installer (Recommended)
+1. Download **`Croc2AP_Setup.exe`** from [GitHub Releases](https://github.com/Vinrix/Croc2AP/releases).
+2. Run `Croc2AP_Setup.exe`.
+3. It automatically detects your Croc 2 Steam folder and Archipelago directory.
+4. Click **`🚀 Install / Update Croc 2 AP`**.
+5. Click **`🎮 Launch Launcher`** (or open the desktop shortcut) to start playing!
+
+---
+
+### Option 2: Full Distribution Archive & Manual Install
+1. Download **`Croc2Archipelago-vX.X.X.zip`** from [GitHub Releases](https://github.com/Vinrix/Croc2AP/releases) and extract it.
+2. Run **`Croc2AP_Setup.exe`** or right-click **`Install_Croc2AP.bat`** -> **Run as Administrator**.
+3. Or follow [`INSTALL_INSTRUCTIONS.txt`](INSTALL_INSTRUCTIONS.txt) to manually copy:
+   - `version.dll`, `croc2_mod.ini`, `Croc2ArchipelagoLauncher.exe` -> `C:\Program Files (x86)\Steam\steamapps\common\Croc 2\`
+   - `croc2.apworld` -> `C:\ProgramData\Archipelago\custom_worlds\`
+   - `Croc 2.yaml` -> `C:\ProgramData\Archipelago\Players\Templates\`
 
 ---
 

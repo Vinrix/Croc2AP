@@ -149,6 +149,16 @@ def install_mod(
         shutil.copy2(src_launcher, dst_launcher)
         installed["launcher"] = dst_launcher
 
+    src_setup = os.path.join(ROOT_DIR, "Croc2AP_Setup.exe")
+    if os.path.isfile(src_setup):
+        dst_setup = os.path.join(game_dir, "Croc2AP_Setup.exe")
+        shutil.copy2(src_setup, dst_setup)
+        installed["setup_exe"] = dst_setup
+
+    src_instr = os.path.join(ROOT_DIR, "INSTALL_INSTRUCTIONS.txt")
+    if os.path.isfile(src_instr):
+        shutil.copy2(src_instr, os.path.join(game_dir, "INSTALL_INSTRUCTIONS.txt"))
+
     if not skip_ap:
         custom_worlds_dir = os.path.join(ap_dir, "custom_worlds")
         templates_dir = os.path.join(ap_dir, "Players", "Templates")

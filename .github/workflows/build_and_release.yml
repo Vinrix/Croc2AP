@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to release (e.g. v1.0.1)'
+        description: 'Version tag to release (e.g. v1.0.2)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.2'
 
 jobs:
   build-and-release:
@@ -47,7 +47,7 @@ jobs:
           echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
 
-      - name: Compile C++ Hook DLL (MinGW-w64)
+      - name: Compile C++ Hook DLL & Test Host (MinGW-w64)
         shell: msys2 {0}
         run: |
           mkdir -p build
@@ -56,6 +56,8 @@ jobs:
             -o build/croc2_ap_hook.dll \
             -lws2_32 -lwinhttp -lgdi32 -luser32
           cp build/croc2_ap_hook.dll build/version.dll
+          g++ -std=c++17 -O2 -s -Wall -Wextra -static -static-libgcc -static-libstdc++ \
+            tests/test_host.cpp -o build/test_host.exe
           ls -la build/
 
       - name: Compile C# Standalone Launcher
@@ -70,17 +72,25 @@ jobs:
           python installer.py --build-apworld
           python -m unittest tests/test_croc2_ap.py
 
+      - name: Compile 1-Click Installer Setup EXE
+        shell: cmd
+        run: |
+          call build_setup.bat
+          if not exist Croc2AP_Setup.exe exit /b 1
+
       - name: Create Release Distribution Archive
         shell: bash
         run: |
           VER="${{ steps.get_version.outputs.VERSION }}"
           ZIP_NAME="Croc2Archipelago-v${VER}.zip"
           mkdir -p dist/package
+          cp Croc2AP_Setup.exe dist/package/
           cp Croc2ArchipelagoLauncher.exe dist/package/
           cp build/version.dll dist/package/
           cp croc2_mod.ini dist/package/
           cp dist/croc2.apworld dist/package/
           cp "templates/Croc 2.yaml" dist/package/
+          cp INSTALL_INSTRUCTIONS.txt dist/package/
           cp Install_Croc2AP.bat dist/package/
           cp Uninstall_Croc2AP.bat dist/package/
           cp Toggle_Vanilla_Mode.bat dist/package/
@@ -97,8 +107,9 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            Croc2ArchipelagoLauncher.exe
-            dist/croc2.apworld
-            build/version.dll
+            Croc2AP_Setup.exe
             dist/Croc2Archipelago-*.zip
-
+            dist/croc2.apworld
+            templates/Croc 2.yaml
+            Croc2ArchipelagoLauncher.exe
+            build/version.dll
