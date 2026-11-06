@@ -1,0 +1,430 @@
+{
+  "binary_info": {
+    "executable": "croc2.exe",
+    "architecture": "x86_64",
+    "image_base": "0x140000000",
+    "rvas": {
+      "jigsaw_count_ref": "0x002187D6",
+      "crystal_count_ref": "0x00218559",
+      "gobbo_count_ref": "0x001D1DA1",
+      "cheat_activated_ref": "0x00218D67",
+      "crystal_patcher_table": "0x007F6F30",
+      "wad_path_format": "0x007F727A",
+      "hud_inventory_table": "0x0081B400",
+      "action_prompt_enums": "0x0081B9A0"
+    },
+    "engine_inventory_enums": [
+      "BINOCULARS",
+      "KEYS",
+      "CLOCKWORK_GOBBOS",
+      "RED_JELLIES",
+      "BLUE_JELLIES",
+      "GREEN_JELLIES",
+      "HEART_POTS",
+      "TOTAL_CRYSTALS"
+    ],
+    "engine_action_enums": [
+      "REMOVE_JELLY",
+      "REMOVE_GUMMY",
+      "ACCELERATE",
+      "TAIL_ATTACK",
+      "STOMP",
+      "TRIPLE_JUMP",
+      "HOT_AIR_BALLOON_DOWN",
+      "HOT_AIR_BALLOON_DROP_ICE",
+      "SHOOT",
+      "BINOCULARS_ZOOM"
+    ]
+  },
+  "hubs": [
+    {
+      "id": "sailor_village",
+      "hub_num": 1,
+      "name": "Sailor Village",
+      "wad": "T1L1M001",
+      "shop_wad": "T1L1M004",
+      "vip_pass": "Pete's VIP Pass (Sailor Village)",
+      "jigsaw_piece": "Sailor Village Jigsaw Piece",
+      "levels": [
+        {
+          "door_id": "T1_D1",
+          "door_num": 1,
+          "wad": "T1L2M001",
+          "name": "Find the Key! Save the Gobbo!",
+          "requires": [
+            "Tail Whack",
+            "Power Gloves"
+          ],
+          "has_trophy": false
+        },
+        {
+          "door_id": "T1_D2",
+          "door_num": 2,
+          "wad": "T1L3M001",
+          "name": "Find 5 Lost Treasure Chests",
+          "requires": [
+            "Butt Stomp",
+            "Climbing Claws"
+          ],
+          "has_trophy": false
+        },
+        {
+          "door_id": "T1_D3",
+          "door_num": 3,
+          "wad": "T1L4M001",
+          "name": "Get the Gobbo's Sandwich!",
+          "requires": [
+            "Tail Whack",
+            "Lever Wrench"
+          ],
+          "has_trophy": false
+        },
+        {
+          "door_id": "T1_D4",
+          "door_num": 4,
+          "wad": "T1L5M001",
+          "name": "Croc Vs Dantini Boat Race",
+          "requires": [
+            "Vehicle License"
+          ],
+          "has_trophy": true
+        },
+        {
+          "door_id": "T1_D5",
+          "door_num": 5,
+          "wad": "T1L6M001",
+          "name": "Save the Bird from the Thief",
+          "requires": [
+            "Tail Whack",
+            "Climbing Claws"
+          ],
+          "has_trophy": true
+        }
+      ],
+      "secret_level": {
+        "door_id": "T1_S1",
+        "wad": "T1S1M001",
+        "name": "Sailor Tribe - Secret Mine",
+        "requires": [
+          "Vehicle License",
+          "Butt Stomp"
+        ]
+      },
+      "bosses": [
+        {
+          "door_id": "T1_B1",
+          "wad": "T1B1M001",
+          "name": "Soveena The Squid",
+          "requires": [
+            "Tail Whack",
+            "Butt Stomp"
+          ]
+        },
+        {
+          "door_id": "T1_B2",
+          "wad": "T1B2M001",
+          "name": "Cannon Boat Keith",
+          "requires": [
+            "Vehicle License",
+            "Tail Whack"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cossack_village",
+      "hub_num": 2,
+      "name": "Cossack Village",
+      "wad": "T2L1M001",
+      "shop_wad": "T2L1M004",
+      "vip_pass": "Pete's VIP Pass (Cossack Village)",
+      "jigsaw_piece": "Cossack Village Jigsaw Piece",
+      "levels": [
+        {
+          "door_id": "T2_D1",
+          "door_num": 1,
+          "wad": "T2L2M001",
+          "name": "Save the Ice Trapped Gobbos!",
+          "requires": [
+            "Butt Stomp",
+            "Power Gloves"
+          ],
+          "has_trophy": false
+        },
+        {
+          "door_id": "T2_D2",
+          "door_num": 2,
+          "wad": "T2L3M001",
+          "name": "Chase the Choo Choo Train",
+          "requires": [
+            "Vehicle License",
+            "Lever Wrench"
+          ],
+          "has_trophy": true
+        },
+        {
+          "door_id": "T2_D3",
+          "door_num": 3,
+          "wad": "T2L5M001",
+          "name": "It's just Snowball Madness!",
+          "requires": [
+            "Power Gloves",
+            "Tail Whack"
+          ],
+          "has_trophy": true
+        },
+        {
+          "door_id": "T2_D4",
+          "door_num": 4,
+          "wad": "T2L6M001",
+          "name": "Hang Glider Valley",
+          "requires": [
+            "Vehicle License"
+          ],
+          "has_trophy": true
+        },
+        {
+          "door_id": "T2_D5",
+          "door_num": 5,
+          "wad": "T2L7M001",
+          "name": "KaBooom! It's Roger Red Ant",
+          "requires": [
+            "Tail Whack",
+            "Climbing Claws",
+            "Lever Wrench"
+          ],
+          "has_trophy": false
+        }
+      ],
+      "secret_level": {
+        "door_id": "T2_S1",
+        "wad": "T2S1M001",
+        "name": "Cossack Tribe - Secret Ice Cap",
+        "requires": [
+          "Butt Stomp",
+          "Climbing Claws"
+        ]
+      },
+      "bosses": [
+        {
+          "door_id": "T2_B1",
+          "wad": "T2B1M001",
+          "name": "Flavio the Thermal Fish",
+          "requires": [
+            "Tail Whack",
+            "Butt Stomp"
+          ]
+        },
+        {
+          "door_id": "T2_B2",
+          "wad": "T2B2M001",
+          "name": "Lava Lamp Larry",
+          "requires": [
+            "Tail Whack",
+            "Power Gloves",
+            "Lever Wrench"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "caveman_village",
+      "hub_num": 3,
+      "name": "Caveman Village",
+      "wad": "T3L1M001",
+      "shop_wad": "T3L1M004",
+      "vip_pass": "Pete's VIP Pass (Caveman Village)",
+      "jigsaw_piece": "Caveman Village Jigsaw Piece",
+      "levels": [
+        {
+          "door_id": "T3_D1",
+          "door_num": 1,
+          "wad": "T3L2M001",
+          "name": "Find the Wheels in the Jungle!",
+          "requires": [
+            "Climbing Claws",
+            "Power Gloves"
+          ],
+          "has_trophy": false
+        },
+        {
+          "door_id": "T3_D2",
+          "door_num": 2,
+          "wad": "T3L3M001",
+          "name": "Find the Wheels in the Mine!",
+          "requires": [
+            "Vehicle License",
+            "Power Gloves",
+            "Lever Wrench"
+          ],
+          "has_trophy": false
+        },
+        {
+          "door_id": "T3_D3",
+          "door_num": 3,
+          "wad": "T3L4M001",
+          "name": "Race Day at Goldrock",
+          "requires": [
+            "Vehicle License"
+          ],
+          "has_trophy": true
+        },
+        {
+          "door_id": "T3_D4",
+          "door_num": 4,
+          "wad": "T3L5M001",
+          "name": "Climb The Devil's Tower",
+          "requires": [
+            "Vehicle License",
+            "Airplane Ammo Feed",
+            "Climbing Claws"
+          ],
+          "has_trophy": true
+        },
+        {
+          "door_id": "T3_D5",
+          "door_num": 5,
+          "wad": "T3L7M001",
+          "name": "Save 50 Trapped Gobbos!",
+          "requires": [
+            "Tail Whack",
+            "Butt Stomp",
+            "Lever Wrench"
+          ],
+          "has_trophy": true
+        }
+      ],
+      "secret_level": {
+        "door_id": "T3_S1",
+        "wad": "T3S1M001",
+        "name": "Caveman Tribe - Secret Mine",
+        "requires": [
+          "Vehicle License",
+          "Climbing Claws"
+        ]
+      },
+      "bosses": [
+        {
+          "door_id": "T3_B1",
+          "wad": "T3B1M001",
+          "name": "Venus Fly Von-Trappe",
+          "requires": [
+            "Tail Whack",
+            "Power Gloves"
+          ]
+        },
+        {
+          "door_id": "T3_B2",
+          "wad": "T3B2M001",
+          "name": "The Village Masher",
+          "requires": [
+            "Butt Stomp",
+            "Lever Wrench"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "inca_village",
+      "hub_num": 4,
+      "name": "Inca Village",
+      "wad": "T4L1M001",
+      "shop_wad": "T4L1M004",
+      "vip_pass": "Pete's VIP Pass (Inca Village)",
+      "jigsaw_piece": "Inca Village Jigsaw Piece",
+      "levels": [
+        {
+          "door_id": "T4_D1",
+          "door_num": 1,
+          "wad": "T4L2M001",
+          "name": "Save 30 Gobbo babies!",
+          "requires": [
+            "Tail Whack",
+            "Power Gloves"
+          ],
+          "has_trophy": false
+        },
+        {
+          "door_id": "T4_D2",
+          "door_num": 2,
+          "wad": "T4L3M001",
+          "name": "Up the Waterfall",
+          "requires": [
+            "Climbing Claws",
+            "Vehicle License"
+          ],
+          "has_trophy": true
+        },
+        {
+          "door_id": "T4_D3",
+          "door_num": 3,
+          "wad": "T4L5M001",
+          "name": "Bride of the Dungeon of Defright",
+          "requires": [
+            "Tail Whack",
+            "Butt Stomp",
+            "Lever Wrench"
+          ],
+          "has_trophy": false
+        },
+        {
+          "door_id": "T4_D4",
+          "door_num": 4,
+          "wad": "T4L6M001",
+          "name": "Goo Man Chu's Tower",
+          "requires": [
+            "Climbing Claws",
+            "Power Gloves",
+            "Lever Wrench"
+          ],
+          "has_trophy": true
+        },
+        {
+          "door_id": "T4_D5",
+          "door_num": 5,
+          "wad": "T0L1M003",
+          "name": "Burning Down the Forest",
+          "requires": [
+            "Power Gloves",
+            "Tail Whack"
+          ],
+          "has_trophy": true
+        }
+      ],
+      "secret_level": {
+        "door_id": "T4_S1",
+        "wad": "T4S1M001",
+        "name": "Inca Tribe - Secret Maze",
+        "requires": [
+          "Tail Whack",
+          "Butt Stomp",
+          "Climbing Claws"
+        ]
+      },
+      "bosses": [
+        {
+          "door_id": "T4_B1",
+          "wad": "T4B1M001",
+          "name": "Dante's Peak",
+          "requires": [
+            "Tail Whack",
+            "Butt Stomp",
+            "Climbing Claws"
+          ]
+        },
+        {
+          "door_id": "T4_B2",
+          "wad": "T4B2M001",
+          "name": "Dante's Final Fight",
+          "requires": [
+            "Tail Whack",
+            "Butt Stomp",
+            "Climbing Claws",
+            "Power Gloves",
+            "Lever Wrench"
+          ]
+        }
+      ]
+    }
+  ]
+}

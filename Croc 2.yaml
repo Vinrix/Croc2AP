@@ -1,0 +1,265 @@
+# Q. What is this file?
+# A. This file contains options which allow you to configure your multiworld experience while allowing
+#    others to play how they want as well.
+#
+# Q. How do I use it?
+# A. The options in this file are weighted. This means the higher number you assign to a value, the
+#    more chances you have for that option to be chosen. For example, an option like this:
+#
+#    door_shuffle:
+#      off: 5
+#      within_village: 15
+#      any_village: 0
+#
+#    Means you have 5 chances for door shuffle to be off, and 15 chances for door shuffle to be set
+#    to within_village.
+#
+# Q. I've never seen a file like this before. What characters am I allowed to use?
+# A. This is a .yaml file. You are allowed to use most characters.
+#    To test if your yaml is valid or not, you can use this website:
+#        http://www.yamllint.com/
+#    You can also verify that your Archipelago options are valid at this site:
+#        https://archipelago.gg/check
+
+# Your name in-game, limited to 16 characters.
+#     {player} will be replaced with the player's slot number.
+#     {PLAYER} will be replaced with the player's slot number, if that slot number is greater than 1.
+#     {number} will be replaced with the counter value of the name.
+#     {NUMBER} will be replaced with the counter value of the name, if the counter value is greater than 1.
+name: Player{number}
+
+# Used to describe your yaml. Useful if you have multiple files.
+description: Default Croc 2 Template
+
+game: Croc 2
+requires:
+  version: 0.6.7 # Version of Archipelago required for this yaml to work as expected.
+  game:
+    Croc 2: 0.1.0 # Version of the world required for this yaml to work as expected.
+
+Croc 2:
+  ################
+  # Game Options #
+  ################
+  progression_balancing:
+    # A system that can move progression earlier, to try and prevent the player from getting stuck and bored early.
+    # 
+    # A lower setting means more getting stuck. A higher setting means less getting stuck.
+    #
+    # You can define additional values between the minimum and maximum values.
+    # Minimum value is 0
+    # Maximum value is 99
+    random: 0
+    random-low: 0 # random value weighted towards lower values
+    random-high: 0 # random value weighted towards higher values
+    random-range-0-99: 0 # random value between 0 and 99
+    disabled: 0 # equivalent to 0
+    normal: 50 # equivalent to 50
+    extreme: 0 # equivalent to 99
+
+  accessibility:
+    # Set rules for reachability of your items/locations.
+    # 
+    # **Full:** ensure everything can be reached and acquired.
+    # 
+    # **Minimal:** ensure what is needed to reach your goal can be acquired.
+    full: 50
+    minimal: 0
+
+  #################
+  # Seed Settings #
+  #################
+  goal:
+    # Set the win condition required to complete the seed.
+    # 
+    # - **defeat_baron_dante**: Open the portal to Dante's Sanctuary and defeat Baron Dante in Dante's Final Fight.
+    # - **collect_jigsaw_pieces**: Collect the required number of Village Hub Jigsaw Pieces (`jigsaw_pieces_required`).
+    # - **trophy_hunt**: Collect the required number of Trophies from races, challenges, and secret levels (`trophies_required`).
+    # - **all_of_the_above**: 100% Mastery — Defeat Baron Dante **AND** collect the required Jigsaw Pieces **AND** collect the required Trophies.
+    defeat_baron_dante: 50
+    collect_jigsaw_pieces: 0
+    trophy_hunt: 0
+    all_of_the_above: 0
+
+  jigsaw_pieces_required:
+    # Number of Jigsaw Pieces required to open the portal to Baron Dante's Castle and satisfy Jigsaw win conditions.
+    # There are 4 total Jigsaw Pieces in the game (1 per Village Hub: Sailor, Cossack, Caveman, and Inca).
+    #
+    # You can define additional values between the minimum and maximum values.
+    # Minimum value is 1
+    # Maximum value is 4
+    4: 50
+    random: 0
+    random-low: 0 # random value weighted towards lower values
+    random-high: 0 # random value weighted towards higher values
+    random-range-1-4: 0 # random value between 1 and 4
+
+  trophies_required:
+    # Number of Trophies required when the Goal is set to **trophy_hunt** or **all_of_the_above**.
+    # There are 16 Trophies available in the pool.
+    #
+    # You can define additional values between the minimum and maximum values.
+    # Minimum value is 1
+    # Maximum value is 16
+    12: 50
+    random: 0
+    random-low: 0 # random value weighted towards lower values
+    random-high: 0 # random value weighted towards higher values
+    random-range-1-16: 0 # random value between 1 and 16
+
+  death_link:
+    # When you die, everyone who enabled death link dies. Of course, the reverse is true too.
+    'false': 50
+    'true': 0
+
+  ##########################
+  # Ability & Access Locks #
+  ##########################
+  lock_level_access:
+    # Lock stage doors in each Village Hub behind stage-specific Level Unlock Keys in the item pool.
+    # Croc starts with access to Sailor Village Door 1 so early checks are always reachable.
+    'false': 0
+    'true': 50
+
+  shuffle_abilities:
+    # Shuffle Croc's core movement and action abilities into the multiworld pool:
+    # - **Butt Stomp** (aerial stomp / pound attack)
+    # - **Tail Whack** (360-degree tail spin attack)
+    # - **Climbing Claws** (ability to climb ropes, ladders, monkey bars, and climbable walls)
+    # - **Power Gloves** (ability to pick up and carry crates, pots, snowballs, and wheels when walking up to them)
+    'false': 0
+    'true': 50
+
+  shuffle_levers:
+    # Require the **Lever Wrench** item from the multiworld before Croc can switch levers and mechanical triggers.
+    'false': 0
+    'true': 50
+
+  shuffle_vehicles:
+    # Require the **Vehicle License** item from the multiworld to drive vehicles (Minecarts, Speedboats, Race Cars, Hot Air Balloons, Hang Gliders, and Airplanes).
+    'false': 0
+    'true': 50
+
+  shuffle_plane_guns:
+    # Require the **Airplane Ammo Feed** item from the multiworld to shoot projectiles while flying in airplane stages.
+    'false': 0
+    'true': 50
+
+  shuffle_pete_store:
+    # Configure how Swap Meet Pete's General Store is randomized across the 4 Village Hubs.
+    # 
+    # - **vanilla**: Pete's store is open by default and sells vanilla items for crystals.
+    # - **shuffle_shop_items**: Requires each Village's **Pete's VIP Pass** AND replaces Pete's shop inventory (Heart Pots, Clockwork Gobbos, Gummi Jumps, Jelly Jumps) with multiworld location checks.
+    vanilla: 0
+    shuffle_shop_items: 50
+
+  ########################
+  # Item & Location Pool #
+  ########################
+  colored_crystals_mode:
+    # Configure how the 5 Colored Crystals per level (Red, Blue, Green, Yellow, Purple) are handled.
+    # 
+    # - **vanilla**: Colored Crystals remain in their vanilla stage positions and are not shuffled into the multiworld.
+    # - **shuffled_in_pool**: Each of the 5 Colored Crystals per stage is an individual item and location check in the multiworld pool (e.g., *Sailor Village Door 3 - Blue Crystal*). Once all 5 crystals for a stage are received, that stage's **Golden Gobbo** is automatically activated!
+    # - **auto_grant_on_enter**: All 5 Colored Crystals for a stage are automatically granted whenever Croc enters that stage.
+    vanilla: 0
+    shuffled_in_pool: 50
+    auto_grant_on_enter: 0
+
+  shuffle_white_crystals:
+    # Configure how regular White Crystals in each level are randomized:
+    # 
+    # - **none**: Regular White Crystals only award crystal currency and do not act as location checks.
+    # - **milestones_50**: 2 checks per level (at 50 and 100 crystals collected, 40 checks total).
+    # - **milestones_10**: 10 checks per level (every 10 crystals: 10, 20, 30, ..., 100; 200 checks total).
+    # - **all_100**: Every individual White Crystal (1 to 100 per stage) is a unique location check (2,000 checks total).
+    none: 0
+    milestones_50: 0
+    milestones_10: 0
+    all_100: 50
+
+  ########################
+  # World & Door Changes #
+  ########################
+  door_shuffle:
+    # Randomize which stage door leads to which level across the Village Hubs.
+    # 
+    # - **off**: All stage doors lead to their vanilla levels.
+    # - **within_village**: Stage doors are shuffled amongst levels within the same Village Hub.
+    # - **any_village**: Stage doors can lead to any normal level across any of the 4 Village Hubs.
+    off: 0
+    within_village: 50
+    any_village: 0
+
+  #########
+  # Traps #
+  #########
+  trap_weight:
+    # Percentage chance (0 to 100) that filler items in the pool are replaced with Traps.
+    # Traps include:
+    # - **Fire Breakout Trap** (3 burning ticks; extinguished immediately by performing a **front flip**)
+    # - **Ice Physics Trap** (zero surface friction for 15 seconds)
+    # - **Reverse Controls Trap** (inverted directional movement for 10 seconds)
+    # - **Dantini Ambush Trap** (spawns 3 Dantinis around Croc)
+    # - **Speed Distortion Trap** (random hyper-speed or slow-motion for 12 seconds)
+    # - **Health Drain Trap** (deducts 1 heart)
+    #
+    # You can define additional values between the minimum and maximum values.
+    # Minimum value is 0
+    # Maximum value is 100
+    15: 50
+    random: 0
+    random-low: 0 # random value weighted towards lower values
+    random-high: 0 # random value weighted towards higher values
+    random-range-0-100: 0 # random value between 0 and 100
+
+  fire_breakout_trap:
+    # Include the **Fire Breakout Trap** (inspired by *Burning Down the Forest*) when traps are enabled.
+    # Ignites Croc's tail for 3 ticks before losing 1 heart. Performing a **front flip** pats out the flames immediately without taking damage!
+    'false': 0
+    'true': 50
+
+  ###########################
+  # Item & Location Options #
+  ###########################
+  local_items:
+    # Forces these items to be in their native world.
+    []
+
+  non_local_items:
+    # Forces these items to be outside their native world.
+    []
+
+  start_inventory:
+    # Start with the specified amount of these items. Example: "Butt Stomp: 1"
+    {}
+
+  start_inventory_from_pool:
+    # Start with the specified amount of these items and don't place them in the world. Example: "Tail Whack: 1"
+    # 
+    # The game decides what the replacement items will be.
+    {}
+
+  start_hints:
+    # Start with these item's locations prefilled into the ``!hint`` command.
+    []
+
+  start_location_hints:
+    # Start with these locations and their item prefilled into the ``!hint`` command.
+    []
+
+  exclude_locations:
+    # Prevent these locations from having an important item.
+    []
+
+  priority_locations:
+    # Prevent these locations from having an unimportant item.
+    []
+
+  item_links:
+    # Share part of your item pool with other players.
+    []
+
+  plando_items:
+    # Generic items plando.
+    []

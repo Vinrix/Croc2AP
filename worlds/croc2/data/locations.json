@@ -1,0 +1,2334 @@
+[
+  {
+    "id": 7210001,
+    "name": "Sailor Village - Pete's Store: Heart Pot Purchase 1",
+    "region": "Sailor Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T1L1M004",
+    "crystal_cost": 50,
+    "hub_id": "sailor_village"
+  },
+  {
+    "id": 7210002,
+    "name": "Sailor Village - Pete's Store: Heart Pot Purchase 2",
+    "region": "Sailor Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T1L1M004",
+    "crystal_cost": 100,
+    "hub_id": "sailor_village"
+  },
+  {
+    "id": 7210003,
+    "name": "Sailor Village - Pete's Store: Clockwork Gobbo Purchase",
+    "region": "Sailor Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T1L1M004",
+    "crystal_cost": 30,
+    "hub_id": "sailor_village"
+  },
+  {
+    "id": 7210004,
+    "name": "Sailor Village - Pete's Store: Gummi Jump Purchase",
+    "region": "Sailor Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T1L1M004",
+    "crystal_cost": 25,
+    "hub_id": "sailor_village"
+  },
+  {
+    "id": 7210005,
+    "name": "Sailor Village - Pete's Store: Jelly Jump Purchase",
+    "region": "Sailor Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T1L1M004",
+    "crystal_cost": 40,
+    "hub_id": "sailor_village"
+  },
+  {
+    "id": 7210006,
+    "name": "Find the Key! Save the Gobbo! - Stage Clear",
+    "region": "Sailor Village - Find the Key! Save the Gobbo!",
+    "category": "Stage Clear",
+    "wad": "T1L2M001",
+    "door_id": "T1_D1",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210007,
+    "name": "Find the Key! Save the Gobbo! - Red Crystal",
+    "region": "Sailor Village - Find the Key! Save the Gobbo!",
+    "category": "Colored Crystals",
+    "wad": "T1L2M001",
+    "door_id": "T1_D1",
+    "color": "RED",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210008,
+    "name": "Find the Key! Save the Gobbo! - Blue Crystal",
+    "region": "Sailor Village - Find the Key! Save the Gobbo!",
+    "category": "Colored Crystals",
+    "wad": "T1L2M001",
+    "door_id": "T1_D1",
+    "color": "BLUE",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210009,
+    "name": "Find the Key! Save the Gobbo! - Green Crystal",
+    "region": "Sailor Village - Find the Key! Save the Gobbo!",
+    "category": "Colored Crystals",
+    "wad": "T1L2M001",
+    "door_id": "T1_D1",
+    "color": "GREEN",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210010,
+    "name": "Find the Key! Save the Gobbo! - Yellow Crystal",
+    "region": "Sailor Village - Find the Key! Save the Gobbo!",
+    "category": "Colored Crystals",
+    "wad": "T1L2M001",
+    "door_id": "T1_D1",
+    "color": "YELLOW",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210011,
+    "name": "Find the Key! Save the Gobbo! - Purple Crystal",
+    "region": "Sailor Village - Find the Key! Save the Gobbo!",
+    "category": "Colored Crystals",
+    "wad": "T1L2M001",
+    "door_id": "T1_D1",
+    "color": "PURPLE",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210012,
+    "name": "Find the Key! Save the Gobbo! - Golden Gobbo",
+    "region": "Sailor Village - Find the Key! Save the Gobbo!",
+    "category": "Golden Gobbos",
+    "wad": "T1L2M001",
+    "door_id": "T1_D1",
+    "level_prefix": "Find the Key! Save the Gobbo!",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210018,
+    "name": "Find 5 Lost Treasure Chests - Stage Clear",
+    "region": "Sailor Village - Find 5 Lost Treasure Chests",
+    "category": "Stage Clear",
+    "wad": "T1L3M001",
+    "door_id": "T1_D2",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210019,
+    "name": "Find 5 Lost Treasure Chests - Red Crystal",
+    "region": "Sailor Village - Find 5 Lost Treasure Chests",
+    "category": "Colored Crystals",
+    "wad": "T1L3M001",
+    "door_id": "T1_D2",
+    "color": "RED",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210020,
+    "name": "Find 5 Lost Treasure Chests - Blue Crystal",
+    "region": "Sailor Village - Find 5 Lost Treasure Chests",
+    "category": "Colored Crystals",
+    "wad": "T1L3M001",
+    "door_id": "T1_D2",
+    "color": "BLUE",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210021,
+    "name": "Find 5 Lost Treasure Chests - Green Crystal",
+    "region": "Sailor Village - Find 5 Lost Treasure Chests",
+    "category": "Colored Crystals",
+    "wad": "T1L3M001",
+    "door_id": "T1_D2",
+    "color": "GREEN",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210022,
+    "name": "Find 5 Lost Treasure Chests - Yellow Crystal",
+    "region": "Sailor Village - Find 5 Lost Treasure Chests",
+    "category": "Colored Crystals",
+    "wad": "T1L3M001",
+    "door_id": "T1_D2",
+    "color": "YELLOW",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210023,
+    "name": "Find 5 Lost Treasure Chests - Purple Crystal",
+    "region": "Sailor Village - Find 5 Lost Treasure Chests",
+    "category": "Colored Crystals",
+    "wad": "T1L3M001",
+    "door_id": "T1_D2",
+    "color": "PURPLE",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210024,
+    "name": "Find 5 Lost Treasure Chests - Golden Gobbo",
+    "region": "Sailor Village - Find 5 Lost Treasure Chests",
+    "category": "Golden Gobbos",
+    "wad": "T1L3M001",
+    "door_id": "T1_D2",
+    "level_prefix": "Find 5 Lost Treasure Chests",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210030,
+    "name": "Get the Gobbo's Sandwich! - Stage Clear",
+    "region": "Sailor Village - Get the Gobbo's Sandwich!",
+    "category": "Stage Clear",
+    "wad": "T1L4M001",
+    "door_id": "T1_D3",
+    "requires": [
+      "Tail Whack",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210031,
+    "name": "Get the Gobbo's Sandwich! - Red Crystal",
+    "region": "Sailor Village - Get the Gobbo's Sandwich!",
+    "category": "Colored Crystals",
+    "wad": "T1L4M001",
+    "door_id": "T1_D3",
+    "color": "RED",
+    "requires": [
+      "Tail Whack",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210032,
+    "name": "Get the Gobbo's Sandwich! - Blue Crystal",
+    "region": "Sailor Village - Get the Gobbo's Sandwich!",
+    "category": "Colored Crystals",
+    "wad": "T1L4M001",
+    "door_id": "T1_D3",
+    "color": "BLUE",
+    "requires": [
+      "Tail Whack",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210033,
+    "name": "Get the Gobbo's Sandwich! - Green Crystal",
+    "region": "Sailor Village - Get the Gobbo's Sandwich!",
+    "category": "Colored Crystals",
+    "wad": "T1L4M001",
+    "door_id": "T1_D3",
+    "color": "GREEN",
+    "requires": [
+      "Tail Whack",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210034,
+    "name": "Get the Gobbo's Sandwich! - Yellow Crystal",
+    "region": "Sailor Village - Get the Gobbo's Sandwich!",
+    "category": "Colored Crystals",
+    "wad": "T1L4M001",
+    "door_id": "T1_D3",
+    "color": "YELLOW",
+    "requires": [
+      "Tail Whack",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210035,
+    "name": "Get the Gobbo's Sandwich! - Purple Crystal",
+    "region": "Sailor Village - Get the Gobbo's Sandwich!",
+    "category": "Colored Crystals",
+    "wad": "T1L4M001",
+    "door_id": "T1_D3",
+    "color": "PURPLE",
+    "requires": [
+      "Tail Whack",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210036,
+    "name": "Get the Gobbo's Sandwich! - Golden Gobbo",
+    "region": "Sailor Village - Get the Gobbo's Sandwich!",
+    "category": "Golden Gobbos",
+    "wad": "T1L4M001",
+    "door_id": "T1_D3",
+    "level_prefix": "Get the Gobbo's Sandwich!",
+    "requires": [
+      "Tail Whack",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210042,
+    "name": "Croc Vs Dantini Boat Race - Stage Clear",
+    "region": "Sailor Village - Croc Vs Dantini Boat Race",
+    "category": "Stage Clear",
+    "wad": "T1L5M001",
+    "door_id": "T1_D4",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210043,
+    "name": "Croc Vs Dantini Boat Race - Red Crystal",
+    "region": "Sailor Village - Croc Vs Dantini Boat Race",
+    "category": "Colored Crystals",
+    "wad": "T1L5M001",
+    "door_id": "T1_D4",
+    "color": "RED",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210044,
+    "name": "Croc Vs Dantini Boat Race - Blue Crystal",
+    "region": "Sailor Village - Croc Vs Dantini Boat Race",
+    "category": "Colored Crystals",
+    "wad": "T1L5M001",
+    "door_id": "T1_D4",
+    "color": "BLUE",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210045,
+    "name": "Croc Vs Dantini Boat Race - Green Crystal",
+    "region": "Sailor Village - Croc Vs Dantini Boat Race",
+    "category": "Colored Crystals",
+    "wad": "T1L5M001",
+    "door_id": "T1_D4",
+    "color": "GREEN",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210046,
+    "name": "Croc Vs Dantini Boat Race - Yellow Crystal",
+    "region": "Sailor Village - Croc Vs Dantini Boat Race",
+    "category": "Colored Crystals",
+    "wad": "T1L5M001",
+    "door_id": "T1_D4",
+    "color": "YELLOW",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210047,
+    "name": "Croc Vs Dantini Boat Race - Purple Crystal",
+    "region": "Sailor Village - Croc Vs Dantini Boat Race",
+    "category": "Colored Crystals",
+    "wad": "T1L5M001",
+    "door_id": "T1_D4",
+    "color": "PURPLE",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210048,
+    "name": "Croc Vs Dantini Boat Race - Golden Gobbo",
+    "region": "Sailor Village - Croc Vs Dantini Boat Race",
+    "category": "Golden Gobbos",
+    "wad": "T1L5M001",
+    "door_id": "T1_D4",
+    "level_prefix": "Croc Vs Dantini Boat Race",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210049,
+    "name": "Croc Vs Dantini Boat Race - Trophy Challenge",
+    "region": "Sailor Village - Croc Vs Dantini Boat Race",
+    "category": "Trophies",
+    "wad": "T1L5M001",
+    "door_id": "T1_D4",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210055,
+    "name": "Save the Bird from the Thief - Stage Clear",
+    "region": "Sailor Village - Save the Bird from the Thief",
+    "category": "Stage Clear",
+    "wad": "T1L6M001",
+    "door_id": "T1_D5",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210056,
+    "name": "Save the Bird from the Thief - Red Crystal",
+    "region": "Sailor Village - Save the Bird from the Thief",
+    "category": "Colored Crystals",
+    "wad": "T1L6M001",
+    "door_id": "T1_D5",
+    "color": "RED",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210057,
+    "name": "Save the Bird from the Thief - Blue Crystal",
+    "region": "Sailor Village - Save the Bird from the Thief",
+    "category": "Colored Crystals",
+    "wad": "T1L6M001",
+    "door_id": "T1_D5",
+    "color": "BLUE",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210058,
+    "name": "Save the Bird from the Thief - Green Crystal",
+    "region": "Sailor Village - Save the Bird from the Thief",
+    "category": "Colored Crystals",
+    "wad": "T1L6M001",
+    "door_id": "T1_D5",
+    "color": "GREEN",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210059,
+    "name": "Save the Bird from the Thief - Yellow Crystal",
+    "region": "Sailor Village - Save the Bird from the Thief",
+    "category": "Colored Crystals",
+    "wad": "T1L6M001",
+    "door_id": "T1_D5",
+    "color": "YELLOW",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210060,
+    "name": "Save the Bird from the Thief - Purple Crystal",
+    "region": "Sailor Village - Save the Bird from the Thief",
+    "category": "Colored Crystals",
+    "wad": "T1L6M001",
+    "door_id": "T1_D5",
+    "color": "PURPLE",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210061,
+    "name": "Save the Bird from the Thief - Golden Gobbo",
+    "region": "Sailor Village - Save the Bird from the Thief",
+    "category": "Golden Gobbos",
+    "wad": "T1L6M001",
+    "door_id": "T1_D5",
+    "level_prefix": "Save the Bird from the Thief",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210062,
+    "name": "Save the Bird from the Thief - Trophy Challenge",
+    "region": "Sailor Village - Save the Bird from the Thief",
+    "category": "Trophies",
+    "wad": "T1L6M001",
+    "door_id": "T1_D5",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210068,
+    "name": "Sailor Village - Sailor Tribe - Secret Mine - Jigsaw Piece",
+    "region": "Sailor Village - Sailor Tribe - Secret Mine",
+    "category": "Jigsaw Pieces",
+    "wad": "T1S1M001",
+    "door_id": "T1_S1",
+    "requires": [
+      "Vehicle License",
+      "Butt Stomp"
+    ]
+  },
+  {
+    "id": 7210069,
+    "name": "Sailor Village - Sailor Tribe - Secret Mine - Secret Trophy",
+    "region": "Sailor Village - Sailor Tribe - Secret Mine",
+    "category": "Trophies",
+    "wad": "T1S1M001",
+    "door_id": "T1_S1",
+    "requires": [
+      "Vehicle License",
+      "Butt Stomp"
+    ]
+  },
+  {
+    "id": 7210070,
+    "name": "Sailor Village - Defeat Soveena The Squid",
+    "region": "Sailor Village - Soveena The Squid",
+    "category": "Bosses",
+    "wad": "T1B1M001",
+    "door_id": "T1_B1",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp"
+    ]
+  },
+  {
+    "id": 7210071,
+    "name": "Sailor Village - Defeat Cannon Boat Keith",
+    "region": "Sailor Village - Cannon Boat Keith",
+    "category": "Bosses",
+    "wad": "T1B2M001",
+    "door_id": "T1_B2",
+    "requires": [
+      "Vehicle License",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210072,
+    "name": "Cossack Village - Pete's Store: Heart Pot Purchase 1",
+    "region": "Cossack Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T2L1M004",
+    "crystal_cost": 50,
+    "hub_id": "cossack_village"
+  },
+  {
+    "id": 7210073,
+    "name": "Cossack Village - Pete's Store: Heart Pot Purchase 2",
+    "region": "Cossack Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T2L1M004",
+    "crystal_cost": 100,
+    "hub_id": "cossack_village"
+  },
+  {
+    "id": 7210074,
+    "name": "Cossack Village - Pete's Store: Clockwork Gobbo Purchase",
+    "region": "Cossack Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T2L1M004",
+    "crystal_cost": 30,
+    "hub_id": "cossack_village"
+  },
+  {
+    "id": 7210075,
+    "name": "Cossack Village - Pete's Store: Gummi Jump Purchase",
+    "region": "Cossack Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T2L1M004",
+    "crystal_cost": 25,
+    "hub_id": "cossack_village"
+  },
+  {
+    "id": 7210076,
+    "name": "Cossack Village - Pete's Store: Jelly Jump Purchase",
+    "region": "Cossack Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T2L1M004",
+    "crystal_cost": 40,
+    "hub_id": "cossack_village"
+  },
+  {
+    "id": 7210077,
+    "name": "Save the Ice Trapped Gobbos! - Stage Clear",
+    "region": "Cossack Village - Save the Ice Trapped Gobbos!",
+    "category": "Stage Clear",
+    "wad": "T2L2M001",
+    "door_id": "T2_D1",
+    "requires": [
+      "Butt Stomp",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210078,
+    "name": "Save the Ice Trapped Gobbos! - Red Crystal",
+    "region": "Cossack Village - Save the Ice Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T2L2M001",
+    "door_id": "T2_D1",
+    "color": "RED",
+    "requires": [
+      "Butt Stomp",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210079,
+    "name": "Save the Ice Trapped Gobbos! - Blue Crystal",
+    "region": "Cossack Village - Save the Ice Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T2L2M001",
+    "door_id": "T2_D1",
+    "color": "BLUE",
+    "requires": [
+      "Butt Stomp",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210080,
+    "name": "Save the Ice Trapped Gobbos! - Green Crystal",
+    "region": "Cossack Village - Save the Ice Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T2L2M001",
+    "door_id": "T2_D1",
+    "color": "GREEN",
+    "requires": [
+      "Butt Stomp",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210081,
+    "name": "Save the Ice Trapped Gobbos! - Yellow Crystal",
+    "region": "Cossack Village - Save the Ice Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T2L2M001",
+    "door_id": "T2_D1",
+    "color": "YELLOW",
+    "requires": [
+      "Butt Stomp",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210082,
+    "name": "Save the Ice Trapped Gobbos! - Purple Crystal",
+    "region": "Cossack Village - Save the Ice Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T2L2M001",
+    "door_id": "T2_D1",
+    "color": "PURPLE",
+    "requires": [
+      "Butt Stomp",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210083,
+    "name": "Save the Ice Trapped Gobbos! - Golden Gobbo",
+    "region": "Cossack Village - Save the Ice Trapped Gobbos!",
+    "category": "Golden Gobbos",
+    "wad": "T2L2M001",
+    "door_id": "T2_D1",
+    "level_prefix": "Save the Ice Trapped Gobbos!",
+    "requires": [
+      "Butt Stomp",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210089,
+    "name": "Chase the Choo Choo Train - Stage Clear",
+    "region": "Cossack Village - Chase the Choo Choo Train",
+    "category": "Stage Clear",
+    "wad": "T2L3M001",
+    "door_id": "T2_D2",
+    "requires": [
+      "Vehicle License",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210090,
+    "name": "Chase the Choo Choo Train - Red Crystal",
+    "region": "Cossack Village - Chase the Choo Choo Train",
+    "category": "Colored Crystals",
+    "wad": "T2L3M001",
+    "door_id": "T2_D2",
+    "color": "RED",
+    "requires": [
+      "Vehicle License",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210091,
+    "name": "Chase the Choo Choo Train - Blue Crystal",
+    "region": "Cossack Village - Chase the Choo Choo Train",
+    "category": "Colored Crystals",
+    "wad": "T2L3M001",
+    "door_id": "T2_D2",
+    "color": "BLUE",
+    "requires": [
+      "Vehicle License",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210092,
+    "name": "Chase the Choo Choo Train - Green Crystal",
+    "region": "Cossack Village - Chase the Choo Choo Train",
+    "category": "Colored Crystals",
+    "wad": "T2L3M001",
+    "door_id": "T2_D2",
+    "color": "GREEN",
+    "requires": [
+      "Vehicle License",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210093,
+    "name": "Chase the Choo Choo Train - Yellow Crystal",
+    "region": "Cossack Village - Chase the Choo Choo Train",
+    "category": "Colored Crystals",
+    "wad": "T2L3M001",
+    "door_id": "T2_D2",
+    "color": "YELLOW",
+    "requires": [
+      "Vehicle License",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210094,
+    "name": "Chase the Choo Choo Train - Purple Crystal",
+    "region": "Cossack Village - Chase the Choo Choo Train",
+    "category": "Colored Crystals",
+    "wad": "T2L3M001",
+    "door_id": "T2_D2",
+    "color": "PURPLE",
+    "requires": [
+      "Vehicle License",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210095,
+    "name": "Chase the Choo Choo Train - Golden Gobbo",
+    "region": "Cossack Village - Chase the Choo Choo Train",
+    "category": "Golden Gobbos",
+    "wad": "T2L3M001",
+    "door_id": "T2_D2",
+    "level_prefix": "Chase the Choo Choo Train",
+    "requires": [
+      "Vehicle License",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210096,
+    "name": "Chase the Choo Choo Train - Trophy Challenge",
+    "region": "Cossack Village - Chase the Choo Choo Train",
+    "category": "Trophies",
+    "wad": "T2L3M001",
+    "door_id": "T2_D2",
+    "requires": [
+      "Vehicle License",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210102,
+    "name": "It's just Snowball Madness! - Stage Clear",
+    "region": "Cossack Village - It's just Snowball Madness!",
+    "category": "Stage Clear",
+    "wad": "T2L5M001",
+    "door_id": "T2_D3",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210103,
+    "name": "It's just Snowball Madness! - Red Crystal",
+    "region": "Cossack Village - It's just Snowball Madness!",
+    "category": "Colored Crystals",
+    "wad": "T2L5M001",
+    "door_id": "T2_D3",
+    "color": "RED",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210104,
+    "name": "It's just Snowball Madness! - Blue Crystal",
+    "region": "Cossack Village - It's just Snowball Madness!",
+    "category": "Colored Crystals",
+    "wad": "T2L5M001",
+    "door_id": "T2_D3",
+    "color": "BLUE",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210105,
+    "name": "It's just Snowball Madness! - Green Crystal",
+    "region": "Cossack Village - It's just Snowball Madness!",
+    "category": "Colored Crystals",
+    "wad": "T2L5M001",
+    "door_id": "T2_D3",
+    "color": "GREEN",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210106,
+    "name": "It's just Snowball Madness! - Yellow Crystal",
+    "region": "Cossack Village - It's just Snowball Madness!",
+    "category": "Colored Crystals",
+    "wad": "T2L5M001",
+    "door_id": "T2_D3",
+    "color": "YELLOW",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210107,
+    "name": "It's just Snowball Madness! - Purple Crystal",
+    "region": "Cossack Village - It's just Snowball Madness!",
+    "category": "Colored Crystals",
+    "wad": "T2L5M001",
+    "door_id": "T2_D3",
+    "color": "PURPLE",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210108,
+    "name": "It's just Snowball Madness! - Golden Gobbo",
+    "region": "Cossack Village - It's just Snowball Madness!",
+    "category": "Golden Gobbos",
+    "wad": "T2L5M001",
+    "door_id": "T2_D3",
+    "level_prefix": "It's just Snowball Madness!",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210109,
+    "name": "It's just Snowball Madness! - Trophy Challenge",
+    "region": "Cossack Village - It's just Snowball Madness!",
+    "category": "Trophies",
+    "wad": "T2L5M001",
+    "door_id": "T2_D3",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210115,
+    "name": "Hang Glider Valley - Stage Clear",
+    "region": "Cossack Village - Hang Glider Valley",
+    "category": "Stage Clear",
+    "wad": "T2L6M001",
+    "door_id": "T2_D4",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210116,
+    "name": "Hang Glider Valley - Red Crystal",
+    "region": "Cossack Village - Hang Glider Valley",
+    "category": "Colored Crystals",
+    "wad": "T2L6M001",
+    "door_id": "T2_D4",
+    "color": "RED",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210117,
+    "name": "Hang Glider Valley - Blue Crystal",
+    "region": "Cossack Village - Hang Glider Valley",
+    "category": "Colored Crystals",
+    "wad": "T2L6M001",
+    "door_id": "T2_D4",
+    "color": "BLUE",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210118,
+    "name": "Hang Glider Valley - Green Crystal",
+    "region": "Cossack Village - Hang Glider Valley",
+    "category": "Colored Crystals",
+    "wad": "T2L6M001",
+    "door_id": "T2_D4",
+    "color": "GREEN",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210119,
+    "name": "Hang Glider Valley - Yellow Crystal",
+    "region": "Cossack Village - Hang Glider Valley",
+    "category": "Colored Crystals",
+    "wad": "T2L6M001",
+    "door_id": "T2_D4",
+    "color": "YELLOW",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210120,
+    "name": "Hang Glider Valley - Purple Crystal",
+    "region": "Cossack Village - Hang Glider Valley",
+    "category": "Colored Crystals",
+    "wad": "T2L6M001",
+    "door_id": "T2_D4",
+    "color": "PURPLE",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210121,
+    "name": "Hang Glider Valley - Golden Gobbo",
+    "region": "Cossack Village - Hang Glider Valley",
+    "category": "Golden Gobbos",
+    "wad": "T2L6M001",
+    "door_id": "T2_D4",
+    "level_prefix": "Hang Glider Valley",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210122,
+    "name": "Hang Glider Valley - Trophy Challenge",
+    "region": "Cossack Village - Hang Glider Valley",
+    "category": "Trophies",
+    "wad": "T2L6M001",
+    "door_id": "T2_D4",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210128,
+    "name": "KaBooom! It's Roger Red Ant - Stage Clear",
+    "region": "Cossack Village - KaBooom! It's Roger Red Ant",
+    "category": "Stage Clear",
+    "wad": "T2L7M001",
+    "door_id": "T2_D5",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210129,
+    "name": "KaBooom! It's Roger Red Ant - Red Crystal",
+    "region": "Cossack Village - KaBooom! It's Roger Red Ant",
+    "category": "Colored Crystals",
+    "wad": "T2L7M001",
+    "door_id": "T2_D5",
+    "color": "RED",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210130,
+    "name": "KaBooom! It's Roger Red Ant - Blue Crystal",
+    "region": "Cossack Village - KaBooom! It's Roger Red Ant",
+    "category": "Colored Crystals",
+    "wad": "T2L7M001",
+    "door_id": "T2_D5",
+    "color": "BLUE",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210131,
+    "name": "KaBooom! It's Roger Red Ant - Green Crystal",
+    "region": "Cossack Village - KaBooom! It's Roger Red Ant",
+    "category": "Colored Crystals",
+    "wad": "T2L7M001",
+    "door_id": "T2_D5",
+    "color": "GREEN",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210132,
+    "name": "KaBooom! It's Roger Red Ant - Yellow Crystal",
+    "region": "Cossack Village - KaBooom! It's Roger Red Ant",
+    "category": "Colored Crystals",
+    "wad": "T2L7M001",
+    "door_id": "T2_D5",
+    "color": "YELLOW",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210133,
+    "name": "KaBooom! It's Roger Red Ant - Purple Crystal",
+    "region": "Cossack Village - KaBooom! It's Roger Red Ant",
+    "category": "Colored Crystals",
+    "wad": "T2L7M001",
+    "door_id": "T2_D5",
+    "color": "PURPLE",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210134,
+    "name": "KaBooom! It's Roger Red Ant - Golden Gobbo",
+    "region": "Cossack Village - KaBooom! It's Roger Red Ant",
+    "category": "Golden Gobbos",
+    "wad": "T2L7M001",
+    "door_id": "T2_D5",
+    "level_prefix": "KaBooom! It's Roger Red Ant",
+    "requires": [
+      "Tail Whack",
+      "Climbing Claws",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210140,
+    "name": "Cossack Village - Cossack Tribe - Secret Ice Cap - Jigsaw Piece",
+    "region": "Cossack Village - Cossack Tribe - Secret Ice Cap",
+    "category": "Jigsaw Pieces",
+    "wad": "T2S1M001",
+    "door_id": "T2_S1",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210141,
+    "name": "Cossack Village - Cossack Tribe - Secret Ice Cap - Secret Trophy",
+    "region": "Cossack Village - Cossack Tribe - Secret Ice Cap",
+    "category": "Trophies",
+    "wad": "T2S1M001",
+    "door_id": "T2_S1",
+    "requires": [
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210142,
+    "name": "Cossack Village - Defeat Flavio the Thermal Fish",
+    "region": "Cossack Village - Flavio the Thermal Fish",
+    "category": "Bosses",
+    "wad": "T2B1M001",
+    "door_id": "T2_B1",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp"
+    ]
+  },
+  {
+    "id": 7210143,
+    "name": "Cossack Village - Defeat Lava Lamp Larry",
+    "region": "Cossack Village - Lava Lamp Larry",
+    "category": "Bosses",
+    "wad": "T2B2M001",
+    "door_id": "T2_B2",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210144,
+    "name": "Caveman Village - Pete's Store: Heart Pot Purchase 1",
+    "region": "Caveman Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T3L1M004",
+    "crystal_cost": 50,
+    "hub_id": "caveman_village"
+  },
+  {
+    "id": 7210145,
+    "name": "Caveman Village - Pete's Store: Heart Pot Purchase 2",
+    "region": "Caveman Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T3L1M004",
+    "crystal_cost": 100,
+    "hub_id": "caveman_village"
+  },
+  {
+    "id": 7210146,
+    "name": "Caveman Village - Pete's Store: Clockwork Gobbo Purchase",
+    "region": "Caveman Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T3L1M004",
+    "crystal_cost": 30,
+    "hub_id": "caveman_village"
+  },
+  {
+    "id": 7210147,
+    "name": "Caveman Village - Pete's Store: Gummi Jump Purchase",
+    "region": "Caveman Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T3L1M004",
+    "crystal_cost": 25,
+    "hub_id": "caveman_village"
+  },
+  {
+    "id": 7210148,
+    "name": "Caveman Village - Pete's Store: Jelly Jump Purchase",
+    "region": "Caveman Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T3L1M004",
+    "crystal_cost": 40,
+    "hub_id": "caveman_village"
+  },
+  {
+    "id": 7210149,
+    "name": "Find the Wheels in the Jungle! - Stage Clear",
+    "region": "Caveman Village - Find the Wheels in the Jungle!",
+    "category": "Stage Clear",
+    "wad": "T3L2M001",
+    "door_id": "T3_D1",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210150,
+    "name": "Find the Wheels in the Jungle! - Red Crystal",
+    "region": "Caveman Village - Find the Wheels in the Jungle!",
+    "category": "Colored Crystals",
+    "wad": "T3L2M001",
+    "door_id": "T3_D1",
+    "color": "RED",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210151,
+    "name": "Find the Wheels in the Jungle! - Blue Crystal",
+    "region": "Caveman Village - Find the Wheels in the Jungle!",
+    "category": "Colored Crystals",
+    "wad": "T3L2M001",
+    "door_id": "T3_D1",
+    "color": "BLUE",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210152,
+    "name": "Find the Wheels in the Jungle! - Green Crystal",
+    "region": "Caveman Village - Find the Wheels in the Jungle!",
+    "category": "Colored Crystals",
+    "wad": "T3L2M001",
+    "door_id": "T3_D1",
+    "color": "GREEN",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210153,
+    "name": "Find the Wheels in the Jungle! - Yellow Crystal",
+    "region": "Caveman Village - Find the Wheels in the Jungle!",
+    "category": "Colored Crystals",
+    "wad": "T3L2M001",
+    "door_id": "T3_D1",
+    "color": "YELLOW",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210154,
+    "name": "Find the Wheels in the Jungle! - Purple Crystal",
+    "region": "Caveman Village - Find the Wheels in the Jungle!",
+    "category": "Colored Crystals",
+    "wad": "T3L2M001",
+    "door_id": "T3_D1",
+    "color": "PURPLE",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210155,
+    "name": "Find the Wheels in the Jungle! - Golden Gobbo",
+    "region": "Caveman Village - Find the Wheels in the Jungle!",
+    "category": "Golden Gobbos",
+    "wad": "T3L2M001",
+    "door_id": "T3_D1",
+    "level_prefix": "Find the Wheels in the Jungle!",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210161,
+    "name": "Find the Wheels in the Mine! - Stage Clear",
+    "region": "Caveman Village - Find the Wheels in the Mine!",
+    "category": "Stage Clear",
+    "wad": "T3L3M001",
+    "door_id": "T3_D2",
+    "requires": [
+      "Vehicle License",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210162,
+    "name": "Find the Wheels in the Mine! - Red Crystal",
+    "region": "Caveman Village - Find the Wheels in the Mine!",
+    "category": "Colored Crystals",
+    "wad": "T3L3M001",
+    "door_id": "T3_D2",
+    "color": "RED",
+    "requires": [
+      "Vehicle License",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210163,
+    "name": "Find the Wheels in the Mine! - Blue Crystal",
+    "region": "Caveman Village - Find the Wheels in the Mine!",
+    "category": "Colored Crystals",
+    "wad": "T3L3M001",
+    "door_id": "T3_D2",
+    "color": "BLUE",
+    "requires": [
+      "Vehicle License",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210164,
+    "name": "Find the Wheels in the Mine! - Green Crystal",
+    "region": "Caveman Village - Find the Wheels in the Mine!",
+    "category": "Colored Crystals",
+    "wad": "T3L3M001",
+    "door_id": "T3_D2",
+    "color": "GREEN",
+    "requires": [
+      "Vehicle License",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210165,
+    "name": "Find the Wheels in the Mine! - Yellow Crystal",
+    "region": "Caveman Village - Find the Wheels in the Mine!",
+    "category": "Colored Crystals",
+    "wad": "T3L3M001",
+    "door_id": "T3_D2",
+    "color": "YELLOW",
+    "requires": [
+      "Vehicle License",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210166,
+    "name": "Find the Wheels in the Mine! - Purple Crystal",
+    "region": "Caveman Village - Find the Wheels in the Mine!",
+    "category": "Colored Crystals",
+    "wad": "T3L3M001",
+    "door_id": "T3_D2",
+    "color": "PURPLE",
+    "requires": [
+      "Vehicle License",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210167,
+    "name": "Find the Wheels in the Mine! - Golden Gobbo",
+    "region": "Caveman Village - Find the Wheels in the Mine!",
+    "category": "Golden Gobbos",
+    "wad": "T3L3M001",
+    "door_id": "T3_D2",
+    "level_prefix": "Find the Wheels in the Mine!",
+    "requires": [
+      "Vehicle License",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210173,
+    "name": "Race Day at Goldrock - Stage Clear",
+    "region": "Caveman Village - Race Day at Goldrock",
+    "category": "Stage Clear",
+    "wad": "T3L4M001",
+    "door_id": "T3_D3",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210174,
+    "name": "Race Day at Goldrock - Red Crystal",
+    "region": "Caveman Village - Race Day at Goldrock",
+    "category": "Colored Crystals",
+    "wad": "T3L4M001",
+    "door_id": "T3_D3",
+    "color": "RED",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210175,
+    "name": "Race Day at Goldrock - Blue Crystal",
+    "region": "Caveman Village - Race Day at Goldrock",
+    "category": "Colored Crystals",
+    "wad": "T3L4M001",
+    "door_id": "T3_D3",
+    "color": "BLUE",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210176,
+    "name": "Race Day at Goldrock - Green Crystal",
+    "region": "Caveman Village - Race Day at Goldrock",
+    "category": "Colored Crystals",
+    "wad": "T3L4M001",
+    "door_id": "T3_D3",
+    "color": "GREEN",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210177,
+    "name": "Race Day at Goldrock - Yellow Crystal",
+    "region": "Caveman Village - Race Day at Goldrock",
+    "category": "Colored Crystals",
+    "wad": "T3L4M001",
+    "door_id": "T3_D3",
+    "color": "YELLOW",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210178,
+    "name": "Race Day at Goldrock - Purple Crystal",
+    "region": "Caveman Village - Race Day at Goldrock",
+    "category": "Colored Crystals",
+    "wad": "T3L4M001",
+    "door_id": "T3_D3",
+    "color": "PURPLE",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210179,
+    "name": "Race Day at Goldrock - Golden Gobbo",
+    "region": "Caveman Village - Race Day at Goldrock",
+    "category": "Golden Gobbos",
+    "wad": "T3L4M001",
+    "door_id": "T3_D3",
+    "level_prefix": "Race Day at Goldrock",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210180,
+    "name": "Race Day at Goldrock - Trophy Challenge",
+    "region": "Caveman Village - Race Day at Goldrock",
+    "category": "Trophies",
+    "wad": "T3L4M001",
+    "door_id": "T3_D3",
+    "requires": [
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210186,
+    "name": "Climb The Devil's Tower - Stage Clear",
+    "region": "Caveman Village - Climb The Devil's Tower",
+    "category": "Stage Clear",
+    "wad": "T3L5M001",
+    "door_id": "T3_D4",
+    "requires": [
+      "Vehicle License",
+      "Airplane Ammo Feed",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210187,
+    "name": "Climb The Devil's Tower - Red Crystal",
+    "region": "Caveman Village - Climb The Devil's Tower",
+    "category": "Colored Crystals",
+    "wad": "T3L5M001",
+    "door_id": "T3_D4",
+    "color": "RED",
+    "requires": [
+      "Vehicle License",
+      "Airplane Ammo Feed",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210188,
+    "name": "Climb The Devil's Tower - Blue Crystal",
+    "region": "Caveman Village - Climb The Devil's Tower",
+    "category": "Colored Crystals",
+    "wad": "T3L5M001",
+    "door_id": "T3_D4",
+    "color": "BLUE",
+    "requires": [
+      "Vehicle License",
+      "Airplane Ammo Feed",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210189,
+    "name": "Climb The Devil's Tower - Green Crystal",
+    "region": "Caveman Village - Climb The Devil's Tower",
+    "category": "Colored Crystals",
+    "wad": "T3L5M001",
+    "door_id": "T3_D4",
+    "color": "GREEN",
+    "requires": [
+      "Vehicle License",
+      "Airplane Ammo Feed",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210190,
+    "name": "Climb The Devil's Tower - Yellow Crystal",
+    "region": "Caveman Village - Climb The Devil's Tower",
+    "category": "Colored Crystals",
+    "wad": "T3L5M001",
+    "door_id": "T3_D4",
+    "color": "YELLOW",
+    "requires": [
+      "Vehicle License",
+      "Airplane Ammo Feed",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210191,
+    "name": "Climb The Devil's Tower - Purple Crystal",
+    "region": "Caveman Village - Climb The Devil's Tower",
+    "category": "Colored Crystals",
+    "wad": "T3L5M001",
+    "door_id": "T3_D4",
+    "color": "PURPLE",
+    "requires": [
+      "Vehicle License",
+      "Airplane Ammo Feed",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210192,
+    "name": "Climb The Devil's Tower - Golden Gobbo",
+    "region": "Caveman Village - Climb The Devil's Tower",
+    "category": "Golden Gobbos",
+    "wad": "T3L5M001",
+    "door_id": "T3_D4",
+    "level_prefix": "Climb The Devil's Tower",
+    "requires": [
+      "Vehicle License",
+      "Airplane Ammo Feed",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210193,
+    "name": "Climb The Devil's Tower - Trophy Challenge",
+    "region": "Caveman Village - Climb The Devil's Tower",
+    "category": "Trophies",
+    "wad": "T3L5M001",
+    "door_id": "T3_D4",
+    "requires": [
+      "Vehicle License",
+      "Airplane Ammo Feed",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210199,
+    "name": "Save 50 Trapped Gobbos! - Stage Clear",
+    "region": "Caveman Village - Save 50 Trapped Gobbos!",
+    "category": "Stage Clear",
+    "wad": "T3L7M001",
+    "door_id": "T3_D5",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210200,
+    "name": "Save 50 Trapped Gobbos! - Red Crystal",
+    "region": "Caveman Village - Save 50 Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T3L7M001",
+    "door_id": "T3_D5",
+    "color": "RED",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210201,
+    "name": "Save 50 Trapped Gobbos! - Blue Crystal",
+    "region": "Caveman Village - Save 50 Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T3L7M001",
+    "door_id": "T3_D5",
+    "color": "BLUE",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210202,
+    "name": "Save 50 Trapped Gobbos! - Green Crystal",
+    "region": "Caveman Village - Save 50 Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T3L7M001",
+    "door_id": "T3_D5",
+    "color": "GREEN",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210203,
+    "name": "Save 50 Trapped Gobbos! - Yellow Crystal",
+    "region": "Caveman Village - Save 50 Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T3L7M001",
+    "door_id": "T3_D5",
+    "color": "YELLOW",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210204,
+    "name": "Save 50 Trapped Gobbos! - Purple Crystal",
+    "region": "Caveman Village - Save 50 Trapped Gobbos!",
+    "category": "Colored Crystals",
+    "wad": "T3L7M001",
+    "door_id": "T3_D5",
+    "color": "PURPLE",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210205,
+    "name": "Save 50 Trapped Gobbos! - Golden Gobbo",
+    "region": "Caveman Village - Save 50 Trapped Gobbos!",
+    "category": "Golden Gobbos",
+    "wad": "T3L7M001",
+    "door_id": "T3_D5",
+    "level_prefix": "Save 50 Trapped Gobbos!",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210206,
+    "name": "Save 50 Trapped Gobbos! - Trophy Challenge",
+    "region": "Caveman Village - Save 50 Trapped Gobbos!",
+    "category": "Trophies",
+    "wad": "T3L7M001",
+    "door_id": "T3_D5",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210212,
+    "name": "Caveman Village - Caveman Tribe - Secret Mine - Jigsaw Piece",
+    "region": "Caveman Village - Caveman Tribe - Secret Mine",
+    "category": "Jigsaw Pieces",
+    "wad": "T3S1M001",
+    "door_id": "T3_S1",
+    "requires": [
+      "Vehicle License",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210213,
+    "name": "Caveman Village - Caveman Tribe - Secret Mine - Secret Trophy",
+    "region": "Caveman Village - Caveman Tribe - Secret Mine",
+    "category": "Trophies",
+    "wad": "T3S1M001",
+    "door_id": "T3_S1",
+    "requires": [
+      "Vehicle License",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210214,
+    "name": "Caveman Village - Defeat Venus Fly Von-Trappe",
+    "region": "Caveman Village - Venus Fly Von-Trappe",
+    "category": "Bosses",
+    "wad": "T3B1M001",
+    "door_id": "T3_B1",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210215,
+    "name": "Caveman Village - Defeat The Village Masher",
+    "region": "Caveman Village - The Village Masher",
+    "category": "Bosses",
+    "wad": "T3B2M001",
+    "door_id": "T3_B2",
+    "requires": [
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210216,
+    "name": "Inca Village - Pete's Store: Heart Pot Purchase 1",
+    "region": "Inca Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T4L1M004",
+    "crystal_cost": 50,
+    "hub_id": "inca_village"
+  },
+  {
+    "id": 7210217,
+    "name": "Inca Village - Pete's Store: Heart Pot Purchase 2",
+    "region": "Inca Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T4L1M004",
+    "crystal_cost": 100,
+    "hub_id": "inca_village"
+  },
+  {
+    "id": 7210218,
+    "name": "Inca Village - Pete's Store: Clockwork Gobbo Purchase",
+    "region": "Inca Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T4L1M004",
+    "crystal_cost": 30,
+    "hub_id": "inca_village"
+  },
+  {
+    "id": 7210219,
+    "name": "Inca Village - Pete's Store: Gummi Jump Purchase",
+    "region": "Inca Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T4L1M004",
+    "crystal_cost": 25,
+    "hub_id": "inca_village"
+  },
+  {
+    "id": 7210220,
+    "name": "Inca Village - Pete's Store: Jelly Jump Purchase",
+    "region": "Inca Village - Pete's Store",
+    "category": "Pete Store",
+    "wad": "T4L1M004",
+    "crystal_cost": 40,
+    "hub_id": "inca_village"
+  },
+  {
+    "id": 7210221,
+    "name": "Save 30 Gobbo babies! - Stage Clear",
+    "region": "Inca Village - Save 30 Gobbo babies!",
+    "category": "Stage Clear",
+    "wad": "T4L2M001",
+    "door_id": "T4_D1",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210222,
+    "name": "Save 30 Gobbo babies! - Red Crystal",
+    "region": "Inca Village - Save 30 Gobbo babies!",
+    "category": "Colored Crystals",
+    "wad": "T4L2M001",
+    "door_id": "T4_D1",
+    "color": "RED",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210223,
+    "name": "Save 30 Gobbo babies! - Blue Crystal",
+    "region": "Inca Village - Save 30 Gobbo babies!",
+    "category": "Colored Crystals",
+    "wad": "T4L2M001",
+    "door_id": "T4_D1",
+    "color": "BLUE",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210224,
+    "name": "Save 30 Gobbo babies! - Green Crystal",
+    "region": "Inca Village - Save 30 Gobbo babies!",
+    "category": "Colored Crystals",
+    "wad": "T4L2M001",
+    "door_id": "T4_D1",
+    "color": "GREEN",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210225,
+    "name": "Save 30 Gobbo babies! - Yellow Crystal",
+    "region": "Inca Village - Save 30 Gobbo babies!",
+    "category": "Colored Crystals",
+    "wad": "T4L2M001",
+    "door_id": "T4_D1",
+    "color": "YELLOW",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210226,
+    "name": "Save 30 Gobbo babies! - Purple Crystal",
+    "region": "Inca Village - Save 30 Gobbo babies!",
+    "category": "Colored Crystals",
+    "wad": "T4L2M001",
+    "door_id": "T4_D1",
+    "color": "PURPLE",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210227,
+    "name": "Save 30 Gobbo babies! - Golden Gobbo",
+    "region": "Inca Village - Save 30 Gobbo babies!",
+    "category": "Golden Gobbos",
+    "wad": "T4L2M001",
+    "door_id": "T4_D1",
+    "level_prefix": "Save 30 Gobbo babies!",
+    "requires": [
+      "Tail Whack",
+      "Power Gloves"
+    ]
+  },
+  {
+    "id": 7210233,
+    "name": "Up the Waterfall - Stage Clear",
+    "region": "Inca Village - Up the Waterfall",
+    "category": "Stage Clear",
+    "wad": "T4L3M001",
+    "door_id": "T4_D2",
+    "requires": [
+      "Climbing Claws",
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210234,
+    "name": "Up the Waterfall - Red Crystal",
+    "region": "Inca Village - Up the Waterfall",
+    "category": "Colored Crystals",
+    "wad": "T4L3M001",
+    "door_id": "T4_D2",
+    "color": "RED",
+    "requires": [
+      "Climbing Claws",
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210235,
+    "name": "Up the Waterfall - Blue Crystal",
+    "region": "Inca Village - Up the Waterfall",
+    "category": "Colored Crystals",
+    "wad": "T4L3M001",
+    "door_id": "T4_D2",
+    "color": "BLUE",
+    "requires": [
+      "Climbing Claws",
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210236,
+    "name": "Up the Waterfall - Green Crystal",
+    "region": "Inca Village - Up the Waterfall",
+    "category": "Colored Crystals",
+    "wad": "T4L3M001",
+    "door_id": "T4_D2",
+    "color": "GREEN",
+    "requires": [
+      "Climbing Claws",
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210237,
+    "name": "Up the Waterfall - Yellow Crystal",
+    "region": "Inca Village - Up the Waterfall",
+    "category": "Colored Crystals",
+    "wad": "T4L3M001",
+    "door_id": "T4_D2",
+    "color": "YELLOW",
+    "requires": [
+      "Climbing Claws",
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210238,
+    "name": "Up the Waterfall - Purple Crystal",
+    "region": "Inca Village - Up the Waterfall",
+    "category": "Colored Crystals",
+    "wad": "T4L3M001",
+    "door_id": "T4_D2",
+    "color": "PURPLE",
+    "requires": [
+      "Climbing Claws",
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210239,
+    "name": "Up the Waterfall - Golden Gobbo",
+    "region": "Inca Village - Up the Waterfall",
+    "category": "Golden Gobbos",
+    "wad": "T4L3M001",
+    "door_id": "T4_D2",
+    "level_prefix": "Up the Waterfall",
+    "requires": [
+      "Climbing Claws",
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210240,
+    "name": "Up the Waterfall - Trophy Challenge",
+    "region": "Inca Village - Up the Waterfall",
+    "category": "Trophies",
+    "wad": "T4L3M001",
+    "door_id": "T4_D2",
+    "requires": [
+      "Climbing Claws",
+      "Vehicle License"
+    ]
+  },
+  {
+    "id": 7210246,
+    "name": "Bride of the Dungeon of Defright - Stage Clear",
+    "region": "Inca Village - Bride of the Dungeon of Defright",
+    "category": "Stage Clear",
+    "wad": "T4L5M001",
+    "door_id": "T4_D3",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210247,
+    "name": "Bride of the Dungeon of Defright - Red Crystal",
+    "region": "Inca Village - Bride of the Dungeon of Defright",
+    "category": "Colored Crystals",
+    "wad": "T4L5M001",
+    "door_id": "T4_D3",
+    "color": "RED",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210248,
+    "name": "Bride of the Dungeon of Defright - Blue Crystal",
+    "region": "Inca Village - Bride of the Dungeon of Defright",
+    "category": "Colored Crystals",
+    "wad": "T4L5M001",
+    "door_id": "T4_D3",
+    "color": "BLUE",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210249,
+    "name": "Bride of the Dungeon of Defright - Green Crystal",
+    "region": "Inca Village - Bride of the Dungeon of Defright",
+    "category": "Colored Crystals",
+    "wad": "T4L5M001",
+    "door_id": "T4_D3",
+    "color": "GREEN",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210250,
+    "name": "Bride of the Dungeon of Defright - Yellow Crystal",
+    "region": "Inca Village - Bride of the Dungeon of Defright",
+    "category": "Colored Crystals",
+    "wad": "T4L5M001",
+    "door_id": "T4_D3",
+    "color": "YELLOW",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210251,
+    "name": "Bride of the Dungeon of Defright - Purple Crystal",
+    "region": "Inca Village - Bride of the Dungeon of Defright",
+    "category": "Colored Crystals",
+    "wad": "T4L5M001",
+    "door_id": "T4_D3",
+    "color": "PURPLE",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210252,
+    "name": "Bride of the Dungeon of Defright - Golden Gobbo",
+    "region": "Inca Village - Bride of the Dungeon of Defright",
+    "category": "Golden Gobbos",
+    "wad": "T4L5M001",
+    "door_id": "T4_D3",
+    "level_prefix": "Bride of the Dungeon of Defright",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210258,
+    "name": "Goo Man Chu's Tower - Stage Clear",
+    "region": "Inca Village - Goo Man Chu's Tower",
+    "category": "Stage Clear",
+    "wad": "T4L6M001",
+    "door_id": "T4_D4",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210259,
+    "name": "Goo Man Chu's Tower - Red Crystal",
+    "region": "Inca Village - Goo Man Chu's Tower",
+    "category": "Colored Crystals",
+    "wad": "T4L6M001",
+    "door_id": "T4_D4",
+    "color": "RED",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210260,
+    "name": "Goo Man Chu's Tower - Blue Crystal",
+    "region": "Inca Village - Goo Man Chu's Tower",
+    "category": "Colored Crystals",
+    "wad": "T4L6M001",
+    "door_id": "T4_D4",
+    "color": "BLUE",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210261,
+    "name": "Goo Man Chu's Tower - Green Crystal",
+    "region": "Inca Village - Goo Man Chu's Tower",
+    "category": "Colored Crystals",
+    "wad": "T4L6M001",
+    "door_id": "T4_D4",
+    "color": "GREEN",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210262,
+    "name": "Goo Man Chu's Tower - Yellow Crystal",
+    "region": "Inca Village - Goo Man Chu's Tower",
+    "category": "Colored Crystals",
+    "wad": "T4L6M001",
+    "door_id": "T4_D4",
+    "color": "YELLOW",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210263,
+    "name": "Goo Man Chu's Tower - Purple Crystal",
+    "region": "Inca Village - Goo Man Chu's Tower",
+    "category": "Colored Crystals",
+    "wad": "T4L6M001",
+    "door_id": "T4_D4",
+    "color": "PURPLE",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210264,
+    "name": "Goo Man Chu's Tower - Golden Gobbo",
+    "region": "Inca Village - Goo Man Chu's Tower",
+    "category": "Golden Gobbos",
+    "wad": "T4L6M001",
+    "door_id": "T4_D4",
+    "level_prefix": "Goo Man Chu's Tower",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210265,
+    "name": "Goo Man Chu's Tower - Trophy Challenge",
+    "region": "Inca Village - Goo Man Chu's Tower",
+    "category": "Trophies",
+    "wad": "T4L6M001",
+    "door_id": "T4_D4",
+    "requires": [
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  },
+  {
+    "id": 7210271,
+    "name": "Burning Down the Forest - Stage Clear",
+    "region": "Inca Village - Burning Down the Forest",
+    "category": "Stage Clear",
+    "wad": "T0L1M003",
+    "door_id": "T4_D5",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210272,
+    "name": "Burning Down the Forest - Red Crystal",
+    "region": "Inca Village - Burning Down the Forest",
+    "category": "Colored Crystals",
+    "wad": "T0L1M003",
+    "door_id": "T4_D5",
+    "color": "RED",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210273,
+    "name": "Burning Down the Forest - Blue Crystal",
+    "region": "Inca Village - Burning Down the Forest",
+    "category": "Colored Crystals",
+    "wad": "T0L1M003",
+    "door_id": "T4_D5",
+    "color": "BLUE",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210274,
+    "name": "Burning Down the Forest - Green Crystal",
+    "region": "Inca Village - Burning Down the Forest",
+    "category": "Colored Crystals",
+    "wad": "T0L1M003",
+    "door_id": "T4_D5",
+    "color": "GREEN",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210275,
+    "name": "Burning Down the Forest - Yellow Crystal",
+    "region": "Inca Village - Burning Down the Forest",
+    "category": "Colored Crystals",
+    "wad": "T0L1M003",
+    "door_id": "T4_D5",
+    "color": "YELLOW",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210276,
+    "name": "Burning Down the Forest - Purple Crystal",
+    "region": "Inca Village - Burning Down the Forest",
+    "category": "Colored Crystals",
+    "wad": "T0L1M003",
+    "door_id": "T4_D5",
+    "color": "PURPLE",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210277,
+    "name": "Burning Down the Forest - Golden Gobbo",
+    "region": "Inca Village - Burning Down the Forest",
+    "category": "Golden Gobbos",
+    "wad": "T0L1M003",
+    "door_id": "T4_D5",
+    "level_prefix": "Burning Down the Forest",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210278,
+    "name": "Burning Down the Forest - Trophy Challenge",
+    "region": "Inca Village - Burning Down the Forest",
+    "category": "Trophies",
+    "wad": "T0L1M003",
+    "door_id": "T4_D5",
+    "requires": [
+      "Power Gloves",
+      "Tail Whack"
+    ]
+  },
+  {
+    "id": 7210284,
+    "name": "Inca Village - Inca Tribe - Secret Maze - Jigsaw Piece",
+    "region": "Inca Village - Inca Tribe - Secret Maze",
+    "category": "Jigsaw Pieces",
+    "wad": "T4S1M001",
+    "door_id": "T4_S1",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210285,
+    "name": "Inca Village - Inca Tribe - Secret Maze - Secret Trophy",
+    "region": "Inca Village - Inca Tribe - Secret Maze",
+    "category": "Trophies",
+    "wad": "T4S1M001",
+    "door_id": "T4_S1",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210286,
+    "name": "Inca Village - Defeat Dante's Peak",
+    "region": "Inca Village - Dante's Peak",
+    "category": "Bosses",
+    "wad": "T4B1M001",
+    "door_id": "T4_B1",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Climbing Claws"
+    ]
+  },
+  {
+    "id": 7210287,
+    "name": "Inca Village - Defeat Dante's Final Fight",
+    "region": "Inca Village - Dante's Final Fight",
+    "category": "Bosses",
+    "wad": "T4B2M001",
+    "door_id": "T4_B2",
+    "requires": [
+      "Tail Whack",
+      "Butt Stomp",
+      "Climbing Claws",
+      "Power Gloves",
+      "Lever Wrench"
+    ]
+  }
+]

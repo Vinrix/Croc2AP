@@ -1,0 +1,9 @@
+{
+  "game": "Croc 2",
+  "authors": ["Croc2AP"],
+  "world_version": "0.1.0",
+  "minimum_ap_version": "0.6.3",
+  "compatible_version": 7,
+  "version": 7
+}
+

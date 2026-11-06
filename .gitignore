@@ -1,0 +1,31 @@
+# Build artifacts & temp files
+*.o
+*.obj
+*.tmp
+*.log
+compile.log
+launcher.log
+out.txt
+err.txt
+dist/*.zip
+
+# Local launcher & user configs
+launcher_settings.json
+*.exe.new
+update_launcher.bat
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE & Editor files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Antigravity & Agent workspace artifacts
+.superpowers/
+.gemini/
