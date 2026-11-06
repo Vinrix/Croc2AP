@@ -38,10 +38,11 @@ def run_command(cmd: str, env_extra: Optional[dict] = None) -> None:
     if env_extra:
         env.update(env_extra)
 
-    # Ensure MinGW and MSYS2 are on PATH for compiler tools
+    # Ensure Windows Git and MinGW are on PATH
+    git_paths = r"C:\Program Files\Git\cmd;C:\Program Files\Git\bin;"
     mingw_paths = r"C:\msys64\mingw64\bin;C:\msys64\usr\bin;"
-    if "PATH" in env and "msys64" not in env["PATH"]:
-        env["PATH"] = mingw_paths + env["PATH"]
+    if "PATH" in env:
+        env["PATH"] = git_paths + mingw_paths + env["PATH"]
 
     ps_args = ["powershell.exe", "-NoProfile", "-Command", cmd]
     result = subprocess.run(ps_args, stdin=subprocess.DEVNULL, env=env, cwd=ROOT_DIR)
