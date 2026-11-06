@@ -164,18 +164,15 @@ inline std::string get_solo_peer_name(int stage_idx, int check_id, bool is_sende
     return "WillOfTheVinny";
 }
 
-// Fire Breakout Trap state machine (3 ticks before losing 1 heart; extinguished by ACTION_FRONT_FLIP)
+// Fire Breakout Trap state (Instant heart loss + flame animation & knockback)
 struct FireTrapState {
     bool active = false;
-    int ticks = 0;
-    int max_ticks = 3;
-    float timer = 0.0f;
-    float tick_interval = 1.5f;
+    float timer = 0.0f; // Visual flame effect and knockback recoil duration (2.0s)
 };
 
 struct ActiveTimedTrap {
     std::string trap_type;
-    float remaining_seconds = 0.0f;
+    float remaining_seconds = 10.0f; // All ill effects last a flat 10 seconds!
 };
 
 struct PlayerAbilities {

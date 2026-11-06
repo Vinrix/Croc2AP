@@ -556,26 +556,26 @@ class TestCroc2Archipelago(unittest.TestCase):
                     any(e.get("event") == "golden_gobbo_activated" and e.get("wad") == "T1L4M001" for e in events)
                 )
 
-                # 3. Verify Fire Breakout Trap: Extinguished by Front Flip after 2 ticks (no heart lost)
-                await bridge.send_command({"command": "apply_trap", "trap_type": "fire_breakout", "ticks": 3})
-                await bridge.send_command({"command": "step_tick", "dt": 1.5})
-                await bridge.send_command({"command": "step_tick", "dt": 1.5})
-                flip_res = await bridge.send_command({"command": "player_action", "action": "ACTION_FRONT_FLIP"})
-                self.assertTrue(flip_res["fire_extinguished"])
-                await bridge.poll_events()
-                self.assertEqual(bridge.last_state["current_hearts"], 5, "Front flip must prevent heart damage")
-                self.assertFalse(bridge.last_state["fire_trap"]["active"])
-
-                # 4. Verify Fire Breakout Trap: 3 ticks expire without Front Flip -> loses 1 heart and fire goes away
-                await bridge.send_command({"command": "apply_trap", "trap_type": "fire_breakout", "ticks": 3})
-                await bridge.send_command({"command": "step_tick", "dt": 1.5})
-                await bridge.send_command({"command": "step_tick", "dt": 1.5})
-                await bridge.send_command({"command": "step_tick", "dt": 1.5})
+                # 3. Verify Fire Breakout Trap: Instant Heart Down (-1 heart) with fire animation & knockback
+                await bridge.send_command({"command": "apply_trap", "trap_type": "fire_breakout"})
                 events = await bridge.poll_events()
-                self.assertEqual(bridge.last_state["current_hearts"], 4, "3 ticks of fire must deduct 1 heart")
-                self.assertFalse(bridge.last_state["fire_trap"]["active"], "Fire must go away after 3rd tick")
+                self.assertEqual(bridge.last_state["current_hearts"], 4, "Fire Breakout Trap must instantly deduct 1 heart")
+                self.assertTrue(bridge.last_state["fire_trap"]["active"], "Fire effect must be active for visual/knockback duration")
+                self.assertTrue(any(e.get("event") == "fire_trap_applied" for e in events))
+
+                # 4. Verify No Early Removal & Flat 10s Timed Traps (e.g. Tail-Knot)
+                await bridge.send_command({"command": "apply_trap", "trap_type": "tail_knot"})
+                # Front flip or other actions cannot extinguish or remove traps
+                flip_res = await bridge.send_command({"command": "player_action", "action": "ACTION_FRONT_FLIP"})
+                self.assertNotIn("fire_extinguished", flip_res, "Traps cannot be removed early by player actions")
+                # Advance 2.1 seconds -> fire knockback/flames finish
+                step_res = await bridge.send_command({"command": "step_tick", "dt": 2.1})
+                self.assertFalse(step_res["state"]["fire_trap"]["active"], "Fire animation expires after knockback duration")
+                # Advance 8.0 seconds -> flat 10s timed trap expires
+                await bridge.send_command({"command": "step_tick", "dt": 8.0})
+                events = await bridge.poll_events()
                 self.assertTrue(
-                    any(e.get("event") == "fire_trap_resolved" and e.get("reason") == "max_ticks_damage" for e in events)
+                    any(e.get("event") == "timed_trap_expired" and e.get("trap_type") == "tail_knot" for e in events)
                 )
 
                 # 5. Verify Door Shuffle redirection

@@ -47,15 +47,15 @@ Featuring memory-hooked item injection, door locking logic, interactive player t
 - **Cleaned Item & Location Pools**:
   - Normal Gobbos excluded to preserve stage balance and level logic flow.
   - Colored Crystal HUD collection clamped to prevent phantom pickups.
-- **8 Interactive Traps**:
-  1. **🔥 Fire Breakout Trap**: Croc's tail ignites! Somersault / front-flip within 4.5 seconds to extinguish the flames before taking damage.
-  2. **🪢 Tail-Knot Trap**: Croc's tail gets tied in a knot! Perform a butt stomp to untie it.
-  3. **⚓ Lead Boots Trap**: Heavy iron boots slow Croc down and impair jump height for 15 seconds.
-  4. **🧊 Ice Physics Trap**: Zero ground friction for 12 seconds.
-  5. **🔄 Reverse Controls Trap**: Inverts directional input for 10 seconds.
-  6. **🌑 Darkness Trap**: Shrouds Croc's vision in a localized black fog for 15 seconds.
-  7. **💰 Pete's Crystal Tax**: Deducts a portion of Croc's currently held white crystals.
-  8. **😈 Dantini Ambush**: Spawns an aggressive pack of Dantinis around Croc.
+- **8 Interactive Traps (Flat 10-Second Ill Effects; No Early Removal)**:
+  1. **🔥 Fire Breakout Trap**: Instant -1 heart loss with flame animation and knockback recoil!
+  2. **🪢 Tail-Knot Trap**: Croc's tail gets tied in a knot, disabling Tail Whack for a flat 10 seconds (cannot be untied early).
+  3. **⚓ Lead Boots Trap**: Heavy iron boots completely disable jumping and stomping for a flat 10 seconds.
+  4. **🧊 Ice Physics Trap**: Zero ground friction / ice sliding for a flat 10 seconds.
+  5. **🔄 Reverse Controls Trap**: Inverts all directional inputs for a flat 10 seconds.
+  6. **🌑 Darkness Trap**: Shrouds Croc's vision in a localized black shadow fog for a flat 10 seconds.
+  7. **😈 Dantini Ambush**: Spawns an aggressive pack of hostile Dantinis for a flat 10 seconds.
+  8. **💰 Pete's Crystal Tax**: Swap Meet Pete levies a portion of Croc's held crystals immediately.
 
 ---
 

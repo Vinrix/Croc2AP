@@ -1740,9 +1740,9 @@
     "group": "Traps",
     "default_count": 0,
     "trap_type": "fire_breakout",
-    "ticks": 3,
-    "tick_interval_sec": 1.5,
-    "extinguish_action": "ACTION_FRONT_FLIP"
+    "damage_hearts": 1,
+    "knockback": true,
+    "duration_sec": 0.0
   },
   {
     "id": 7200152,
@@ -1751,7 +1751,7 @@
     "group": "Traps",
     "default_count": 0,
     "trap_type": "ice_physics",
-    "duration_sec": 15.0
+    "duration_sec": 10.0
   },
   {
     "id": 7200153,
@@ -1769,7 +1769,8 @@
     "group": "Traps",
     "default_count": 0,
     "trap_type": "dantini_ambush",
-    "spawn_count": 3
+    "spawn_count": 3,
+    "duration_sec": 10.0
   },
   {
     "id": 7200155,
@@ -1778,7 +1779,7 @@
     "group": "Traps",
     "default_count": 0,
     "trap_type": "speed_distortion",
-    "duration_sec": 12.0
+    "duration_sec": 10.0
   },
   {
     "id": 7200156,
@@ -1805,7 +1806,7 @@
     "group": "Traps",
     "default_count": 0,
     "trap_type": "lead_boots",
-    "duration_sec": 8.0
+    "duration_sec": 10.0
   },
   {
     "id": 7200159,

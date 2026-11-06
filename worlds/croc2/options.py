@@ -168,16 +168,17 @@ class TrapWeight(Range):
     """
     Percentage chance (0 to 100) that filler items in the pool are replaced with Traps.
     Traps include:
-    - **Fire Breakout Trap** (3 burning ticks; extinguished immediately by performing a **front flip**)
-    - **Tail-Knot Trap** (ties Croc's tail, disabling tail attacks for 10s or until a ground stomp)
-    - **Lead Boots Trap** (weighs down Croc, suppressing jumps for 8 seconds)
-    - **Ice Physics Trap** (zero surface friction for 15 seconds)
-    - **Reverse Controls Trap** (inverted directional movement for 10 seconds)
-    - **Darkness Trap** (shrouds visibility with darkness for 10 seconds)
+    - **Fire Breakout Trap** (instant 1 heart damage with flame animation and knockback recoil)
+    - **Tail-Knot Trap** (ties Croc's tail, disabling tail attacks for a flat 10s; cannot be untied early)
+    - **Lead Boots Trap** (weighs down Croc, suppressing jumping for a flat 10 seconds)
+    - **Ice Physics Trap** (zero surface friction for a flat 10 seconds)
+    - **Reverse Controls Trap** (inverted directional movement for a flat 10 seconds)
+    - **Darkness Trap** (shrouds visibility with darkness for a flat 10 seconds)
+    - **Dantini Ambush Trap** (hostile Dantini attack for a flat 10 seconds)
+    - **Speed Distortion Trap** (altered movement speed for a flat 10 seconds)
     - **Pete's Crystal Tax Trap** (Swap Meet Pete levies a 20 crystal tax from your wallet!)
-    - **Dantini Ambush Trap** (spawns 3 Dantinis around Croc)
-    - **Speed Distortion Trap** (random hyper-speed or slow-motion for 12 seconds)
     - **Health Drain Trap** (deducts 1 heart)
+    All timed ill effects last a flat 10 seconds with no early removal.
     """
     display_name = "Trap Weight"
     rich_text_doc = True
@@ -189,7 +190,7 @@ class TrapWeight(Range):
 class FireBreakoutTrapEnabled(DefaultOnToggle):
     """
     Include the **Fire Breakout Trap** (inspired by *Burning Down the Forest*) when traps are enabled.
-    Ignites Croc's tail for 3 ticks before losing 1 heart. Performing a **front flip** pats out the flames immediately without taking damage!
+    Instantly deducts 1 heart with fire animation and knocks Croc backward!
     """
     display_name = "Enable Fire Breakout Trap"
     rich_text_doc = True

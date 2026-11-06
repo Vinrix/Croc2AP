@@ -591,9 +591,9 @@ namespace Croc2Launcher
 
             _chkFireTrap = new CheckBox
             {
-                Text = "Enable Fire Breakout Trap (Extinguished by Front Flip)",
+                Text = "Enable Fire Breakout Trap (Instant Heart Down & Knockback)",
                 Location = new Point(220, 21),
-                Size = new Size(340, 22),
+                Size = new Size(350, 22),
                 Checked = true
             };
 
@@ -607,7 +607,7 @@ namespace Croc2Launcher
 
             var lblTrapsList = new Label
             {
-                Text = "Active Traps: Fire Breakout, Tail-Knot (butt stomp clears), Lead Boots, Ice Physics, Reverse Controls, Darkness, Pete's Crystal Tax, Dantini Ambush.",
+                Text = "Active Traps: Fire Breakout (instant -1 heart & knockback), Tail-Knot (10s), Lead Boots (10s), Ice Physics (10s), Reverse Controls (10s), Darkness (10s), Dantini Ambush (10s), Pete's Crystal Tax.",
                 Location = new Point(15, 52),
                 AutoSize = true,
                 ForeColor = Color.DimGray
@@ -615,7 +615,7 @@ namespace Croc2Launcher
 
             var lblTrapToastNote = new Label
             {
-                Text = "Bottom toast popup handles all trap alerts and timers directly in-game.",
+                Text = "All ill effects last a flat 10 seconds and cannot be cleared early. In-game bottom toast HUD handles all alerts.",
                 Location = new Point(15, 74),
                 AutoSize = true,
                 ForeColor = Color.DarkSlateBlue

@@ -878,9 +878,9 @@ static void load_config_ini(const char* ini_path) {
             g_state.toggle_hotkey_vk = static_cast<int>(std::strtol(val.c_str(), nullptr, 0));
         } else if (key == "menu_hotkey_vk") {
             g_state.menu_hotkey_vk = static_cast<int>(std::strtol(val.c_str(), nullptr, 0));
-        } else if (key == "fire_trap_tick_ms") {
+        } else if (key == "fire_trap_knockback_ms" || key == "fire_trap_tick_ms") {
             int ms = std::atoi(val.c_str());
-            if (ms > 0) g_state.fire_trap.tick_interval = static_cast<float>(ms) / 1000.0f;
+            if (ms > 0) g_state.fire_trap.timer = static_cast<float>(ms) / 1000.0f;
         } else if (key == "server_host" && !val.empty()) {
             g_state.conn.server_host = val;
         } else if (key == "server_port" && !val.empty()) {
@@ -984,8 +984,8 @@ static void save_config_ini(const char* ini_path) {
         << "toggle_hotkey_vk = 0x" << std::hex << g_state.toggle_hotkey_vk << std::dec << "\n\n"
         << "; Virtual-Key code to open/close the in-game Croc-themed Archipelago Connection Menu (0x78 = F9)\n"
         << "menu_hotkey_vk = 0x" << std::hex << g_state.menu_hotkey_vk << std::dec << "\n\n"
-        << "; Fire Breakout Trap tick interval in milliseconds (3 ticks before 1 heart damage; front flip extinguishes)\n"
-        << "fire_trap_tick_ms = " << static_cast<int>(g_state.fire_trap.tick_interval * 1000.0f) << "\n\n"
+        << "; Fire Breakout Trap visual flame effect and knockback recoil in milliseconds (instant -1 heart damage)\n"
+        << "fire_trap_knockback_ms = 2000\n\n"
         << "[ServerConnection]\n"
         << "; Default Archipelago Server connection details (editable in-game by pressing F9)\n"
         << "server_host = " << g_state.conn.server_host << "\n"
@@ -1207,41 +1207,43 @@ static void apply_ap_item_by_id_locked(int item_id,
             g_pending_wallet_crystals.fetch_add(10);
             g_state.add_log("Received Croc Crystals (+10)!");
             break;
-        case 7200151:
+        case 7200151: // Fire Breakout Trap: INSTANT heart down + flame animation & knockback
+            if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
+            g_pending_heart_damage.fetch_add(1);
             g_state.fire_trap.active = true;
-            g_state.fire_trap.ticks = 0;
-            g_state.fire_trap.timer = 0.0f;
-            g_state.add_log("TRAP! Fire Breakout! Perform a Front Flip to extinguish!");
+            g_state.fire_trap.timer = 2.0f;
+            g_state.add_log("🔥 TRAP! Fire Breakout: Instant Heart Lost with Fire Knockback!");
             break;
-        case 7200152:
-            g_state.timed_traps.push_back({"ice_physics", 15.0f});
-            g_state.add_log("TRAP! Ice Physics active for 15s!");
+        case 7200152: // Ice Physics
+            g_state.timed_traps.push_back({"ice_physics", 10.0f});
+            g_state.add_log("TRAP! Ice Physics active for 10s!");
             break;
-        case 7200153:
+        case 7200153: // Reverse Controls
             g_state.timed_traps.push_back({"reverse_controls", 10.0f});
             g_state.add_log("TRAP! Reverse Controls active for 10s!");
             break;
-        case 7200154:
-            g_state.add_log("TRAP! Dantini Ambush spawned!");
+        case 7200154: // Dantini Ambush
+            g_state.timed_traps.push_back({"dantini_ambush", 10.0f});
+            g_state.add_log("TRAP! Dantini Ambush active for 10s!");
             break;
-        case 7200155:
-            g_state.timed_traps.push_back({"speed_distortion", 12.0f});
-            g_state.add_log("TRAP! Speed Distortion active for 12s!");
+        case 7200155: // Speed Distortion
+            g_state.timed_traps.push_back({"speed_distortion", 10.0f});
+            g_state.add_log("TRAP! Speed Distortion active for 10s!");
             break;
-        case 7200156:
+        case 7200156: // Health Drain
             if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
             g_pending_heart_damage.fetch_add(1);
             g_state.add_log("TRAP! Health Drain (-1 Heart)!");
             break;
-        case 7200157:
+        case 7200157: // Tail-Knot (no untie, flat 10s)
             g_state.timed_traps.push_back({"tail_knot", 10.0f});
-            g_state.add_log("TRAP! Tail-Knot Trap: Tail is tied for 10s! Butt Stomp or wait to untie!");
+            g_state.add_log("TRAP! Tail-Knot: Tail is tied for 10s! Cannot be untied early!");
             break;
-        case 7200158:
-            g_state.timed_traps.push_back({"lead_boots", 8.0f});
-            g_state.add_log("TRAP! Lead Boots: Heavy boots disable jumping for 8s!");
+        case 7200158: // Lead Boots (flat 10s)
+            g_state.timed_traps.push_back({"lead_boots", 10.0f});
+            g_state.add_log("TRAP! Lead Boots: Heavy boots disable jumping for 10s!");
             break;
-        case 7200159:
+        case 7200159: // Darkness (flat 10s)
             g_state.timed_traps.push_back({"darkness", 10.0f});
             g_state.add_log("TRAP! Darkness: Shadows obscure vision for 10s!");
             break;
@@ -1322,32 +1324,15 @@ static void step_internal_locked(float dt_seconds) {
         return;
     }
 
-    // Advance Fire Breakout Trap (3 ticks -> 1 heart damage; front flip extinguishes immediately)
+    // Advance Fire Breakout Trap flame visual effect and knockback timer (instant heart loss already dealt)
     if (g_state.fire_trap.active) {
-        g_state.fire_trap.timer += dt_seconds;
-        while (g_state.fire_trap.active && g_state.fire_trap.timer >= g_state.fire_trap.tick_interval) {
-            g_state.fire_trap.timer -= g_state.fire_trap.tick_interval;
-            g_state.fire_trap.ticks += 1;
-            if (g_state.fire_trap.ticks >= g_state.fire_trap.max_ticks) {
-                // All 3 ticks elapsed without a front flip: Croc loses 1 heart and fire extinguishes
-                if (g_state.current_hearts > 0) {
-                    g_state.current_hearts -= 1;
-                }
-                g_pending_heart_damage.fetch_add(1);
-                g_state.fire_trap.active = false;
-                g_state.fire_trap.ticks = 0;
-                g_state.fire_trap.timer = 0.0f;
-                g_state.add_log("Fire Trap reached 3/3 ticks! Lost 1 Heart & fire extinguished.");
-                g_state.pending_events_json.push_back(
-                    "{\"event\":\"fire_trap_resolved\",\"reason\":\"max_ticks_damage\",\"hearts_remaining\":" +
-                    std::to_string(g_state.current_hearts) + "}"
-                );
-            } else {
-                g_state.add_log("Fire Trap burning: Tick " + std::to_string(g_state.fire_trap.ticks) + "/3! Front Flip to extinguish!");
-                g_state.pending_events_json.push_back(
-                    "{\"event\":\"fire_trap_tick\",\"tick\":" + std::to_string(g_state.fire_trap.ticks) + "}"
-                );
-            }
+        g_state.fire_trap.timer -= dt_seconds;
+        if (g_state.fire_trap.timer <= 0.0f) {
+            g_state.fire_trap.active = false;
+            g_state.fire_trap.timer = 0.0f;
+            g_state.pending_events_json.push_back(
+                "{\"event\":\"fire_trap_resolved\",\"reason\":\"effect_finished\"}"
+            );
         }
     }
 
@@ -1404,8 +1389,7 @@ static std::string build_state_json_locked() {
        << "\"airplane_ammo_feed\":" << (g_state.abilities.airplane_ammo_feed ? "true" : "false")
        << "},"
        << "\"fire_trap\":{"
-       << "\"active\":" << (g_state.fire_trap.active ? "true" : "false") << ","
-       << "\"ticks\":" << g_state.fire_trap.ticks
+       << "\"active\":" << (g_state.fire_trap.active ? "true" : "false")
        << "}"
        << "}";
     return ss.str();
@@ -1770,12 +1754,15 @@ static std::string handle_command_locked(const std::string& req) {
 
         if (trap_type == "fire_breakout") {
             display_name = "Fire Breakout Trap";
+            if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
+            g_pending_heart_damage.fetch_add(1);
             g_state.fire_trap.active = true;
-            g_state.fire_trap.ticks = 0;
-            g_state.fire_trap.max_ticks = extract_json_int(req, "ticks", 3);
-            g_state.fire_trap.timer = 0.0f;
-            g_state.add_log("FIRE BREAKOUT TRAP! Do a Front Flip before 3 ticks to extinguish!");
-            g_state.pending_events_json.push_back("{\"event\":\"fire_trap_ignited\",\"max_ticks\":3}");
+            g_state.fire_trap.timer = 2.0f;
+            g_state.add_log("🔥 FIRE BREAKOUT TRAP! Instant Heart Lost with Fire Knockback!");
+            g_state.pending_events_json.push_back(
+                "{\"event\":\"fire_trap_applied\",\"damage_hearts\":1,\"hearts_remaining\":" +
+                std::to_string(g_state.current_hearts) + "}"
+            );
         } else if (trap_type == "health_drain") {
             display_name = "Health Drain Trap";
             if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
@@ -1786,17 +1773,21 @@ static std::string handle_command_locked(const std::string& req) {
             );
         } else if (trap_type == "dantini_ambush") {
             display_name = "Dantini Ambush Trap";
-            g_state.add_log("TRAP! Dantini Ambush spawned!");
-            g_state.pending_events_json.push_back("{\"event\":\"dantini_ambush_spawned\",\"count\":3}");
+            g_state.timed_traps.push_back({"dantini_ambush", 10.0f});
+            g_state.add_log("TRAP! Dantini Ambush active for 10s!");
+            g_state.pending_events_json.push_back("{\"event\":\"dantini_ambush_spawned\",\"duration\":10.0,\"count\":3}");
         } else {
             if (trap_type == "ice_physics") display_name = "Ice Physics Trap";
             else if (trap_type == "reverse_controls") display_name = "Reverse Controls Trap";
             else if (trap_type == "speed_distortion") display_name = "Speed Distortion Trap";
-            float dur = extract_json_float(req, "duration", 10.0f);
+            else if (trap_type == "tail_knot") display_name = "Tail-Knot Trap";
+            else if (trap_type == "lead_boots") display_name = "Lead Boots Trap";
+            else if (trap_type == "darkness") display_name = "Darkness Trap";
+            float dur = 10.0f; // All ill effects last a flat 10 seconds!
             g_state.timed_traps.push_back({trap_type, dur});
-            g_state.add_log("TRAP! " + display_name + " active!");
+            g_state.add_log("TRAP! " + display_name + " active for 10s!");
             g_state.pending_events_json.push_back(
-                "{\"event\":\"timed_trap_started\",\"trap_type\":\"" + trap_type + "\"}"
+                "{\"event\":\"timed_trap_started\",\"trap_type\":\"" + trap_type + "\",\"duration\":10.0}"
             );
         }
 
@@ -1816,21 +1807,6 @@ static std::string handle_command_locked(const std::string& req) {
 
     if (cmd == "player_action") {
         std::string action = extract_json_string(req, "action");
-        if (action == "ACTION_FRONT_FLIP") {
-            if (g_state.fire_trap.active) {
-                int ticks_cancelled = g_state.fire_trap.ticks;
-                g_state.fire_trap.active = false;
-                g_state.fire_trap.ticks = 0;
-                g_state.fire_trap.timer = 0.0f;
-                g_state.add_log("Front Flip extinguished the Fire Trap! No heart lost!");
-                g_state.pending_events_json.push_back(
-                    "{\"event\":\"fire_trap_resolved\",\"reason\":\"extinguished_by_front_flip\",\"ticks_cancelled\":" +
-                    std::to_string(ticks_cancelled) + "}"
-                );
-                return "{\"status\":\"ok\",\"fire_extinguished\":true}";
-            }
-            return "{\"status\":\"ok\",\"fire_extinguished\":false}";
-        }
         return "{\"status\":\"ok\",\"action\":\"" + action + "\"}";
     }
 
@@ -2444,7 +2420,6 @@ static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             bool rando_active = false;
             bool save_locked = false;
             bool fire_active = false;
-            int fire_ticks = 0;
             bool full_visible = false;
             std::string line1;
             std::string line2;
@@ -2455,7 +2430,6 @@ static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 rando_active = g_state.is_randomizer_active();
                 save_locked = g_state.save_locked_to_mod;
                 fire_active = g_state.fire_trap.active;
-                fire_ticks = g_state.fire_trap.ticks;
                 full_visible = g_state.overlay_full_visible;
                 feed_snapshot = g_state.item_feed;
 
@@ -2470,7 +2444,7 @@ static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 }
 
                 if (fire_active) {
-                    line2 = "FIRE TRAP BURNING (" + std::to_string(fire_ticks) + "/3) - DO A FRONT FLIP TO EXTINGUISH!";
+                    line2 = "🔥 FIRE BREAKOUT TRAP! (-1 Heart Knockback)";
                 } else if (save_locked) {
                     line2 = "[F9] Menu | [F10] Minimize | Seed #" + g_state.current_seed_hex +
                             " | Jellies:" + std::to_string(g_state.red_jellies + g_state.blue_jellies + g_state.green_jellies) +
@@ -3662,17 +3636,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             return buttons;
         }
 
-        // Front Flip (L1/R1 = 0x0400 | 0x0800) extinguishes active Fire Breakout Trap!
-        if (g_state.fire_trap.active && (buttons & 0x0C00) != 0) {
-            g_state.fire_trap.active = false;
-            g_state.fire_trap.ticks = 0;
-            g_state.fire_trap.timer = 0.0f;
-            g_state.add_log("Front Flip performed! Fire Breakout Trap extinguished!");
-            g_state.pending_events_json.push_back(
-                "{\"event\":\"fire_trap_extinguished\",\"reason\":\"front_flip\"}"
-            );
-            if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
-        }
+
 
         // Only drain pending heart grants while actually in-game (never on the Title Screen),
         // so items received before a save is started/loaded are never silently lost.
@@ -3745,24 +3709,26 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             bool has_tail_knot = false;
             bool has_lead_boots = false;
             bool has_reverse_controls = false;
+            bool has_fire_knockback = false;
+
+            if (g_state.fire_trap.active && g_state.fire_trap.timer > 1.2f) {
+                has_fire_knockback = true;
+            }
+
             for (const auto& trap : g_state.timed_traps) {
                 if (trap.trap_type == "tail_knot") has_tail_knot = true;
                 if (trap.trap_type == "lead_boots") has_lead_boots = true;
                 if (trap.trap_type == "reverse_controls") has_reverse_controls = true;
             }
 
+            if (has_fire_knockback) {
+                // Apply knockback recoil: Croc reels backward, movement locked
+                buttons &= ~0x00F0u; // Clear directional D-Pad
+                buttons |= 0x0040u;  // Force Down/Backward stumble impulse
+            }
+
             if (has_tail_knot) {
-                buttons &= ~0x8000u; // Tail Whack disabled while tail is knotted
-                // Performing a Butt Stomp (X while midair) unties the tail knot!
-                if ((newly_pressed & 0x4000u) != 0 && (GetTickCount() - g_last_jump_press_tick < 650)) {
-                    for (auto it = g_state.timed_traps.begin(); it != g_state.timed_traps.end(); ++it) {
-                        if (it->trap_type == "tail_knot") {
-                            g_state.timed_traps.erase(it);
-                            g_state.add_log("Tail-Knot untied via Butt Stomp!");
-                            break;
-                        }
-                    }
-                }
+                buttons &= ~0x8000u; // Tail Whack disabled while tail is knotted (flat 10s, cannot be untied early)
             } else if (!g_state.abilities.tail_whack) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
