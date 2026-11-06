@@ -1,4 +1,4 @@
-# 🐊 Croc 2 Archipelago Multiworld Randomizer & Standalone Launcher
+#  Croc 2 Archipelago Multiworld Randomizer & Standalone Launcher
 
 [![Release](https://img.shields.io/badge/Release-v1.0.0-brightgreen.svg)](https://github.com/Vinrix/Croc2AP/releases)
 [![Archipelago](https://img.shields.io/badge/Archipelago-v0.6.0+-blue.svg)](https://archipelago.gg/)
@@ -12,29 +12,29 @@ Featuring memory-hooked item injection, door locking logic, interactive player t
 
 ---
 
-## 🌟 Key Features
+##  Key Features
 
-### 🖥️ Standalone Multi-Tab Launcher (`Croc2ArchipelagoLauncher.exe`)
+### Standalone Multi-Tab Launcher (`Croc2ArchipelagoLauncher.exe`)
 - **Tab 1: Play & Connect**:
   - Direct connection to Archipelago multiworld rooms (Host, Port, Slot Name, Password).
   - One-click launch modes:
-    - **🎮 Launch Vanilla**: Boots 100% unmodded Croc 2 with mod hooks cleanly bypassed.
-    - **🎲 Launch Solo Rando**: Boots standalone randomizer offline using local `croc2_mod.ini` rules.
-    - **🌐 Play Archipelago**: Automatically launches Croc 2 and bridges with the Archipelago room.
-    - **🔗 Attach Running**: Connects the launcher and room to an already running instance of Croc 2.
+    - ** Launch Vanilla**: Boots 100% unmodded Croc 2 with mod hooks cleanly bypassed.
+    - ** Launch Solo Rando**: Boots standalone randomizer offline using local `croc2_mod.ini` rules.
+    - ** Play Archipelago**: Automatically launches Croc 2 and bridges with the Archipelago room.
+    - ** Attach Running**: Connects the launcher and room to an already running instance of Croc 2.
   - Real-time connection badges and check/item counters.
   - Live color-coded Activity Log displaying item sends, receives, and self-checks:
     - *"Vinny got his own Clockwork Gobbo!"* (Solo rando / self-checks)
     - *"Vinny sent Stage Key to Player2 (Inca Village Door 1)!"*
-  - **🔄 Built-In Auto-Updater**: One-click check to update the launcher, `.apworld`, and hook DLLs directly from GitHub Releases!
+  - ** Built-In Auto-Updater**: One-click check to update the launcher, `.apworld`, and hook DLLs directly from GitHub Releases!
 
 - **Tab 2: Randomizer Settings & YAML Generator**:
   - Configure win conditions, crystal density, shop shuffle, abilities, door locks, and traps.
-  - **💾 One-Click Export**: Saves `<SlotName>.yaml` directly into `C:\ProgramData\Archipelago\Players\` and synchronizes `croc2_mod.ini` for instant multiworld generation!
+  - ** One-Click Export**: Saves `<SlotName>.yaml` directly into `C:\ProgramData\Archipelago\Players\` and synchronizes `croc2_mod.ini` for instant multiworld generation!
 
 ---
 
-### 🎮 In-Game Experience & Mechanics
+###  In-Game Experience & Mechanics
 - **Non-Intrusive Bottom Toast HUD**:
   - Displays stylish item received/sent alerts directly at the bottom of the screen.
   - No disruptive screen freezes or awkward menu overlays.
@@ -59,7 +59,7 @@ Featuring memory-hooked item injection, door locking logic, interactive player t
 
 ---
 
-## 🚀 Quickstart & Installation
+##  Quickstart & Installation
 
 ### Option A: Automatic One-Click Setup
 1. Download the latest **`Croc2Archipelago-vX.X.X.zip`** from [GitHub Releases](https://github.com/Vinrix/Croc2AP/releases).
@@ -114,7 +114,7 @@ The release automation script (`publish_release.py`):
 
 ---
 
-## 📁 Repository Structure
+##  Repository Structure
 
 ```
 Croc2AP/
@@ -166,7 +166,7 @@ Croc2AP/
 
 ---
 
-## ⚙️ Configuration (`croc2_mod.ini`)
+##  Configuration (`croc2_mod.ini`)
 
 Located in the Croc 2 game directory alongside `croc2.exe`:
 
@@ -203,7 +203,7 @@ death_link = false          ; Share deaths across multiworld
 
 ---
 
-## 🧪 Testing & Verification
+##  Testing & Verification
 
 Run the automated verification suite anytime:
 
@@ -220,7 +220,7 @@ Verifies:
 
 ---
 
-## 📄 License
+##  License
 
 This project is licensed under the [MIT License](LICENSE).
 Croc 2: Kingdom of the Gobbos is copyright Argonaut Software & Fox Interactive. This mod is an independent open-source reverse-engineering project created for educational and preservation purposes.
