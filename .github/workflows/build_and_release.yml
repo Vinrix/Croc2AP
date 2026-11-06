@@ -56,8 +56,10 @@ jobs:
             -o build/croc2_ap_hook.dll \
             -lws2_32 -lwinhttp -lgdi32 -luser32
           cp build/croc2_ap_hook.dll build/version.dll
-          g++ -std=c++17 -O2 -s -Wall -Wextra -static -static-libgcc -static-libstdc++ \
-            tests/test_host.cpp -o build/test_host.exe
+          if [ -f tests/test_host.cpp ]; then
+            g++ -std=c++17 -O2 -s -Wall -Wextra -static -static-libgcc -static-libstdc++ \
+              tests/test_host.cpp -o build/test_host.exe
+          fi
           ls -la build/
 
       - name: Compile C# Standalone Launcher

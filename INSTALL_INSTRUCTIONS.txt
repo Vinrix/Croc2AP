@@ -67,3 +67,4 @@ USEFUL CONTROLS & UNINSTALL
 - Press F10 in-game at any time to toggle between Archipelago Mod and Vanilla Mode.
 - To uninstall, run "Uninstall_Croc2AP.bat" or delete "version.dll" from your Croc 2 folder.
 ================================================================================
+
