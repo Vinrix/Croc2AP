@@ -3277,8 +3277,10 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                     g_ground_jump_in_progress = false;
                 }
 
-                // Strictly lock Flip Jump & shoulder maneuvers (L1, R1, L2, R2: 0x0F00) until Butt Stomp unlocked
-                buttons &= ~0x0F00u;
+                // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
+                // Note: Keep L2 (0x0100) and R2 (0x0200) enabled so the player can cycle through the inventory wheel
+                // (e.g. to select the Clockwork Gobbo) without needing Butt Stomp!
+                buttons &= ~0x0C00u;
             }
 
             if (has_reverse_controls) {
@@ -3293,6 +3295,68 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
 
             if (!g_state.abilities.power_gloves && !g_state.abilities.lever_wrench) {
                 buttons &= ~0x2000u; // Lock Circle (Carry / Lever Switch) until unlocked in seed
+            }
+
+            // Strictly gate Climbing Claws: prevent Croc from clinging to or ascending climbable walls,
+            // meshes, monkey bars, and ropes when Climbing Claws ability has not been unlocked in the seed.
+            if (!g_state.abilities.climbing_claws && !is_vehicle_stage_wad(g_state.current_wad)) {
+                uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + 0x00BC7CE8);
+                bool is_climbing = false;
+                uintptr_t attach_ptr = 0;
+
+                if (player_strat != 0) {
+                    attach_ptr = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
+                    if (attach_ptr != 0) {
+                        int16_t surface_type = *reinterpret_cast<int16_t*>(attach_ptr + 4);
+                        if (surface_type == 0x10 || surface_type == 0x1e) {
+                            is_climbing = true;
+                        }
+                    }
+                }
+
+                int32_t movement_mode = *reinterpret_cast<int32_t*>(g_exe_base + 0x00BC8330);
+                uint8_t climb_flag = *reinterpret_cast<uint8_t*>(g_exe_base + 0x00B8E25C);
+                if (movement_mode == 0x1e000 || climb_flag != 0) {
+                    is_climbing = true;
+                }
+
+                if (is_climbing) {
+                    if (attach_ptr != 0) {
+                        *reinterpret_cast<int16_t*>(attach_ptr + 4) = -1;
+                    }
+                    if (player_strat != 0) {
+                        uintptr_t p118 = *reinterpret_cast<uintptr_t*>(player_strat + 0x118);
+                        if (p118 != 0) {
+                            *reinterpret_cast<int32_t*>(p118 + 0x14) = 0;
+                        }
+                        *reinterpret_cast<uint16_t*>(player_strat + 0xD2) = 0;
+                    }
+                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00BC8330) = 0;
+                    *reinterpret_cast<uint8_t*>(g_exe_base + 0x00B8E25C) = 0;
+                    *reinterpret_cast<uint8_t*>(g_exe_base + 0x00B8E25D) = 0;
+                    *reinterpret_cast<uint8_t*>(g_exe_base + 0x00B8E25E) = 0;
+                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00B8E260) = 0;
+                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00B8E264) = 0;
+
+                    // Strip upward climb input and force jump/drop release
+                    buttons &= ~0x0010u;
+                    buttons |= 0x4000u;
+
+                    static DWORD s_last_climb_warn_tick = 0;
+                    DWORD now_tick = GetTickCount();
+                    if (now_tick - s_last_climb_warn_tick > 2500) {
+                        s_last_climb_warn_tick = now_tick;
+                        trigger_bottom_toast_locked(
+                            false, "Climbing Claws Required!",
+                            ItemImportance::TRAP, "Logic", "Croc",
+                            "Climbing surface requires Climbing Claws!", 2500
+                        );
+                        g_state.add_log("Climb Blocked: Climbing Claws Required!");
+                        g_state.pending_events_json.push_back(
+                            "{\"event\":\"climb_blocked\",\"message\":\"Climbing Claws Required!\"}"
+                        );
+                    }
+                }
             }
         }
     }

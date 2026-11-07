@@ -1456,6 +1456,10 @@ namespace Croc2Launcher
                             string levelName = ev.ContainsKey("level_name") ? ev["level_name"].ToString() : "Vehicle Stage";
                             LogFormatted("🚗 [VEHICLE] " + levelName + " requires Vehicle License!", Color.OrangeRed);
                         }
+                        else if (evType == "climb_blocked")
+                        {
+                            LogFormatted("🧗 [ABILITY] Climbing surface requires Climbing Claws!", Color.OrangeRed);
+                        }
                         else if (evType == "door_entered")
                         {
                             string origName = ev.ContainsKey("orig_name") ? ev["orig_name"].ToString() : "";
