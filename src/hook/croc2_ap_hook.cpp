@@ -30,36 +30,11 @@ static std::thread g_ws_thread;
 static SOCKET g_listen_socket = INVALID_SOCKET;
 static std::string g_ini_file_path = "croc2_mod.ini";
 
-// UI Window Handles
-static HWND g_overlay_hwnd = nullptr;
-static HWND g_toast_hwnd = nullptr;
-static HWND g_menu_hwnd = nullptr;
-static HWND g_edit_host = nullptr;
-static HWND g_edit_port = nullptr;
-static HWND g_edit_slot = nullptr;
-static HWND g_edit_pass = nullptr;
-static HWND g_btn_connect = nullptr;
-static HWND g_btn_disconnect = nullptr;
-static HWND g_btn_toggle_mod = nullptr;
-static HWND g_list_log = nullptr;
-static bool g_menu_visible = false;
-
-constexpr int IDC_EDIT_HOST      = 1001;
-constexpr int IDC_EDIT_PORT      = 1002;
-constexpr int IDC_EDIT_SLOT      = 1003;
-constexpr int IDC_EDIT_PASS      = 1004;
-constexpr int IDC_BTN_CONNECT    = 1005;
-constexpr int IDC_BTN_DISCONNECT = 1006;
-constexpr int IDC_BTN_TOGGLE_MOD = 1007;
-constexpr int IDC_BTN_CLOSE_MENU = 1008;
-constexpr int IDC_LIST_LOG       = 1009;
-
 // Forward declarations
 static void start_ap_websocket_connection();
 static void stop_ap_websocket_connection();
 static void save_config_ini(const char* ini_path);
 static void load_yaml_player_names();
-static void refresh_menu_ui();
 static void init_default_door_shuffle_locked();
 static void register_door_override_locked(const std::string& door_or_wad, const std::string& target_wad);
 static void install_croc2_engine_hooks();
@@ -105,6 +80,7 @@ static std::atomic<int> g_pending_golden_gobbos{0};
 static std::atomic<int> g_pending_wallet_crystals{0};
 static std::atomic<int> g_pending_colored_gems{0};
 static std::atomic<bool> g_need_full_inventory_sync{false};
+static bool g_ground_jump_in_progress = false;
 static DWORD g_last_jump_press_tick = 0;
 static uint32_t g_prev_raw_buttons = 0;
 
@@ -265,12 +241,56 @@ static void unpack_abilities_mask(uint8_t m, PlayerAbilities& a) {
     a.airplane_ammo_feed = (m & (1 << 6)) != 0;
 }
 
+static bool is_vehicle_stage_wad(const std::string& wad) {
+    return (wad == "T1L3M001" || // Sailor Glider
+            wad == "T1L5M001" || // Sailor Speedboat
+            wad == "T2L3M001" || // Cossack Train Chase
+            wad == "T2L6M001" || // Cossack Hang Glider
+            wad == "T3L4M001" || // Caveman Minecart Race
+            wad == "T3L5M001" || // Caveman Devil's Tower
+            wad == "T4L3M001");  // Inca Waterfall (Plane/Boat)
+}
+
 static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     std::mt19937_64 rng(seed ^ 0xA5A5F0F05A5A0F0FULL);
 
-    // 1. Shuffle doors within each of the 4 Villages using a true random derangement (perm[i] != i)
-    // so every new save randomizes Door 1 (and all other doors) to genuinely random levels!
-    for (int v = 0; v < 4; ++v) {
+    // 1. Sailor Village (v = 0):
+    // Door 1 (index 0) is open from the start (Sphere 1).
+    // It MUST be an on-foot platforming stage (Stage 2: "Get the Gobbo's Sandwich!" or Stage 4: "Save the Bird from the Thief").
+    // It must NEVER be a vehicle stage (1 or 3) or vanilla Stage 0!
+    int door1_target = (rng() % 2 == 0) ? 2 : 4;
+    g_state.door_perm[0] = static_cast<uint8_t>(door1_target);
+    g_state.door_overrides[kStageDoors[0].door_id] = kStageDoors[door1_target].vanilla_wad;
+    g_state.door_overrides[kStageDoors[0].vanilla_wad] = kStageDoors[door1_target].vanilla_wad;
+
+    // Doors 1..4 in Sailor Village: derange remaining stages {0, 1, 2, 3, 4} \ {door1_target}
+    std::vector<int> sailor_rem;
+    for (int k = 0; k < 5; ++k) {
+        if (k != door1_target) sailor_rem.push_back(k);
+    }
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        std::shuffle(sailor_rem.begin(), sailor_rem.end(), rng);
+        bool ok = true;
+        for (int k = 0; k < 4; ++k) {
+            if (sailor_rem[k] == (k + 1)) { ok = false; break; }
+        }
+        if (ok) break;
+    }
+    for (int k = 0; k < 4; ++k) {
+        if (sailor_rem[k] == (k + 1)) {
+            std::swap(sailor_rem[k], sailor_rem[(k + 1) % 4]);
+        }
+    }
+    for (int k = 0; k < 4; ++k) {
+        int door_i = k + 1;
+        int target_s = sailor_rem[k];
+        g_state.door_perm[door_i] = static_cast<uint8_t>(target_s);
+        g_state.door_overrides[kStageDoors[door_i].door_id] = kStageDoors[target_s].vanilla_wad;
+        g_state.door_overrides[kStageDoors[door_i].vanilla_wad] = kStageDoors[target_s].vanilla_wad;
+    }
+
+    // Villages 1..3 (Cossack, Caveman, Inca): standard full derangement
+    for (int v = 1; v < 4; ++v) {
         int base = v * 5;
         int idx[5] = {base + 0, base + 1, base + 2, base + 3, base + 4};
         for (int attempt = 0; attempt < 32; ++attempt) {
@@ -284,7 +304,6 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
             }
             if (is_derangement) break;
         }
-        // Guarantee no fixed points even if random shuffle hit a rare streak
         for (int k = 0; k < 5; ++k) {
             if (idx[k] == base + k) {
                 std::swap(idx[k], idx[(k + 1) % 5]);
@@ -308,9 +327,8 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     //    Sub-checks 3..7: Colored Crystal slots 1..5 in stage
     //    Sub-check  8:    Stage Completion
     //
-    // Sphere 1 (Early Logical Reach): White crystal checks (0..2) across the 5 Sailor Village stages (stages 0..4)
-    // = 15 early checks. We place core progression abilities (Tail Whack, Butt Stomp, Climbing Claws, Power Gloves,
-    // Lever Wrench) + early Heart Pots + Colored Crystals + a Fire Breakout Trap here so the player can NEVER get softlocked!
+    // Sphere 1: 15 early White Crystal checks (0..2) across the 5 Sailor Village stages (stages 0..4).
+    // Guarantees all 5 core abilities + Vehicle License + Sailor Village Stage Keys so the player CAN NEVER GET SOFTLOCKED!
     std::vector<int> sphere1_slots;
     std::vector<int> remaining_slots;
     for (int s = 0; s < 20; ++s) {
@@ -328,22 +346,27 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     std::shuffle(remaining_slots.begin(), remaining_slots.end(), rng);
 
     // Sphere 1 items (15 items):
-    // 5 core abilities guaranteed in early checks:
-    // Tail Whack (7200001), Butt Stomp (7200002), Climbing Claws (7200003),
-    // Power Gloves (7200004), Lever Wrench (7200005)
-    // Plus 4 Inventory Wheel items, 1 Heart Pot, 3 Colored Crystals, 2 Traps:
+    // 5 core abilities: Tail Whack (7200001), Butt Stomp (7200002), Climbing Claws (7200003),
+    //                   Power Gloves (7200004), Lever Wrench (7200005)
+    // Vehicle License (7200006)
+    // 3 Sailor Village Stage Door Keys (7200023, 7200024, 7200025)
+    // Useful inventory items + Heart Pot + Colored Crystal + 1 Trap
     const int sphere1_items[15] = {
-        7200001, 7200002, 7200003, 7200004, 7200005,
-        7200142, 7200143, 7200144, 7200145, 7200021,
-        7200042, 7200043, 7200044,
-        7200151, 7200155
+        7200001, 7200002, 7200003, 7200004, 7200005, // 5 core abilities
+        7200006,                                     // Vehicle License!
+        7200023, 7200024, 7200025,                   // 3 Sailor Village Stage Door Keys!
+        7200142, 7200143, 7200144,                   // Clockwork Gobbo, Red Jelly, Blue Jelly
+        7200021,                                     // Heart Pot
+        7200042,                                     // Red Crystal
+        7200151                                      // Fire Breakout Trap
     };
     for (size_t i = 0; i < 15 && i < sphere1_slots.size(); ++i) {
         g_state.solo_check_items[sphere1_slots[i]] = sphere1_items[i];
     }
 
     // Remaining 165 items:
-    // - Vehicle License (7200006), Airplane Ammo Feed (7200007), Binoculars (7200146)
+    // - Remaining 16 Stage Keys (7200026..7200041)
+    // - Airplane Ammo Feed (7200007), Binoculars (7200146)
     // - 4 Village VIP Passes (7200008..7200011)
     // - 4 Jigsaw Pieces (7200012..7200015)
     // - 16 Trophies (7200017)
@@ -351,15 +374,17 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     // - 8 Heart Pots (7200021)
     // - 6 Silver Keys (7200019) + 4 Gold Keys (7200020)
     // - 4 Clockwork Gobbos (7200142), 4 Red Jellies (7200143), 4 Blue Jellies (7200144), 4 Green Jellies (7200145)
-    // - Remaining Traps (Fire Breakout 7200151, Ice Physics 7200152, Reverse Controls 7200153, Dantini Ambush 7200154, Speed 7200155)
+    // - Traps (Fire Breakout, Ice Physics, Reverse Controls, Dantini Ambush, Speed)
     std::vector<int> pool;
-    pool.reserve(165);
-    pool.push_back(7200006); // Vehicle License
+    pool.reserve(remaining_slots.size());
+    for (int key_id = 7200026; key_id <= 7200041; ++key_id) {
+        pool.push_back(key_id); // All remaining Stage Keys in pool!
+    }
     pool.push_back(7200007); // Airplane Ammo Feed
     pool.push_back(7200146); // Binoculars
     for (int id = 7200008; id <= 7200015; ++id) pool.push_back(id); // 4 VIP Passes + 4 Jigsaw Pieces
     for (int i = 0; i < 16; ++i) pool.push_back(7200017); // 16 Trophies
-    for (int id = 7200045; id <= 7200141; ++id) pool.push_back(id); // 97 Colored Crystals
+    for (int id = 7200045; id <= 7200141; ++id) pool.push_back(id); // Colored Crystals
     for (int i = 0; i < 8; ++i) pool.push_back(7200021); // 8 Heart Pots
     for (int i = 0; i < 6; ++i) pool.push_back(7200019); // 6 Silver Keys
     for (int i = 0; i < 4; ++i) pool.push_back(7200020); // 4 Gold Keys
@@ -380,9 +405,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
 
     // 3. Build the 2,000-entry Individual White Crystal check pool (100 crystals per stage * 20 stages):
     //    Sphere 1 White Crystals (first 20 White Crystals in Sailor Village stages 0..4 = 100 early slots)
-    //    include core abilities, inventory wheel items (Red/Blue/Green Jellies, Clockwork Gobbos, Binoculars,
-    //    Keys, Jigsaw Pieces), colored crystals, heart pots, and traps so every individual White Crystal collected
-    //    for the first time immediately populates the inventory wheel and moveset!
+    //    include core abilities, Vehicle License, Stage Keys, inventory wheel items, colored crystals, heart pots, and traps.
     std::vector<int> wc_sphere1_slots;
     std::vector<int> wc_remaining_slots;
     for (int s = 0; s < 20; ++s) {
@@ -400,6 +423,8 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
 
     std::vector<int> wc_sphere1_items = {
         7200001, 7200002, 7200003, 7200004, 7200005, // Core abilities
+        7200006,                                     // Vehicle License
+        7200023, 7200024, 7200025,                   // Stage Keys
         7200142, 7200142, 7200142,                   // 3 Clockwork Gobbos (Inventory Wheel)
         7200143, 7200143, 7200143,                   // 3 Gummi Jump Red Jellies (Inventory Wheel)
         7200144, 7200144, 7200144,                   // 3 Jelly Jump Blue Jellies (Inventory Wheel)
@@ -421,11 +446,14 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
 
     std::vector<int> wc_pool;
     wc_pool.reserve(wc_remaining_slots.size());
+    for (int key_id = 7200023; key_id <= 7200041; ++key_id) {
+        wc_pool.push_back(key_id); // All 19 Stage Keys in White Crystal pool too!
+    }
     wc_pool.push_back(7200006); // Vehicle License
     wc_pool.push_back(7200007); // Airplane Ammo Feed
     for (int id = 7200008; id <= 7200015; ++id) wc_pool.push_back(id); // VIP Passes + Jigsaw Pieces
     for (int i = 0; i < 16; ++i) wc_pool.push_back(7200017); // 16 Trophies
-    for (int id = 7200047; id <= 7200141; ++id) wc_pool.push_back(id); // 95 Colored Crystals
+    for (int id = 7200047; id <= 7200141; ++id) wc_pool.push_back(id); // Colored Crystals
     for (int i = 0; i < 8; ++i) wc_pool.push_back(7200021); // 8 Heart Pots
     for (int i = 0; i < 6; ++i) wc_pool.push_back(7200019); // 6 Silver Keys
     for (int i = 0; i < 4; ++i) wc_pool.push_back(7200020); // 4 Gold Keys
@@ -640,13 +668,6 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
 
     g_state.active_toast = toast;
     g_state.toast_active = true;
-
-    // Do NOT call synchronous ShowWindow(g_toast_hwnd) here!
-    // OverlayThreadProc runs every 25ms on its own UI thread and manages ShowWindow/Hide
-    // safely without cross-thread deadlock when the game thread holds g_mutex.
-    if (g_toast_hwnd) {
-        InvalidateRect(g_toast_hwnd, nullptr, FALSE);
-    }
 }
 
 static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std::string& check_desc) {
@@ -671,6 +692,8 @@ static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std:
 
     g_state.pending_events_json.push_back(
         "{\"event\":\"location_checked\",\"location_id\":" + std::to_string(location_id) +
+        ",\"stage_idx\":" + std::to_string(stage_idx) +
+        ",\"sub_check_idx\":" + std::to_string(sub_check_idx) +
         ",\"check_id\":" + std::to_string(check_id) +
         ",\"description\":\"" + json_escape(check_desc) + "\"}"
     );
@@ -687,17 +710,13 @@ static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std:
             ItemImportance imp = ItemImportance::PROGRESSION;
             get_ap_item_info(item_id, item_name, imp);
 
-            // Toast in solo play: Croc got his own [Item]!
             trigger_bottom_toast_locked(false, item_name, imp, "Croc", "Croc", check_desc);
-
             g_state.add_log("Check [" + check_desc + "] -> " + item_name);
             apply_ap_item_by_id_locked(item_id, "Croc", check_desc, false);
         }
     }
 
     sync_state_to_save_footer_locked();
-    if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
-    if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
 }
 
 static bool claim_white_crystal_check_locked(int stage_idx, int crystal_num_1_to_100) {
@@ -758,17 +777,13 @@ static bool claim_white_crystal_check_locked(int stage_idx, int crystal_num_1_to
             ItemImportance imp = ItemImportance::PROGRESSION;
             get_ap_item_info(item_id, item_name, imp);
 
-            // Toast in solo play: Croc got his own [Item]!
             trigger_bottom_toast_locked(false, item_name, imp, "Croc", "Croc", desc);
-
             g_state.add_log("Check [" + desc + "] -> " + item_name);
             apply_ap_item_by_id_locked(item_id, "Croc", desc, false);
         }
     }
 
     sync_state_to_save_footer_locked();
-    if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
-    if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
     return true;
 }
 
@@ -1141,6 +1156,16 @@ static void apply_ap_item_by_id_locked(int item_id,
     ItemImportance imp = ItemImportance::PROGRESSION;
     get_ap_item_info(item_id, item_name, imp);
 
+    if (item_id > 0) {
+        g_state.pending_events_json.push_back(
+            "{\"event\":\"item_received\",\"item_id\":" + std::to_string(item_id) +
+            ",\"item_name\":\"" + json_escape(item_name) +
+            "\",\"sender\":\"" + json_escape(sender_name) +
+            "\",\"location\":\"" + json_escape(location_name) +
+            "\",\"importance\":" + std::to_string(static_cast<int>(imp)) + "}"
+        );
+    }
+
     // ID range mapped from worlds/croc2/data/items.json (7200001..7200156)
     switch (item_id) {
         case 7200001: g_state.abilities.tail_whack = true; g_state.add_log("Unlocked Ability: Tail Whack!"); break;
@@ -1240,39 +1265,48 @@ static void apply_ap_item_by_id_locked(int item_id,
             g_state.fire_trap.active = true;
             g_state.fire_trap.timer = 2.0f;
             g_state.add_log("🔥 TRAP! Fire Breakout: Instant Heart Lost with Fire Knockback!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"fire_breakout\",\"description\":\"Fire Breakout Trap (-1 Heart)\"}");
             break;
         case 7200152: // Ice Physics
             g_state.timed_traps.push_back({"ice_physics", 10.0f});
             g_state.add_log("TRAP! Ice Physics active for 10s!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"ice_physics\",\"description\":\"Ice Physics (10s)\"}");
             break;
         case 7200153: // Reverse Controls
             g_state.timed_traps.push_back({"reverse_controls", 10.0f});
             g_state.add_log("TRAP! Reverse Controls active for 10s!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"reverse_controls\",\"description\":\"Reverse Controls (10s)\"}");
             break;
         case 7200154: // Dantini Ambush
             g_state.timed_traps.push_back({"dantini_ambush", 10.0f});
             g_state.add_log("TRAP! Dantini Ambush active for 10s!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"dantini_ambush\",\"description\":\"Dantini Ambush (10s)\"}");
             break;
         case 7200155: // Speed Distortion
             g_state.timed_traps.push_back({"speed_distortion", 10.0f});
             g_state.add_log("TRAP! Speed Distortion active for 10s!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"speed_distortion\",\"description\":\"Speed Distortion (10s)\"}");
             break;
         case 7200156: // Health Drain
             if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
             g_pending_heart_damage.fetch_add(1);
             g_state.add_log("TRAP! Health Drain (-1 Heart)!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"health_drain\",\"description\":\"Health Drain (-1 Heart)\"}");
             break;
         case 7200157: // Tail-Knot (no untie, flat 10s)
             g_state.timed_traps.push_back({"tail_knot", 10.0f});
             g_state.add_log("TRAP! Tail-Knot: Tail is tied for 10s! Cannot be untied early!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"tail_knot\",\"description\":\"Tail-Knot (10s)\"}");
             break;
         case 7200158: // Lead Boots (flat 10s)
             g_state.timed_traps.push_back({"lead_boots", 10.0f});
             g_state.add_log("TRAP! Lead Boots: Heavy boots disable jumping for 10s!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"lead_boots\",\"description\":\"Lead Boots (10s)\"}");
             break;
         case 7200159: // Darkness (flat 10s)
             g_state.timed_traps.push_back({"darkness", 10.0f});
             g_state.add_log("TRAP! Darkness: Shadows obscure vision for 10s!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"darkness\",\"description\":\"Darkness Trap (10s)\"}");
             break;
         case 7200160: {
             int tax = 20;
@@ -1280,6 +1314,7 @@ static void apply_ap_item_by_id_locked(int item_id,
             g_state.current_crystals -= tax;
             g_pending_wallet_crystals.fetch_sub(tax);
             g_state.add_log("TRAP! Pete's Crystal Tax: Pete took " + std::to_string(tax) + " crystals!");
+            g_state.pending_events_json.push_back("{\"event\":\"trap_applied\",\"trap_type\":\"crystal_tax\",\"description\":\"Pete's Crystal Tax (-" + std::to_string(tax) + " Crystals)\"}");
             break;
         }
         default:
@@ -1291,6 +1326,10 @@ static void apply_ap_item_by_id_locked(int item_id,
                 }
                 g_pending_keys.fetch_add(1);
                 g_state.add_log("Received Key: " + std::string(kStageDoors[door_idx].level_name) + "!");
+                g_state.pending_events_json.push_back(
+                    "{\"event\":\"key_received\",\"door_idx\":" + std::to_string(door_idx) +
+                    ",\"level_name\":\"" + json_escape(kStageDoors[door_idx].level_name) + "\"}"
+                );
             } else if (item_id >= 7200042 && item_id <= 7200141) {
                 int gem_offset = item_id - 7200042;
                 int stage_idx = gem_offset / 5;
@@ -1585,7 +1624,6 @@ static std::string handle_command_locked(const std::string& req) {
         trigger_bottom_toast_locked(true, item_name, imp, "Croc", receiver, location);
         g_state.add_feed_entry(true, item_name, imp, receiver, location);
         g_state.add_log("Sent " + item_name + " to " + receiver + " (" + location + ")");
-        if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
         return "{\"status\":\"ok\",\"item_feed_count\":" + std::to_string(g_state.item_feed.size()) + "}";
     }
 
@@ -1633,7 +1671,6 @@ static std::string handle_command_locked(const std::string& req) {
             );
             g_state.ap_items_applied = (item_index >= 0) ? (item_index + 1) : (g_state.ap_items_applied + 1);
             sync_state_to_save_footer_locked();
-            if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
             bool golden_active = !wad.empty() &&
                                  (g_state.activated_golden_gobbos.find(wad) != g_state.activated_golden_gobbos.end());
             return "{\"status\":\"ok\",\"item_id\":" + std::to_string(item_id) +
@@ -1762,7 +1799,6 @@ static std::string handle_command_locked(const std::string& req) {
             location.empty() ? "Archipelago" : location
         );
         g_state.add_log("Received Item: " + item_name);
-        if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
 
         bool golden_active = !wad.empty() &&
                              (g_state.activated_golden_gobbos.find(wad) != g_state.activated_golden_gobbos.end());
@@ -1828,7 +1864,6 @@ static std::string handle_command_locked(const std::string& req) {
             trap_sender,
             location.empty() ? "Archipelago" : location
         );
-        if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
         return "{\"status\":\"ok\",\"trap_type\":\"" + trap_type + "\"}";
     }
 
@@ -1870,7 +1905,6 @@ static std::string handle_command_locked(const std::string& req) {
 
     if (cmd == "toggle_overlay") {
         g_state.overlay_full_visible = !g_state.overlay_full_visible;
-        if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
         return "{\"status\":\"ok\",\"overlay_full_visible\":" +
                std::string(g_state.overlay_full_visible ? "true" : "false") + "}";
     }
@@ -2001,7 +2035,6 @@ static void ap_websocket_worker() {
         g_state.conn.status_text = "Connecting to " + host + ":" + std::to_string(port) + " as '" + slot + "'...";
         g_state.add_log(g_state.conn.status_text);
     }
-    if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
 
     std::wstring whost(host.begin(), host.end());
     g_ws_session = WinHttpOpen(L"Croc2ArchipelagoClient/0.1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -2010,7 +2043,6 @@ static void ap_websocket_worker() {
         g_state.conn.connecting = false;
         g_state.conn.status_text = "Failed to initialize WinHTTP session.";
         g_state.add_log(g_state.conn.status_text);
-        if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
         return;
     }
 
@@ -2021,7 +2053,6 @@ static void ap_websocket_worker() {
         g_state.conn.connecting = false;
         g_state.conn.status_text = "Could not resolve host: " + host;
         g_state.add_log(g_state.conn.status_text);
-        if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
         return;
     }
 
@@ -2061,7 +2092,6 @@ static void ap_websocket_worker() {
         g_state.conn.ap_server_connected = false;
         g_state.conn.status_text = "Connection failed to " + host + ":" + std::to_string(port) + " (Is Server Running?)";
         g_state.add_log(g_state.conn.status_text);
-        if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
         return;
     }
 
@@ -2145,7 +2175,6 @@ static void ap_websocket_worker() {
                 g_state.conn.status_text = "Connected as '" + slot + "' @ " + host + ":" + std::to_string(port);
                 g_state.add_log("SUCCESS: Connected to Archipelago Server as '" + slot + "'!");
                 MessageBeep(MB_OK);
-                if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
             }
 
             if (packet.find("\"PrintJSON\"") != std::string::npos && packet.find("\"ItemSend\"") != std::string::npos) {
@@ -2171,7 +2200,6 @@ static void ap_websocket_worker() {
                 g_state.conn.status_text = "Connection Refused! Check Slot Name (Case-Sensitive) & Password.";
                 g_state.add_log("ERROR: Archipelago Server refused connection for slot '" + slot + "'.");
                 MessageBeep(MB_ICONHAND);
-                if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
             }
 
             if (packet.find("\"ReceivedItems\"") != std::string::npos) {
@@ -2191,8 +2219,6 @@ static void ap_websocket_worker() {
                     ++running_index;
                 }
                 sync_state_to_save_footer_locked();
-                if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
-                if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
             }
         }
     }
@@ -2207,10 +2233,9 @@ static void ap_websocket_worker() {
             g_state.add_log("Disconnected from Archipelago Server.");
         }
     }
-    if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
 }
 
-static void start_ap_websocket_connection() {
+[[maybe_unused]] static void start_ap_websocket_connection() {
     stop_ap_websocket_connection();
     g_ws_running.store(true);
     g_ws_thread = std::thread(ap_websocket_worker);
@@ -2225,958 +2250,21 @@ static void stop_ap_websocket_connection() {
 }
 
 // ============================================================================
-// Croc-Themed In-Game Overlay Bar + Connection Menu UI (Win32 GDI)
+// Background Logic Tick Worker (Replaces In-Game Overlay UI)
+// Handles timed traps, toasts countdown, and internal mod state stepping
 // ============================================================================
-static void draw_diamond_gem(HDC hdc, int cx, int cy, int radius, COLORREF fill_col, COLORREF border_col) {
-    POINT pts[4] = {
-        {cx, cy - radius},
-        {cx + radius, cy},
-        {cx, cy + radius},
-        {cx - radius, cy}
-    };
-    HBRUSH hBrush = CreateSolidBrush(fill_col);
-    HPEN hPen = CreatePen(PS_SOLID, 1, border_col);
-    HGDIOBJ oldB = SelectObject(hdc, hBrush);
-    HGDIOBJ oldP = SelectObject(hdc, hPen);
-    Polygon(hdc, pts, 4);
-    SelectObject(hdc, oldB);
-    SelectObject(hdc, oldP);
-    DeleteObject(hBrush);
-    DeleteObject(hPen);
-}
-
-static void refresh_menu_ui() {
-    if (!g_menu_hwnd) return;
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_btn_toggle_mod) {
-        if (g_state.save_locked_to_mod) {
-            std::string lbl = "Mode: LOCKED TO RANDOMIZER SAVE (Seed #" + g_state.current_seed_hex + ")";
-            SetWindowTextA(g_btn_toggle_mod, lbl.c_str());
-        } else {
-            SetWindowTextA(
-                g_btn_toggle_mod,
-                g_state.is_mod_enabled_toggle()
-                    ? "Mode: RANDOMIZER ENABLED  [Click or Press Shift+F10 to Toggle]"
-                    : "Mode: VANILLA PASSTHROUGH [Click or Press Shift+F10 to Enable Mod]"
-            );
-        }
-    }
-    if (g_list_log) {
-        SendMessageA(g_list_log, LB_RESETCONTENT, 0, 0);
-        for (const auto& entry : g_state.activity_log) {
-            SendMessageA(g_list_log, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(entry.c_str()));
-        }
-        int count = static_cast<int>(g_state.activity_log.size());
-        if (count > 0) {
-            SendMessageA(g_list_log, LB_SETTOPINDEX, count - 1, 0);
-        }
-    }
-    InvalidateRect(g_menu_hwnd, nullptr, TRUE);
-    if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
-}
-
-static COLORREF get_ap_importance_color(ItemImportance imp) {
-    // Authentic Archipelago Text Client item importance palette (brightened for dark overlay legibility)
-    switch (imp) {
-        case ItemImportance::PROGRESSION: return RGB(195, 145, 255); // Plum / Bright Orchid (#AF99EF)
-        case ItemImportance::USEFUL:      return RGB(110, 165, 255); // Slate Blue (#6D8BE8)
-        case ItemImportance::FILLER:      return RGB(0, 238, 238);   // Cyan (#00EEEE)
-        case ItemImportance::TRAP:        return RGB(255, 115, 95);  // Salmon / Coral (#FA8072)
-        default:                          return RGB(0, 238, 238);
-    }
-}
-
-static void draw_colored_seg(HDC hdc, int& x, int y, int max_x, const std::string& text, COLORREF col) {
-    if (text.empty() || x >= max_x) return;
-    SetTextColor(hdc, col);
-    RECT clip_rc = {x, y, max_x, y + 18};
-    ExtTextOutA(hdc, x, y, ETO_CLIPPED, &clip_rc, text.c_str(), static_cast<UINT>(text.size()), nullptr);
-    SIZE sz{};
-    if (GetTextExtentPoint32A(hdc, text.c_str(), static_cast<int>(text.size()), &sz)) {
-        x += sz.cx;
-    }
-}
-
-static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (msg == WM_PAINT) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        int w = rc.right - rc.left;
-        int h = rc.bottom - rc.top;
-
-        HDC memDC = CreateCompatibleDC(hdc);
-        HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
-        HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
-
-        BottomToastNotification toast_snap;
-        bool active = false;
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            active = g_state.toast_active;
-            toast_snap = g_state.active_toast;
-        }
-
-        if (active) {
-            HBRUSH bgBrush = CreateSolidBrush(RGB(10, 28, 18));
-            FillRect(memDC, &rc, bgBrush);
-            DeleteObject(bgBrush);
-
-            COLORREF border_col = (toast_snap.importance == ItemImportance::TRAP)
-                ? RGB(255, 115, 95)
-                : RGB(255, 215, 0);
-            HPEN framePen = CreatePen(PS_SOLID, 2, border_col);
-            HGDIOBJ oldPen = SelectObject(memDC, framePen);
-            HGDIOBJ oldBrush = SelectObject(memDC, GetStockObject(NULL_BRUSH));
-            RoundRect(memDC, 2, 2, w - 2, h - 2, 12, 12);
-
-            HPEN innerPen = CreatePen(PS_SOLID, 1, RGB(46, 204, 113));
-            SelectObject(memDC, innerPen);
-            RoundRect(memDC, 4, 4, w - 4, h - 4, 10, 10);
-            SelectObject(memDC, oldPen);
-            SelectObject(memDC, oldBrush);
-            DeleteObject(framePen);
-            DeleteObject(innerPen);
-
-            draw_diamond_gem(memDC, 24, h / 2, 7, get_ap_importance_color(toast_snap.importance), RGB(255, 255, 255));
-
-            HFONT hFontToast = CreateFontA(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                          DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-            HGDIOBJ oldFont = SelectObject(memDC, hFontToast);
-            SetBkMode(memDC, TRANSPARENT);
-
-            COLORREF col_gold = RGB(255, 230, 95);
-            COLORREF col_text = RGB(232, 242, 238);
-            COLORREF col_item = get_ap_importance_color(toast_snap.importance);
-
-            std::string p1 = toast_snap.sender.empty() ? "Croc" : toast_snap.sender;
-            std::string p2 = toast_snap.receiver.empty() ? "Croc" : toast_snap.receiver;
-
-            struct TextSegment { std::string text; COLORREF color; };
-            std::vector<TextSegment> segs;
-            if (toast_snap.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc")) {
-                segs.push_back({p1, col_gold});
-                segs.push_back({" got his own ", col_text});
-                segs.push_back({toast_snap.item_name, col_item});
-                segs.push_back({"!", col_text});
-            } else {
-                segs.push_back({p1, col_gold});
-                segs.push_back({" sent ", col_text});
-                segs.push_back({toast_snap.item_name, col_item});
-                segs.push_back({" to ", col_text});
-                segs.push_back({p2, col_gold});
-                segs.push_back({"!", col_text});
-            }
-
-            int total_text_w = 0;
-            int text_h = 20;
-            for (const auto& s : segs) {
-                SIZE sz{};
-                if (GetTextExtentPoint32A(memDC, s.text.c_str(), static_cast<int>(s.text.size()), &sz)) {
-                    total_text_w += sz.cx;
-                    if (sz.cy > text_h) text_h = sz.cy;
-                }
-            }
-
-            int start_x = 44;
-            if (w - 50 > total_text_w) {
-                start_x = (w - total_text_w) / 2;
-                if (start_x < 44) start_x = 44;
-            }
-            int start_y = (h - text_h) / 2;
-
-            int cur_x = start_x;
-            for (const auto& s : segs) {
-                draw_colored_seg(memDC, cur_x, start_y, w - 12, s.text, s.color);
-            }
-
-            SelectObject(memDC, oldFont);
-            DeleteObject(hFontToast);
-        }
-
-        BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
-        SelectObject(memDC, oldBmp);
-        DeleteObject(memBmp);
-        DeleteDC(memDC);
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-    return DefWindowProcA(hwnd, msg, wParam, lParam);
-}
-
-static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-        case WM_LBUTTONDOWN: {
-            bool toggled_expand = false;
-            {
-                std::lock_guard<std::mutex> lock(g_mutex);
-                if (!g_state.overlay_full_visible) {
-                    g_state.overlay_full_visible = true;
-                    toggled_expand = true;
-                }
-            }
-            if (toggled_expand) {
-                InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
-                return 0;
-            }
-            if (g_menu_hwnd) {
-                g_menu_visible = !g_menu_visible;
-                ShowWindow(g_menu_hwnd, g_menu_visible ? SW_SHOW : SW_HIDE);
-                if (g_menu_visible) {
-                    SetForegroundWindow(g_menu_hwnd);
-                    refresh_menu_ui();
-                }
-            }
-            return 0;
-        }
-        case WM_PAINT: {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            int w = rc.right - rc.left;
-            int h = rc.bottom - rc.top;
-
-            HDC memDC = CreateCompatibleDC(hdc);
-            HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
-            HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
-
-            bool mod_on = false;
-            bool rando_active = false;
-            bool save_locked = false;
-            bool fire_active = false;
-            bool full_visible = false;
-            std::string line1;
-            std::string line2;
-            std::vector<OverlayFeedEntry> feed_snapshot;
-            {
-                std::lock_guard<std::mutex> lock(g_mutex);
-                mod_on = g_state.is_mod_enabled_toggle();
-                rando_active = g_state.is_randomizer_active();
-                save_locked = g_state.save_locked_to_mod;
-                fire_active = g_state.fire_trap.active;
-                full_visible = g_state.overlay_full_visible;
-                feed_snapshot = g_state.item_feed;
-
-                if (!mod_on) {
-                    line1 = "CROC 2 ARCHIPELAGO  |  VANILLA MODE (Mod Off)";
-                } else if (g_state.conn.ap_server_connected) {
-                    line1 = "CROC 2 AP  |  CONNECTED (" + g_state.conn.slot_name + ")  |  " + g_state.last_door_redirect_desc;
-                } else if (save_locked) {
-                    line1 = "CROC 2 RANDO  |  " + g_state.last_door_redirect_desc;
-                } else {
-                    line1 = "CROC 2 AP  |  MOD ON (Title Screen - New Save Generates Random Seed)";
-                }
-
-                if (fire_active) {
-                    line2 = "🔥 FIRE BREAKOUT TRAP! (-1 Heart Knockback)";
-                } else if (save_locked) {
-                    line2 = "[F9] Menu | [F10] Minimize | Seed #" + g_state.current_seed_hex +
-                            " | Jellies:" + std::to_string(g_state.red_jellies + g_state.blue_jellies + g_state.green_jellies) +
-                            " Clockwork:" + std::to_string(g_state.clockwork_gobbos) +
-                            " Keys:" + std::to_string(g_state.silver_keys + g_state.gold_keys);
-                } else {
-                    line2 = "[F9] Server & Slot Menu   |   [F10] Minimize Overlay";
-                }
-            }
-
-            if (!full_visible) {
-                // Minimal indicator badge (e.g. 220x28) indicating mod presence without taking screen space
-                HBRUSH bgBrush = CreateSolidBrush(!mod_on ? RGB(30, 38, 34) : RGB(14, 46, 24));
-                FillRect(memDC, &rc, bgBrush);
-                DeleteObject(bgBrush);
-
-                COLORREF border_col = !mod_on ? RGB(130, 145, 135) : RGB(255, 215, 0);
-                HPEN goldPen = CreatePen(PS_SOLID, 1, border_col);
-                HGDIOBJ oldPen = SelectObject(memDC, goldPen);
-                HGDIOBJ oldBrush = SelectObject(memDC, GetStockObject(NULL_BRUSH));
-                RoundRect(memDC, 1, 1, w - 1, h - 1, 6, 6);
-                SelectObject(memDC, oldPen);
-                SelectObject(memDC, oldBrush);
-                DeleteObject(goldPen);
-
-                COLORREF orb_col = !mod_on ? RGB(150, 155, 150) : (rando_active ? RGB(46, 235, 110) : RGB(255, 205, 0));
-                draw_diamond_gem(memDC, 14, h / 2, 5, orb_col, RGB(255, 255, 255));
-
-                HFONT hFontMin = CreateFontA(13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                             DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-                HGDIOBJ oldFont = SelectObject(memDC, hFontMin);
-                SetBkMode(memDC, TRANSPARENT);
-
-                int mx = 26;
-                int my = (h - 16) / 2;
-                draw_colored_seg(memDC, mx, my, w - 6, "CROC 2 AP  |  ", RGB(255, 225, 65));
-                draw_colored_seg(memDC, mx, my, w - 6, "[F10] Console", RGB(120, 245, 175));
-
-                SelectObject(memDC, oldFont);
-                DeleteObject(hFontMin);
-
-                BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
-                SelectObject(memDC, oldBmp);
-                DeleteObject(memBmp);
-                DeleteDC(memDC);
-                EndPaint(hwnd, &ps);
-                return 0;
-            }
-
-            // Croc Jungle Emerald & Gobbo Gold Palette
-            COLORREF bg_col = !mod_on ? RGB(30, 38, 34) : (fire_active ? RGB(95, 22, 16) : RGB(14, 46, 24));
-            COLORREF border_col = !mod_on ? RGB(130, 145, 135) : (fire_active ? RGB(255, 90, 40) : RGB(255, 215, 0));
-
-            HBRUSH bgBrush = CreateSolidBrush(bg_col);
-            FillRect(memDC, &rc, bgBrush);
-            DeleteObject(bgBrush);
-
-            // Outer Gobbo Gold 2px frame + Inner Emerald accent line
-            HPEN goldPen = CreatePen(PS_SOLID, 2, border_col);
-            HGDIOBJ oldPen = SelectObject(memDC, goldPen);
-            HGDIOBJ oldBrush = SelectObject(memDC, GetStockObject(NULL_BRUSH));
-            Rectangle(memDC, 1, 1, w - 1, h - 1);
-            SelectObject(memDC, oldPen);
-            DeleteObject(goldPen);
-
-            HPEN innerPen = CreatePen(PS_SOLID, 1, RGB(46, 204, 113));
-            SelectObject(memDC, innerPen);
-            Rectangle(memDC, 3, 3, w - 3, h - 3);
-            SelectObject(memDC, oldBrush);
-            DeleteObject(innerPen);
-
-            // Status LED orb + 5 Colored Crystal Diamonds on the left
-            COLORREF orb_col = !mod_on ? RGB(150, 155, 150) : (rando_active ? RGB(46, 235, 110) : RGB(255, 205, 0));
-            draw_diamond_gem(memDC, 18, 17, 7, orb_col, RGB(255, 255, 255));
-
-            draw_diamond_gem(memDC, 12, 38, 4, RGB(255, 59, 48), RGB(255, 220, 220));   // Red Crystal
-            draw_diamond_gem(memDC, 22, 38, 4, RGB(0, 140, 255), RGB(220, 240, 255));   // Blue Crystal
-            draw_diamond_gem(memDC, 32, 38, 4, RGB(52, 199, 89), RGB(220, 255, 220));   // Green Crystal
-            draw_diamond_gem(memDC, 42, 38, 4, RGB(255, 204, 0), RGB(255, 250, 220));   // Yellow Crystal
-            draw_diamond_gem(memDC, 52, 38, 4, RGB(175, 82, 222), RGB(245, 220, 255));  // Purple Crystal
-
-            SetBkMode(memDC, TRANSPARENT);
-            HFONT hFontBold = CreateFontA(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                          DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-            HFONT hFontSub = CreateFontA(13, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                         DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-            HFONT hFontFeed = CreateFontA(13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                          DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-
-            HGDIOBJ oldFont = SelectObject(memDC, hFontBold);
-            SetTextColor(memDC, !mod_on ? RGB(200, 210, 205) : RGB(255, 225, 65));
-            TextOutA(memDC, 64, 6, line1.c_str(), static_cast<int>(line1.size()));
-
-            SelectObject(memDC, hFontSub);
-            SetTextColor(memDC, fire_active ? RGB(255, 230, 180) : RGB(175, 245, 195));
-            TextOutA(memDC, 64, 27, line2.c_str(), static_cast<int>(line2.size()));
-
-            // =========================================================================
-            // Archipelago Text Client Color-Coordinated Outgoing / Incoming Item Box
-            // =========================================================================
-            RECT feedRc = {8, 50, w - 8, h - 7};
-            HBRUSH feedBrush = CreateSolidBrush(RGB(8, 22, 14));
-            FillRect(memDC, &feedRc, feedBrush);
-            DeleteObject(feedBrush);
-
-            HPEN feedPen = CreatePen(PS_SOLID, 1, RGB(46, 204, 113));
-            SelectObject(memDC, feedPen);
-            SelectObject(memDC, GetStockObject(NULL_BRUSH));
-            Rectangle(memDC, feedRc.left, feedRc.top, feedRc.right, feedRc.bottom);
-            DeleteObject(feedPen);
-
-            // Header bar with Archipelago Importance Color Legend
-            SelectObject(memDC, hFontFeed);
-            int hdr_x = 14;
-            int hdr_y = 53;
-            int max_x = w - 14;
-            draw_colored_seg(memDC, hdr_x, hdr_y, max_x, "AP ITEM FEED  |  ", RGB(255, 215, 0));
-            draw_colored_seg(memDC, hdr_x, hdr_y, max_x, "[Progression] ", get_ap_importance_color(ItemImportance::PROGRESSION));
-            draw_colored_seg(memDC, hdr_x, hdr_y, max_x, "[Useful] ", get_ap_importance_color(ItemImportance::USEFUL));
-            draw_colored_seg(memDC, hdr_x, hdr_y, max_x, "[Filler] ", get_ap_importance_color(ItemImportance::FILLER));
-            draw_colored_seg(memDC, hdr_x, hdr_y, max_x, "[Trap] ", get_ap_importance_color(ItemImportance::TRAP));
-            draw_colored_seg(memDC, hdr_x, hdr_y, max_x, "[Location]", RGB(85, 240, 140));
-
-            HPEN divPen = CreatePen(PS_SOLID, 1, RGB(28, 82, 45));
-            SelectObject(memDC, divPen);
-            MoveToEx(memDC, feedRc.left + 4, 71, nullptr);
-            LineTo(memDC, feedRc.right - 4, 71);
-            DeleteObject(divPen);
-
-            const COLORREF col_text   = RGB(225, 232, 228);
-            const COLORREF col_player = RGB(255, 230, 95);  // Archipelago Player Gold
-            const COLORREF col_loc    = RGB(85, 240, 140);  // Archipelago Location Green
-            const COLORREF col_out    = RGB(255, 185, 80);  // [OUT] Badge Amber
-            const COLORREF col_in     = RGB(105, 255, 165); // [IN]  Badge Mint
-
-            if (feed_snapshot.empty()) {
-                int rx = 14;
-                int ry = 76;
-                draw_colored_seg(memDC, rx, ry, max_x, "[READY] ", col_in);
-                draw_colored_seg(memDC, rx, ry, max_x, "Collect any Crystal or Check to see ", col_text);
-                draw_colored_seg(memDC, rx, ry, max_x, "Outgoing", col_out);
-                draw_colored_seg(memDC, rx, ry, max_x, " & ", col_text);
-                draw_colored_seg(memDC, rx, ry, max_x, "Incoming", col_in);
-                draw_colored_seg(memDC, rx, ry, max_x, " items here!", col_text);
-            } else {
-                size_t max_rows = 6;
-                size_t start_idx = (feed_snapshot.size() > max_rows) ? (feed_snapshot.size() - max_rows) : 0;
-                for (size_t i = start_idx; i < feed_snapshot.size(); ++i) {
-                    const auto& e = feed_snapshot[i];
-                    int row_idx = static_cast<int>(i - start_idx);
-                    int rx = 14;
-                    int ry = 74 + row_idx * 17;
-                    COLORREF item_col = get_ap_importance_color(e.importance);
-
-                    if (e.is_outgoing) {
-                        draw_colored_seg(memDC, rx, ry, max_x, "[OUT] ", col_out);
-                        draw_colored_seg(memDC, rx, ry, max_x, "Croc sent ", col_text);
-                        draw_colored_seg(memDC, rx, ry, max_x, e.item_name, item_col);
-                        draw_colored_seg(memDC, rx, ry, max_x, " to ", col_text);
-                        draw_colored_seg(memDC, rx, ry, max_x, e.player_name, col_player);
-                        if (!e.location_name.empty()) {
-                            draw_colored_seg(memDC, rx, ry, max_x, " (" + e.location_name + ")", col_loc);
-                        }
-                    } else {
-                        draw_colored_seg(memDC, rx, ry, max_x, "[IN]  ", col_in);
-                        draw_colored_seg(memDC, rx, ry, max_x, e.player_name, col_player);
-                        draw_colored_seg(memDC, rx, ry, max_x, " sent ", col_text);
-                        draw_colored_seg(memDC, rx, ry, max_x, e.item_name, item_col);
-                        draw_colored_seg(memDC, rx, ry, max_x, " to Croc", col_text);
-                        if (!e.location_name.empty()) {
-                            draw_colored_seg(memDC, rx, ry, max_x, " (" + e.location_name + ")", col_loc);
-                        }
-                    }
-                }
-            }
-
-            SelectObject(memDC, oldFont);
-            DeleteObject(hFontBold);
-            DeleteObject(hFontSub);
-            DeleteObject(hFontFeed);
-
-            BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
-            SelectObject(memDC, oldBmp);
-            DeleteObject(memBmp);
-            DeleteDC(memDC);
-            EndPaint(hwnd, &ps);
-            return 0;
-        }
-    }
-    return DefWindowProcA(hwnd, msg, wParam, lParam);
-}
-
-static LRESULT CALLBACK MenuWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-        case WM_CREATE: {
-            HFONT hFont = CreateFontA(15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                      DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-
-            std::string host, port_str, slot, pass;
-            bool mod_on = true;
-            {
-                std::lock_guard<std::mutex> lock(g_mutex);
-                host = g_state.conn.server_host;
-                port_str = std::to_string(g_state.conn.server_port);
-                slot = g_state.conn.slot_name;
-                pass = g_state.conn.password;
-                mod_on = g_state.is_mod_enabled_toggle();
-            }
-
-            g_btn_toggle_mod = CreateWindowExA(
-                0, "BUTTON",
-                mod_on ? "Mode: RANDOMIZER ENABLED  [Click or Press Shift+F10 to Toggle]"
-                       : "Mode: VANILLA PASSTHROUGH [Click or Press Shift+F10 to Enable Mod]",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                20, 74, 480, 32, hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_BTN_TOGGLE_MOD)), nullptr, nullptr
-            );
-
-            g_edit_host = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", host.c_str(),
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 175, 122, 195, 25,
-                hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_EDIT_HOST)), nullptr, nullptr);
-
-            g_edit_port = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", port_str.c_str(),
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_NUMBER, 425, 122, 75, 25,
-                hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_EDIT_PORT)), nullptr, nullptr);
-
-            // Note: NO ES_LOWERCASE or ES_UPPERCASE -> preserves exact case-sensitive slot name!
-            g_edit_slot = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", slot.c_str(),
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 175, 156, 325, 25,
-                hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_EDIT_SLOT)), nullptr, nullptr);
-
-            g_edit_pass = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", pass.c_str(),
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_PASSWORD, 175, 190, 325, 25,
-                hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_EDIT_PASS)), nullptr, nullptr);
-
-            g_btn_connect = CreateWindowExA(0, "BUTTON", "Connect to Archipelago Server",
-                WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 20, 228, 250, 32,
-                hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_BTN_CONNECT)), nullptr, nullptr);
-
-            g_btn_disconnect = CreateWindowExA(0, "BUTTON", "Disconnect",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 280, 228, 105, 32,
-                hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_BTN_DISCONNECT)), nullptr, nullptr);
-
-            HWND btn_close = CreateWindowExA(0, "BUTTON", "Hide (F9)",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 395, 228, 105, 32,
-                hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_BTN_CLOSE_MENU)), nullptr, nullptr);
-
-            g_list_log = CreateWindowExA(WS_EX_CLIENTEDGE, "LISTBOX", "",
-                WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOINTEGRALHEIGHT,
-                20, 360, 480, 125,
-                hwnd, reinterpret_cast<HMENU>(static_cast<uintptr_t>(IDC_LIST_LOG)), nullptr, nullptr);
-
-            for (HWND ctrl : {g_btn_toggle_mod, g_edit_host, g_edit_port, g_edit_slot, g_edit_pass, g_btn_connect, g_btn_disconnect, btn_close, g_list_log}) {
-                if (ctrl) SendMessageA(ctrl, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
-            }
-            return 0;
-        }
-        case WM_APP + 1: {
-            refresh_menu_ui();
-            return 0;
-        }
-        case WM_COMMAND: {
-            int id = LOWORD(wParam);
-            if (id == IDC_BTN_TOGGLE_MOD) {
-                bool is_on = false;
-                bool locked = false;
-                {
-                    std::lock_guard<std::mutex> lock(g_mutex);
-                    locked = g_state.save_locked_to_mod;
-                    if (locked) {
-                        g_state.add_log("Mod is LOCKED to this Randomizer Save (Seed #" + g_state.current_seed_hex + ")! Return to Title Screen or delete save to toggle.");
-                    } else {
-                        g_state.manual_override_disabled = !g_state.manual_override_disabled;
-                        is_on = g_state.is_mod_enabled_toggle();
-                        g_state.add_log(g_state.get_hud_banner());
-                    }
-                }
-                if (locked) {
-                    Beep(300, 140);
-                } else {
-                    Beep(is_on ? 880 : 440, 85);
-                }
-                refresh_menu_ui();
-                return 0;
-            }
-            if (id == IDC_BTN_CONNECT) {
-                char host_buf[256] = {0};
-                char port_buf[64] = {0};
-                char slot_buf[256] = {0};
-                char pass_buf[256] = {0};
-                GetWindowTextA(g_edit_host, host_buf, sizeof(host_buf));
-                GetWindowTextA(g_edit_port, port_buf, sizeof(port_buf));
-                GetWindowTextA(g_edit_slot, slot_buf, sizeof(slot_buf));
-                GetWindowTextA(g_edit_pass, pass_buf, sizeof(pass_buf));
-
-                {
-                    std::lock_guard<std::mutex> lock(g_mutex);
-                    g_state.conn.server_host = host_buf[0] ? host_buf : "localhost";
-                    int p = std::atoi(port_buf);
-                    g_state.conn.server_port = (p > 0) ? p : 38281;
-                    g_state.conn.slot_name = slot_buf[0] ? slot_buf : "Player1"; // Preserves exact case!
-                    g_state.conn.password = pass_buf;
-                    g_state.manual_override_disabled = false;
-                    save_config_ini(nullptr);
-                }
-                start_ap_websocket_connection();
-                refresh_menu_ui();
-                return 0;
-            }
-            if (id == IDC_BTN_DISCONNECT) {
-                stop_ap_websocket_connection();
-                {
-                    std::lock_guard<std::mutex> lock(g_mutex);
-                    g_state.conn.status_text = "Disconnected (Standby / Vanilla Mode)";
-                    g_state.add_log("Disconnected from Archipelago Server.");
-                }
-                refresh_menu_ui();
-                return 0;
-            }
-            if (id == IDC_BTN_CLOSE_MENU) {
-                g_menu_visible = false;
-                ShowWindow(hwnd, SW_HIDE);
-                return 0;
-            }
-            break;
-        }
-        case WM_CLOSE: {
-            g_menu_visible = false;
-            ShowWindow(hwnd, SW_HIDE);
-            return 0;
-        }
-        case WM_PAINT: {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-
-            // Deep Croc Jungle background
-            HBRUSH bgBrush = CreateSolidBrush(RGB(16, 48, 26));
-            FillRect(hdc, &rc, bgBrush);
-            DeleteObject(bgBrush);
-
-            // Header Banner
-            RECT hdr = {0, 0, rc.right, 64};
-            HBRUSH hdrBrush = CreateSolidBrush(RGB(10, 32, 17));
-            FillRect(hdc, &hdr, hdrBrush);
-            DeleteObject(hdrBrush);
-
-            // Gold Border around dialog & header divider
-            HPEN goldPen = CreatePen(PS_SOLID, 2, RGB(255, 215, 0));
-            HGDIOBJ oldPen = SelectObject(hdc, goldPen);
-            HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            Rectangle(hdc, 1, 1, rc.right - 1, rc.bottom - 1);
-            MoveToEx(hdc, 0, 64, nullptr);
-            LineTo(hdc, rc.right, 64);
-            SelectObject(hdc, oldPen);
-            SelectObject(hdc, oldBrush);
-            DeleteObject(goldPen);
-
-            // Decorative 5 Colored Crystals on Header
-            draw_diamond_gem(hdc, 28, 32, 9, RGB(255, 59, 48), RGB(255, 235, 235));
-            draw_diamond_gem(hdc, 50, 32, 9, RGB(0, 140, 255), RGB(235, 245, 255));
-            draw_diamond_gem(hdc, 470, 32, 9, RGB(52, 199, 89), RGB(235, 255, 235));
-            draw_diamond_gem(hdc, 492, 32, 9, RGB(175, 82, 222), RGB(245, 235, 255));
-
-            SetBkMode(hdc, TRANSPARENT);
-            HFONT hTitleFont = CreateFontA(20, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                           DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-            HFONT hLabelFont = CreateFontA(14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                           DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-
-            HGDIOBJ oldFont = SelectObject(hdc, hTitleFont);
-            SetTextColor(hdc, RGB(255, 220, 55));
-            TextOutA(hdc, 74, 12, "CROC 2: KINGDOM OF THE GOBBOS", 29);
-
-            SelectObject(hdc, hLabelFont);
-            SetTextColor(hdc, RGB(165, 240, 190));
-            TextOutA(hdc, 74, 37, "Archipelago Multiworld Connection & Mod Controller", 50);
-
-            // Field Labels
-            SetTextColor(hdc, RGB(255, 230, 120));
-            TextOutA(hdc, 20, 125, "Server Address:", 15);
-            TextOutA(hdc, 382, 125, "Port:", 5);
-            TextOutA(hdc, 20, 159, "Slot Name (Case-Sens.):", 23);
-            TextOutA(hdc, 20, 193, "Password (Optional):", 20);
-
-            // Status & Tracker Box
-            RECT trackRc = {20, 270, 500, 350};
-            HBRUSH trackBrush = CreateSolidBrush(RGB(10, 34, 18));
-            FillRect(hdc, &trackRc, trackBrush);
-            DeleteObject(trackBrush);
-
-            HPEN emeraldPen = CreatePen(PS_SOLID, 1, RGB(46, 204, 113));
-            SelectObject(hdc, emeraldPen);
-            SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            Rectangle(hdc, trackRc.left, trackRc.top, trackRc.right, trackRc.bottom);
-            DeleteObject(emeraldPen);
-
-            std::string status_line;
-            std::string tracker_line1;
-            std::string tracker_line2;
-            {
-                std::lock_guard<std::mutex> lock(g_mutex);
-                status_line = "Status: " + g_state.conn.status_text;
-                std::ostringstream t1;
-                t1 << "Abilities: "
-                   << (g_state.abilities.tail_whack ? "[Tail:ON] " : "[Tail:--] ")
-                   << (g_state.abilities.butt_stomp ? "[Stomp:ON] " : "[Stomp:--] ")
-                   << (g_state.abilities.climbing_claws ? "[Climb:ON] " : "[Climb:--] ")
-                   << (g_state.abilities.power_gloves ? "[Carry:ON] " : "[Carry:--] ")
-                   << (g_state.abilities.lever_wrench ? "[Lever:ON]" : "[Lever:--]");
-                tracker_line1 = t1.str();
-
-                std::ostringstream t2;
-                t2 << "Vehicles: " << (g_state.abilities.vehicle_license ? "ON" : "--")
-                   << " | PlaneGun: " << (g_state.abilities.airplane_ammo_feed ? "ON" : "--")
-                   << " | Jigsaws: " << g_state.jigsaw_pieces << "/4"
-                   << " | Golden Gobbos: " << g_state.golden_gobbos << "/20"
-                   << " | Trophies: " << g_state.trophies << "/16";
-                tracker_line2 = t2.str();
-            }
-
-            SetTextColor(hdc, RGB(255, 225, 90));
-            TextOutA(hdc, 30, 278, status_line.c_str(), static_cast<int>(status_line.size()));
-            SetTextColor(hdc, RGB(190, 250, 205));
-            TextOutA(hdc, 30, 302, tracker_line1.c_str(), static_cast<int>(tracker_line1.size()));
-            TextOutA(hdc, 30, 324, tracker_line2.c_str(), static_cast<int>(tracker_line2.size()));
-
-            SelectObject(hdc, oldFont);
-            DeleteObject(hTitleFont);
-            DeleteObject(hLabelFont);
-            EndPaint(hwnd, &ps);
-            return 0;
-        }
-    }
-    return DefWindowProcA(hwnd, msg, wParam, lParam);
-}
-
-static BOOL CALLBACK FindCrocWindowCallback(HWND hwnd, LPARAM lParam) {
-    DWORD pid = 0;
-    GetWindowThreadProcessId(hwnd, &pid);
-    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd) &&
-        hwnd != g_overlay_hwnd && hwnd != g_menu_hwnd && hwnd != g_toast_hwnd) {
-        LONG style = GetWindowLongA(hwnd, GWL_STYLE);
-        if ((style & WS_CAPTION) || (style & WS_POPUP)) {
-            RECT rc;
-            GetWindowRect(hwnd, &rc);
-            if ((rc.right - rc.left) >= 320 && (rc.bottom - rc.top) >= 240) {
-                *reinterpret_cast<HWND*>(lParam) = hwnd;
-                return FALSE;
-            }
-        }
-    }
-    return TRUE;
-}
-
-static void ui_overlay_worker() {
-    HINSTANCE hInst = GetModuleHandleA(nullptr);
-
-    WNDCLASSEXA wcOverlay{};
-    wcOverlay.cbSize = sizeof(WNDCLASSEXA);
-    wcOverlay.style = CS_HREDRAW | CS_VREDRAW;
-    wcOverlay.lpfnWndProc = OverlayWndProc;
-    wcOverlay.hInstance = hInst;
-    wcOverlay.hCursor = LoadCursor(nullptr, IDC_HAND);
-    wcOverlay.lpszClassName = "Croc2APOverlayBarClass";
-    RegisterClassExA(&wcOverlay);
-
-    WNDCLASSEXA wcToast{};
-    wcToast.cbSize = sizeof(WNDCLASSEXA);
-    wcToast.style = CS_HREDRAW | CS_VREDRAW;
-    wcToast.lpfnWndProc = ToastWndProc;
-    wcToast.hInstance = hInst;
-    wcToast.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wcToast.lpszClassName = "Croc2APToastWndClass";
-    RegisterClassExA(&wcToast);
-
-    WNDCLASSEXA wcMenu{};
-    wcMenu.cbSize = sizeof(WNDCLASSEXA);
-    wcMenu.style = CS_HREDRAW | CS_VREDRAW;
-    wcMenu.lpfnWndProc = MenuWndProc;
-    wcMenu.hInstance = hInst;
-    wcMenu.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wcMenu.hbrBackground = CreateSolidBrush(RGB(16, 48, 26));
-    wcMenu.lpszClassName = "Croc2APMenuWndClass";
-    RegisterClassExA(&wcMenu);
-
-    // Initial overlay is collapsed into a small indicator badge (220x28)
-    g_overlay_hwnd = CreateWindowExA(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
-        "Croc2APOverlayBarClass",
-        "Croc 2 Archipelago Overlay",
-        WS_POPUP | WS_VISIBLE,
-        24, 36, 220, 28,
-        nullptr, nullptr, hInst, nullptr
-    );
-    SetLayeredWindowAttributes(g_overlay_hwnd, 0, 240, LWA_ALPHA);
-    ShowWindow(g_overlay_hwnd, SW_SHOWNOACTIVATE);
-    UpdateWindow(g_overlay_hwnd);
-
-    // Bottom-screen toast banner window (layered, click-through transparent)
-    g_toast_hwnd = CreateWindowExA(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
-        "Croc2APToastWndClass",
-        "Croc 2 AP Notification Toast",
-        WS_POPUP,
-        0, 0, 620, 46,
-        nullptr, nullptr, hInst, nullptr
-    );
-    if (g_toast_hwnd) {
-        SetLayeredWindowAttributes(g_toast_hwnd, 0, 235, LWA_ALPHA);
-        ShowWindow(g_toast_hwnd, SW_HIDE);
-    }
-
-    int scr_w = GetSystemMetrics(SM_CXSCREEN);
-    int scr_h = GetSystemMetrics(SM_CYSCREEN);
-    g_menu_hwnd = CreateWindowExA(
-        WS_EX_TOPMOST | WS_EX_DLGMODALFRAME,
-        "Croc2APMenuWndClass",
-        "Croc 2 Archipelago — Server & Mod Settings (F9)",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        (scr_w - 526) / 2, (scr_h - 530) / 2, 526, 530,
-        nullptr, nullptr, hInst, nullptr
-    );
-
-    refresh_menu_ui();
-
-    bool f10_was_down = false;
-    bool f9_was_down = false;
+static void background_tick_worker() {
     DWORD last_tick = GetTickCount();
-
     while (g_ui_running.load()) {
-        MSG msg;
-        while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (!IsDialogMessageA(g_menu_hwnd, &msg)) {
-                TranslateMessage(&msg);
-                DispatchMessageA(&msg);
-            }
-        }
-
-        // Poll F10 (Toggle Overlay Visibility, or Shift+F10 to Toggle Vanilla) and F9 (Menu)
-        int vk_f10 = 0x79;
-        int vk_f9 = 0x78;
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            vk_f10 = g_state.toggle_hotkey_vk;
-            vk_f9 = g_state.menu_hotkey_vk;
-        }
-
-        bool f10_down = (GetAsyncKeyState(vk_f10) & 0x8000) != 0;
-        bool shift_down = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-        if (f10_down && !f10_was_down) {
-            if (shift_down) {
-                bool is_on = false;
-                bool locked = false;
-                {
-                    std::lock_guard<std::mutex> lock(g_mutex);
-                    locked = g_state.save_locked_to_mod;
-                    if (locked) {
-                        g_state.add_log("Mod is LOCKED to this Randomizer Save (Seed #" + g_state.current_seed_hex + ")! Return to Title Screen or delete save to toggle.");
-                    } else {
-                        g_state.manual_override_disabled = !g_state.manual_override_disabled;
-                        is_on = g_state.is_mod_enabled_toggle();
-                        g_state.add_log(g_state.get_hud_banner());
-                        g_state.pending_events_json.push_back(
-                            "{\"event\":\"mod_toggled\",\"active\":" +
-                            std::string(g_state.is_randomizer_active() ? "true" : "false") + "}"
-                        );
-                    }
-                }
-                if (locked) {
-                    Beep(300, 140);
-                } else {
-                    Beep(is_on ? 880 : 440, 85);
-                }
-                refresh_menu_ui();
-            } else {
-                // F10 toggles overlay visibility (minimal indicator badge <-> full console)
-                bool full_vis = false;
-                {
-                    std::lock_guard<std::mutex> lock(g_mutex);
-                    g_state.overlay_full_visible = !g_state.overlay_full_visible;
-                    full_vis = g_state.overlay_full_visible;
-                }
-                Beep(full_vis ? 750 : 500, 60);
-                if (g_overlay_hwnd) {
-                    InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
-                }
-            }
-        }
-        f10_was_down = f10_down;
-
-        bool f9_down = (GetAsyncKeyState(vk_f9) & 0x8000) != 0;
-        if (f9_down && !f9_was_down) {
-            g_menu_visible = !g_menu_visible;
-            ShowWindow(g_menu_hwnd, g_menu_visible ? SW_SHOW : SW_HIDE);
-            if (g_menu_visible) {
-                SetWindowPos(g_menu_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-                SetForegroundWindow(g_menu_hwnd);
-                refresh_menu_ui();
-            }
-            Beep(660, 60);
-        }
-        f9_was_down = f9_down;
-
-        // Advance Bottom-Screen Toast queue and timer
-        bool toast_show = false;
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            DWORD now_t = GetTickCount();
-            if (g_state.toast_active) {
-                if (now_t >= g_state.active_toast.expire_tick) {
-                    if (!g_state.toast_queue.empty()) {
-                        g_state.active_toast = g_state.toast_queue.front();
-                        g_state.toast_queue.pop_front();
-                        g_state.active_toast.expire_tick = now_t + 3500;
-                        toast_show = true;
-                    } else {
-                        g_state.toast_active = false;
-                        toast_show = false;
-                    }
-                } else {
-                    toast_show = true;
-                }
-            }
-        }
-        if (g_toast_hwnd) {
-            if (toast_show) {
-                if (!IsWindowVisible(g_toast_hwnd)) {
-                    ShowWindow(g_toast_hwnd, SW_SHOWNOACTIVATE);
-                }
-                InvalidateRect(g_toast_hwnd, nullptr, FALSE);
-            } else {
-                if (IsWindowVisible(g_toast_hwnd)) {
-                    ShowWindow(g_toast_hwnd, SW_HIDE);
-                }
-            }
-        }
-
-        // Anchor overlay & toast to Croc 2 game window every 250ms
-        DWORD now = GetTickCount();
-        if (now - last_tick >= 250) {
-            float dt = static_cast<float>(now - last_tick) / 1000.0f;
-            last_tick = now;
-            {
-                std::lock_guard<std::mutex> lock(g_mutex);
-                step_internal_locked(dt);
-            }
-
-            HWND game_hwnd = nullptr;
-            EnumWindows(FindCrocWindowCallback, reinterpret_cast<LPARAM>(&game_hwnd));
-            if (game_hwnd) {
-                RECT grc;
-                if (GetWindowRect(game_hwnd, &grc)) {
-                    bool full_vis = false;
-                    {
-                        std::lock_guard<std::mutex> lock(g_mutex);
-                        full_vis = g_state.overlay_full_visible;
-                    }
-                    int ow = full_vis ? 600 : 220;
-                    int oh = full_vis ? 184 : 28;
-                    if (g_overlay_hwnd) {
-                        SetWindowPos(
-                            g_overlay_hwnd, HWND_TOPMOST,
-                            grc.left + 18, grc.top + 38, ow, oh,
-                            SWP_NOACTIVATE | SWP_SHOWWINDOW
-                        );
-                    }
-                    if (g_toast_hwnd) {
-                        int gw = grc.right - grc.left;
-                        int tw = 620;
-                        if (tw > gw - 32) tw = gw - 32;
-                        if (tw < 300) tw = 300;
-                        int th = 46;
-                        int tx = grc.left + (gw - tw) / 2;
-                        int ty = grc.bottom - th - 24;
-                        SetWindowPos(g_toast_hwnd, HWND_TOPMOST, tx, ty, tw, th, SWP_NOACTIVATE);
-                    }
-                }
-            }
-            if (g_overlay_hwnd) {
-                InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
-            }
-        }
-
         Sleep(25);
-    }
-
-    if (g_toast_hwnd) {
-        DestroyWindow(g_toast_hwnd);
-        g_toast_hwnd = nullptr;
-    }
-    if (g_menu_hwnd) {
-        DestroyWindow(g_menu_hwnd);
-        g_menu_hwnd = nullptr;
-    }
-    if (g_overlay_hwnd) {
-        DestroyWindow(g_overlay_hwnd);
-        g_overlay_hwnd = nullptr;
+        DWORD now = GetTickCount();
+        float dt = static_cast<float>(now - last_tick) / 1000.0f;
+        last_tick = now;
+        if (dt > 0.5f) dt = 0.5f;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            step_internal_locked(dt);
+        }
     }
 }
 
@@ -3242,7 +2330,6 @@ static void tcp_server_worker() {
                             std::lock_guard<std::mutex> lock(g_mutex);
                             resp = handle_command_locked(line) + "\n";
                         }
-                        if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
                         send(client_sock, resp.c_str(), static_cast<int>(resp.size()), 0);
                     }
                 }
@@ -3250,7 +2337,6 @@ static void tcp_server_worker() {
                     std::lock_guard<std::mutex> lock(g_mutex);
                     g_state.client_connected = false;
                 }
-                if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
                 closesocket(client_sock);
             }
         }
@@ -3294,8 +2380,6 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
             g_state.save_locked_to_mod = false;
             g_in_redirected_stage = false;
             g_state.add_log("Returned to Title Screen — Mod Toggle (F10) is now unlocked.");
-            if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
-            if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
         }
         return;
     }
@@ -3313,8 +2397,6 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
         // Existing Randomizer Save loaded or active in memory!
         if (!g_state.in_active_save || !g_state.save_locked_to_mod || g_state.current_save_seed != footer->seed) {
             restore_state_from_save_footer_locked(*footer);
-            if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
-            if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
         }
     } else if (footer->magic == VANILLA_SAVE_MAGIC) {
         // Existing Vanilla Save loaded in memory!
@@ -3323,8 +2405,6 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
             g_state.save_locked_to_mod = false;
             g_state.manual_override_disabled = true; // Keep vanilla save in Vanilla Mode
             g_state.add_log("Loaded Vanilla Save (Slot " + std::to_string(g_state.active_save_slot + 1) + ") — Mod Disabled.");
-            if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
-            if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
         }
     } else {
         // Freshly initialized save slot (footer->magic == 0 because croc2.exe copied RVA_CLEAN_SAVE_TEMPLATE)!
@@ -3340,8 +2420,6 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
             sync_state_to_save_footer_locked();
             g_state.add_log("New Vanilla Save created (Slot " + std::to_string(g_state.active_save_slot + 1) + ").");
         }
-        if (g_menu_hwnd) PostMessageA(g_menu_hwnd, WM_APP + 1, 0, 0);
-        if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
     }
 }
 
@@ -3390,12 +2468,41 @@ static bool handle_map_transition_redirect() {
                     std::string level_disp = (orig_idx >= 0) ? kStageDoors[orig_idx].level_name : orig_wad;
                     trigger_bottom_toast_locked(false, level_disp + " Key Required!", ItemImportance::TRAP, "Padlock", "Croc", "Stage door is locked!");
                     g_state.add_log("Door Locked: " + level_disp + " (Requires " + level_disp + " Key from checks!)");
+                    g_state.pending_events_json.push_back(
+                        "{\"event\":\"door_locked\",\"level_name\":\"" + json_escape(level_disp) +
+                        "\",\"stage_idx\":" + std::to_string(orig_idx) + "}"
+                    );
                 }
                 return false;
             }
         }
 
+        std::string dest_wad = orig_wad;
         auto it = g_state.door_overrides.find(orig_wad);
+        if (it != g_state.door_overrides.end() && !it->second.empty()) {
+            dest_wad = it->second;
+        }
+
+        int dest_idx = find_stage_index_by_wad(dest_wad);
+        std::string dest_name = (dest_idx >= 0) ? kStageDoors[dest_idx].level_name : dest_wad;
+
+        // Block entering vehicle stages without Vehicle License!
+        if (g_state.is_randomizer_active() && is_vehicle_stage_wad(dest_wad) && !g_state.abilities.vehicle_license) {
+            *curr = *prev; // Block transition
+            static DWORD s_last_vehicle_toast = 0;
+            DWORD now = GetTickCount();
+            if (now - s_last_vehicle_toast > 2500) {
+                s_last_vehicle_toast = now;
+                trigger_bottom_toast_locked(false, "Vehicle License Required!", ItemImportance::TRAP, "License", "Croc", dest_name + " requires Vehicle License!");
+                g_state.add_log("Vehicle Stage Locked: " + dest_name + " requires Vehicle License!");
+                g_state.pending_events_json.push_back(
+                    "{\"event\":\"vehicle_required\",\"level_name\":\"" + json_escape(dest_name) +
+                    "\",\"stage_idx\":" + std::to_string(dest_idx) + "}"
+                );
+            }
+            return false;
+        }
+
         if (it != g_state.door_overrides.end() && !it->second.empty()) {
             MapCoords target_coords{};
             if (wad_to_coords(it->second, target_coords)) {
@@ -3406,13 +2513,16 @@ static bool handle_map_transition_redirect() {
 
                 *curr = target_coords;
                 g_state.current_wad = it->second;
-                int target_idx = find_stage_index_by_wad(it->second);
                 std::string orig_name = (orig_idx >= 0) ? kStageDoors[orig_idx].level_name : orig_wad;
-                std::string target_name = (target_idx >= 0) ? kStageDoors[target_idx].level_name : it->second;
+                std::string target_name = (dest_idx >= 0) ? kStageDoors[dest_idx].level_name : it->second;
                 g_state.last_door_redirect_desc =
                     orig_name + " -> " + target_name + " (Seed #" + g_state.current_seed_hex + ")";
                 g_state.add_log("Door Shuffle: " + orig_name + " -> " + target_name);
-                if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
+                g_state.pending_events_json.push_back(
+                    "{\"event\":\"door_entered\",\"orig_name\":\"" + json_escape(orig_name) +
+                    "\",\"target_name\":\"" + json_escape(target_name) +
+                    "\",\"target_wad\":\"" + json_escape(dest_wad) + "\"}"
+                );
                 return true;
             }
         }
@@ -3448,7 +2558,6 @@ static bool handle_map_transition_redirect() {
         g_state.current_wad = coords_to_wad(*curr);
         sync_state_to_save_footer_locked();
         g_state.add_log("Returned from shuffled stage to Hub (" + g_state.current_wad + ")");
-        if (g_overlay_hwnd) InvalidateRect(g_overlay_hwnd, nullptr, FALSE);
         return true;
     } else {
         g_state.current_wad = coords_to_wad(*curr);
@@ -3634,7 +2743,6 @@ static void drain_pending_native_inventory_grants() {
     int crystals = g_pending_wallet_crystals.exchange(0);
     if (crystals > 0) {
         i32(RVA_WALLET_CRYSTALS) += crystals;
-        changed = true;
     }
     g_pending_colored_gems.store(0); // Colored crystal counts are mirrored by the per-stage crystal sync above
 
@@ -3763,25 +2871,33 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
 
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
+                g_ground_jump_in_progress = false;
             } else if (!g_state.abilities.butt_stomp) {
                 DWORD now_tick = GetTickCount();
-                int32_t jump_state = *reinterpret_cast<int32_t*>(g_exe_base + 0x000B9D3C);
-                bool is_airborne = (jump_state != 0) || (now_tick - g_last_jump_press_tick < 1400);
-                if (is_airborne && (newly_pressed & 0x4000u) != 0) {
-                    buttons &= ~0x4000u; // Lock mid-air double-X (Butt Stomp) while allowing normal ground Jump!
-                } else if (!is_airborne && (newly_pressed & 0x4000u) != 0) {
-                    g_last_jump_press_tick = now_tick;
-                }
-            }
+                bool jump_button_down = (buttons & 0x4000u) != 0;
+                bool jump_newly_pressed = (newly_pressed & 0x4000u) != 0;
+                bool is_airborne = (now_tick - g_last_jump_press_tick < 1400);
 
-            if (!g_state.abilities.butt_stomp) {
-                // Lock Flip Jump (L1+R1 shoulder combo or 180 Quick Turn while moving) until Butt Stomp unlocked
-                if ((buttons & 0x0C00u) == 0x0C00u) {
-                    buttons &= ~0x0C00u;
+                if (!is_airborne && jump_newly_pressed) {
+                    // First ground jump registered
+                    g_last_jump_press_tick = now_tick;
+                    g_ground_jump_in_progress = true;
+                } else if (is_airborne) {
+                    if (!jump_button_down) {
+                        // Released Jump button in mid-air
+                        g_ground_jump_in_progress = false;
+                    }
+
+                    if (!g_ground_jump_in_progress) {
+                        // Mid-air jump / stomp is strictly blocked on every frame while airborne!
+                        buttons &= ~0x4000u;
+                    }
+                } else {
+                    g_ground_jump_in_progress = false;
                 }
-                if ((buttons & 0x0010u) != 0 && (buttons & 0x0C00u) != 0) {
-                    buttons &= ~0x0C00u;
-                }
+
+                // Strictly lock Flip Jump & shoulder maneuvers (L1, R1, L2, R2: 0x0F00) until Butt Stomp unlocked
+                buttons &= ~0x0F00u;
             }
 
             if (has_reverse_controls) {
@@ -3978,23 +3094,13 @@ __declspec(dllexport) void __cdecl Croc2AP_Initialize(const char* ini_path) {
 __declspec(dllexport) void __cdecl Croc2AP_StartOverlayUI() {
     if (!croc2_ap::g_ui_running.load() && !croc2_ap::g_state.forced_vanilla_cmdline) {
         croc2_ap::g_ui_running.store(true);
-        croc2_ap::g_ui_thread = std::thread(croc2_ap::ui_overlay_worker);
+        croc2_ap::g_ui_thread = std::thread(croc2_ap::background_tick_worker);
     }
 }
 
 __declspec(dllexport) void __cdecl Croc2AP_ShowConnectionMenu(int show) {
-    for (int i = 0; i < 40 && !croc2_ap::g_menu_hwnd; ++i) {
-        Sleep(25);
-    }
-    if (croc2_ap::g_menu_hwnd) {
-        croc2_ap::g_menu_visible = (show != 0);
-        ShowWindow(croc2_ap::g_menu_hwnd, croc2_ap::g_menu_visible ? SW_SHOW : SW_HIDE);
-        if (croc2_ap::g_menu_visible) {
-            SetWindowPos(croc2_ap::g_menu_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            SetForegroundWindow(croc2_ap::g_menu_hwnd);
-            PostMessageA(croc2_ap::g_menu_hwnd, WM_APP + 1, 0, 0);
-        }
-    }
+    (void)show;
+    // In-game overlay menu retired; Archipelago status and settings managed via Croc2ArchipelagoLauncher.exe
 }
 
 __declspec(dllexport) void __cdecl Croc2AP_Shutdown() {

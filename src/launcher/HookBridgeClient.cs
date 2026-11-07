@@ -175,9 +175,9 @@ namespace Croc2Launcher
             return resp != null;
         }
 
-        public async Task<List<long>> PollCheckedLocationsAsync()
+        public async Task<List<Dictionary<string, object>>> PollEventsDetailedAsync()
         {
-            var list = new List<long>();
+            var list = new List<Dictionary<string, object>>();
             var req = new Dictionary<string, object>
             {
                 { "command", "poll_events" }
@@ -193,15 +193,25 @@ namespace Croc2Launcher
                     {
                         if (evObj is Dictionary<string, object>)
                         {
-                            var evDict = (Dictionary<string, object>)evObj;
-                            string evType = evDict.ContainsKey("event") ? evDict["event"].ToString() : "";
-                            if (evType == "location_checked" && evDict.ContainsKey("location_id"))
-                            {
-                                long locId = Convert.ToInt64(evDict["location_id"]);
-                                list.Add(locId);
-                            }
+                            list.Add((Dictionary<string, object>)evObj);
                         }
                     }
+                }
+            }
+            return list;
+        }
+
+        public async Task<List<long>> PollCheckedLocationsAsync()
+        {
+            var list = new List<long>();
+            var events = await PollEventsDetailedAsync();
+            foreach (var evDict in events)
+            {
+                string evType = evDict.ContainsKey("event") ? evDict["event"].ToString() : "";
+                if (evType == "location_checked" && evDict.ContainsKey("location_id"))
+                {
+                    long locId = Convert.ToInt64(evDict["location_id"]);
+                    list.Add(locId);
                 }
             }
             return list;

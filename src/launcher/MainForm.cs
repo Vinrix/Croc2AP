@@ -1402,26 +1402,81 @@ namespace Croc2Launcher
                 }
             }
 
-            if (_hookClient.IsConnected && _apClient.IsConnected)
+            if (_hookClient.IsConnected)
             {
-                var newChecks = await _hookClient.PollCheckedLocationsAsync();
-                var checksToSend = new List<long>();
-                foreach (long loc in newChecks)
+                var events = await _hookClient.PollEventsDetailedAsync();
+                if (events != null && events.Count > 0)
                 {
-                    if (!_checkedLocations.Contains(loc))
+                    var checksToSend = new List<long>();
+                    foreach (var ev in events)
                     {
-                        _checkedLocations.Add(loc);
-                        checksToSend.Add(loc);
+                        string evType = ev.ContainsKey("event") ? ev["event"].ToString() : "";
+                        if (evType == "location_checked")
+                        {
+                            long locId = ev.ContainsKey("location_id") ? Convert.ToInt64(ev["location_id"]) : 0;
+                            string desc = ev.ContainsKey("description") ? ev["description"].ToString() : ("Location #" + locId);
+                            if (locId > 0 && !_checkedLocations.Contains(locId))
+                            {
+                                _checkedLocations.Add(locId);
+                                if (_apClient.IsConnected)
+                                {
+                                    checksToSend.Add(locId);
+                                }
+                            }
+                            LogFormatted("⭐ [CHECK] " + desc, Color.LimeGreen);
+                            _lblChecksCount.Text = "Checks: " + _checkedLocations.Count;
+                        }
+                        else if (evType == "item_received")
+                        {
+                            string itemName = ev.ContainsKey("item_name") ? ev["item_name"].ToString() : "Unknown Item";
+                            string senderName = ev.ContainsKey("sender") ? ev["sender"].ToString() : "Croc";
+                            string locName = ev.ContainsKey("location") ? ev["location"].ToString() : "";
+                            string importance = "progression";
+                            if (ev.ContainsKey("importance"))
+                            {
+                                int impVal = Convert.ToInt32(ev["importance"]);
+                                if (impVal == 0) importance = "filler";
+                                else if (impVal == 2) importance = "useful";
+                                else if (impVal == 3) importance = "trap";
+                            }
+                            LogItemEvent(false, itemName, importance, senderName, "Croc", locName);
+                        }
+                        else if (evType == "key_received")
+                        {
+                            string levelName = ev.ContainsKey("level_name") ? ev["level_name"].ToString() : "Stage";
+                            LogFormatted("🗝️ [KEY] Unlocked " + levelName + " Key!", Color.Gold);
+                        }
+                        else if (evType == "door_locked")
+                        {
+                            string levelName = ev.ContainsKey("level_name") ? ev["level_name"].ToString() : "Stage";
+                            LogFormatted("🔒 [LOCKED] " + levelName + " is locked! Stage Key required.", Color.Crimson);
+                        }
+                        else if (evType == "vehicle_required")
+                        {
+                            string levelName = ev.ContainsKey("level_name") ? ev["level_name"].ToString() : "Vehicle Stage";
+                            LogFormatted("🚗 [VEHICLE] " + levelName + " requires Vehicle License!", Color.OrangeRed);
+                        }
+                        else if (evType == "door_entered")
+                        {
+                            string origName = ev.ContainsKey("orig_name") ? ev["orig_name"].ToString() : "";
+                            string targetName = ev.ContainsKey("target_name") ? ev["target_name"].ToString() : "";
+                            LogFormatted("🚪 [DOOR] Shuffled: " + origName + " -> " + targetName, Color.DeepSkyBlue);
+                        }
+                        else if (evType == "trap_applied")
+                        {
+                            string desc = ev.ContainsKey("description") ? ev["description"].ToString() : (ev.ContainsKey("trap_type") ? ev["trap_type"].ToString() : "Trap Triggered");
+                            LogFormatted("⚠️ [TRAP] " + desc, Color.Red);
+                        }
+                        else if (evType == "golden_gobbo_activated")
+                        {
+                            string wad = ev.ContainsKey("wad") ? ev["wad"].ToString() : "";
+                            LogFormatted("🏆 [GOLDEN GOBBO] 5/5 Crystals collected! Golden Gobbo activated for " + wad + "!", Color.Gold);
+                        }
                     }
-                }
 
-                if (checksToSend.Count > 0)
-                {
-                    await _apClient.SendLocationChecksAsync(checksToSend);
-                    _lblChecksCount.Text = "Checks Sent: " + _checkedLocations.Count;
-                    foreach (long c in checksToSend)
+                    if (checksToSend.Count > 0 && _apClient.IsConnected)
                     {
-                        LogFormatted("[CHECK] Sent check: " + Croc2Data.GetLocationName(c), Color.LimeGreen);
+                        await _apClient.SendLocationChecksAsync(checksToSend);
                     }
                 }
             }
