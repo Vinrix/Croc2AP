@@ -942,9 +942,12 @@ class TestCroc2Archipelago(unittest.TestCase):
                     proc.wait(timeout=2)
                 except Exception:
                     proc.kill()
-            for p in (host_cpp, host_exe, test_ini):
+            for p in (test_ini,):
                 if os.path.exists(p):
-                    os.remove(p)
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
 
     def test_installer_and_uninstaller_lifecycle(self):
         import shutil
