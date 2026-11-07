@@ -29,6 +29,7 @@ if not exist dist\croc2.apworld (
   /resource:dist\croc2.apworld,croc2.apworld ^
   "/resource:templates\Croc 2.yaml,Croc 2.yaml" ^
   /resource:INSTALL_INSTRUCTIONS.txt,INSTALL_INSTRUCTIONS.txt ^
+  /resource:assets\fonts\DarumadropOne-Regular.ttf,DarumadropOne-Regular.ttf ^
   /resource:assets\icon.png,icon.png ^
   /resource:icon.ico,icon.ico ^
   /recurse:src\setup\*.cs

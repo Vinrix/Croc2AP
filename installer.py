@@ -163,6 +163,17 @@ def install_mod(
     if os.path.isfile(src_ico):
         shutil.copy2(src_ico, os.path.join(game_dir, "icon.ico"))
 
+    src_font = os.path.join(ROOT_DIR, "assets", "fonts", "DarumadropOne-Regular.ttf")
+    if os.path.isfile(src_font):
+        dst_font = os.path.join(game_dir, "DarumadropOne-Regular.ttf")
+        if not os.path.isfile(dst_font):
+            shutil.copy2(src_font, dst_font)
+        remaster_font_dir = os.path.join(game_dir, "remaster", "ui", "fonts", "darumadrop_one")
+        if os.path.isdir(remaster_font_dir):
+            rf_dest = os.path.join(remaster_font_dir, "DarumadropOne-Regular.ttf")
+            if not os.path.isfile(rf_dest):
+                shutil.copy2(src_font, rf_dest)
+
     if not skip_ap:
         custom_worlds_dir = os.path.join(ap_dir, "custom_worlds")
         templates_dir = os.path.join(ap_dir, "Players", "Templates")

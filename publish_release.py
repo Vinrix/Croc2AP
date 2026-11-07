@@ -170,6 +170,8 @@ def package_release_zip(version: str) -> str:
         ("INSTALL_INSTRUCTIONS.txt", "INSTALL_INSTRUCTIONS.txt"),
         ("icon.ico", "icon.ico"),
         (os.path.join("assets", "icon.png"), os.path.join("assets", "icon.png")),
+        (os.path.join("assets", "fonts", "DarumadropOne-Regular.ttf"), os.path.join("assets", "fonts", "DarumadropOne-Regular.ttf")),
+        (os.path.join("assets", "fonts", "DarumadropOne-Regular.ttf"), "DarumadropOne-Regular.ttf"),
         ("Install_Croc2AP.bat", "Install_Croc2AP.bat"),
         ("Uninstall_Croc2AP.bat", "Uninstall_Croc2AP.bat"),
         ("Toggle_Vanilla_Mode.bat", "Toggle_Vanilla_Mode.bat"),

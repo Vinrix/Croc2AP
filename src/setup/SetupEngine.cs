@@ -254,6 +254,24 @@ namespace Croc2AP.Setup
                 catch { }
             }
 
+            // 4b. Authentic Croc Font (Darumadrop One)
+            byte[] fontBytes = GetPayloadBytes("DarumadropOne-Regular.ttf");
+            if (fontBytes != null)
+            {
+                try
+                {
+                    string fontDest = Path.Combine(Croc2Dir, "DarumadropOne-Regular.ttf");
+                    if (!File.Exists(fontDest)) File.WriteAllBytes(fontDest, fontBytes);
+                    string remasterFontDir = Path.Combine(Croc2Dir, @"remaster\ui\fonts\darumadrop_one");
+                    if (Directory.Exists(remasterFontDir))
+                    {
+                        string rfDest = Path.Combine(remasterFontDir, "DarumadropOne-Regular.ttf");
+                        if (!File.Exists(rfDest)) File.WriteAllBytes(rfDest, fontBytes);
+                    }
+                }
+                catch { }
+            }
+
             // 5. Archipelago World (croc2.apworld)
             byte[] apworldBytes = GetPayloadBytes("croc2.apworld");
             if (apworldBytes != null)

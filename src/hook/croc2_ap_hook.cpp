@@ -28,6 +28,7 @@ static std::thread g_server_thread;
 static std::thread g_ui_thread;
 static std::thread g_ws_thread;
 static SOCKET g_listen_socket = INVALID_SOCKET;
+static HWND g_toast_hwnd = nullptr;
 static std::string g_ini_file_path = "croc2_mod.ini";
 
 // Forward declarations
@@ -2250,21 +2251,401 @@ static void stop_ap_websocket_connection() {
 }
 
 // ============================================================================
-// Background Logic Tick Worker (Replaces In-Game Overlay UI)
-// Handles timed traps, toasts countdown, and internal mod state stepping
+// In-Game Toast Popups: 100% Enlarged, Croc Font (Darumadrop One) & Archipelago Colors
 // ============================================================================
+static bool g_croc_font_loaded = false;
+
+static void ensure_croc_font() {
+    if (g_croc_font_loaded) return;
+
+    char exe_dir[MAX_PATH] = {0};
+    GetModuleFileNameA(nullptr, exe_dir, MAX_PATH);
+    char* last_slash = std::strrchr(exe_dir, '\\');
+    if (last_slash) *last_slash = '\0';
+
+    std::string p1 = std::string(exe_dir) + "\\remaster\\ui\\fonts\\darumadrop_one\\DarumadropOne-Regular.ttf";
+    std::string p2 = std::string(exe_dir) + "\\assets\\fonts\\DarumadropOne-Regular.ttf";
+    std::string p3 = std::string(exe_dir) + "\\DarumadropOne-Regular.ttf";
+
+    const char* font_paths[] = {
+        p1.c_str(),
+        p2.c_str(),
+        p3.c_str(),
+        "remaster\\ui\\fonts\\darumadrop_one\\DarumadropOne-Regular.ttf",
+        "assets\\fonts\\DarumadropOne-Regular.ttf",
+        "DarumadropOne-Regular.ttf"
+    };
+
+    for (const char* p : font_paths) {
+        if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES) {
+            if (AddFontResourceExA(p, FR_PRIVATE, nullptr) > 0) {
+                g_croc_font_loaded = true;
+                break;
+            }
+        }
+    }
+}
+
+static COLORREF get_ap_importance_color(ItemImportance imp) {
+    switch (imp) {
+        case ItemImportance::PROGRESSION: return RGB(195, 145, 255); // Plum / Bright Orchid (#AF99EF)
+        case ItemImportance::USEFUL:      return RGB(110, 165, 255); // Slate Blue (#6D8BE8)
+        case ItemImportance::FILLER:      return RGB(0, 238, 238);   // Cyan (#00EEEE)
+        case ItemImportance::TRAP:        return RGB(255, 115, 95);  // Salmon / Coral Red (#FA8072)
+        default:                          return RGB(0, 238, 238);
+    }
+}
+
+static void draw_colored_seg(HDC hdc, int& x, int y, int max_x, const std::string& text, COLORREF col) {
+    if (text.empty() || x >= max_x) return;
+    SetTextColor(hdc, col);
+    RECT clip_rc = {x, y, max_x, y + 40};
+    ExtTextOutA(hdc, x, y, ETO_CLIPPED, &clip_rc, text.c_str(), static_cast<UINT>(text.size()), nullptr);
+    SIZE sz{};
+    if (GetTextExtentPoint32A(hdc, text.c_str(), static_cast<int>(text.size()), &sz)) {
+        x += sz.cx;
+    }
+}
+
+static void draw_facet(HDC hdc, const POINT* pts, int count, COLORREF fill_col, COLORREF border_col) {
+    HBRUSH hBrush = CreateSolidBrush(fill_col);
+    HPEN hPen = CreatePen(PS_SOLID, 1, border_col);
+    HGDIOBJ oldB = SelectObject(hdc, hBrush);
+    HGDIOBJ oldP = SelectObject(hdc, hPen);
+    Polygon(hdc, pts, count);
+    SelectObject(hdc, oldB);
+    SelectObject(hdc, oldP);
+    DeleteObject(hBrush);
+    DeleteObject(hPen);
+}
+
+static void draw_faceted_crystal(HDC hdc, int cx, int cy, int radius, COLORREF base_col) {
+    int r = GetRValue(base_col);
+    int g = GetGValue(base_col);
+    int b = GetBValue(base_col);
+
+    COLORREF col_bright = RGB(std::min(255, r + 75), std::min(255, g + 75), std::min(255, b + 75));
+    COLORREF col_mid_light = RGB(std::min(255, r + 40), std::min(255, g + 40), std::min(255, b + 40));
+    COLORREF col_base = base_col;
+    COLORREF col_mid_dark = RGB((r * 3) / 4, (g * 3) / 4, (b * 3) / 4);
+    COLORREF col_deep_dark = RGB(r / 2, g / 2, b / 2);
+    COLORREF border_col = RGB(255, 255, 255);
+
+    int rx = radius;
+    int ry = radius;
+
+    int t_w = static_cast<int>(rx * 0.55f);
+    int t_y = cy - static_cast<int>(ry * 0.75f);
+    int m_w = static_cast<int>(rx * 0.35f);
+    int m_y = cy - static_cast<int>(ry * 0.15f);
+    int b_y = cy + ry;
+
+    // 1. Table (upper trapezoid)
+    POINT p_table[4] = {
+        {cx - t_w, t_y},
+        {cx + t_w, t_y},
+        {cx + m_w, m_y},
+        {cx - m_w, m_y}
+    };
+    draw_facet(hdc, p_table, 4, col_bright, border_col);
+
+    // 2. Upper Left Star
+    POINT p_ul[3] = {
+        {cx - t_w, t_y},
+        {cx - m_w, m_y},
+        {cx - rx, m_y}
+    };
+    draw_facet(hdc, p_ul, 3, col_mid_light, border_col);
+
+    // 3. Upper Right Star
+    POINT p_ur[3] = {
+        {cx + t_w, t_y},
+        {cx + rx, m_y},
+        {cx + m_w, m_y}
+    };
+    draw_facet(hdc, p_ur, 3, col_mid_light, border_col);
+
+    // 4. Center Lower Pavilion
+    POINT p_cl[3] = {
+        {cx - m_w, m_y},
+        {cx + m_w, m_y},
+        {cx, b_y}
+    };
+    draw_facet(hdc, p_cl, 3, col_base, border_col);
+
+    // 5. Left Lower Pavilion
+    POINT p_ll[3] = {
+        {cx - rx, m_y},
+        {cx - m_w, m_y},
+        {cx, b_y}
+    };
+    draw_facet(hdc, p_ll, 3, col_mid_dark, border_col);
+
+    // 6. Right Lower Pavilion
+    POINT p_rl[3] = {
+        {cx + m_w, m_y},
+        {cx + rx, m_y},
+        {cx, b_y}
+    };
+    draw_facet(hdc, p_rl, 3, col_deep_dark, border_col);
+
+    // Sparkle star on upper-left facet
+    int sx = cx - static_cast<int>(rx * 0.45f);
+    int sy = cy - static_cast<int>(ry * 0.45f);
+    HPEN whitePen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+    HGDIOBJ oldPen = SelectObject(hdc, whitePen);
+    MoveToEx(hdc, sx - 4, sy, nullptr); LineTo(hdc, sx + 5, sy);
+    MoveToEx(hdc, sx, sy - 4, nullptr); LineTo(hdc, sx, sy + 5);
+    SelectObject(hdc, oldPen);
+    DeleteObject(whitePen);
+}
+
+static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        HDC memDC = CreateCompatibleDC(hdc);
+        HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
+        HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
+
+        BottomToastNotification toast_snap;
+        bool active = false;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            active = g_state.toast_active;
+            toast_snap = g_state.active_toast;
+        }
+
+        if (active) {
+            // Deep Jungle / Dark Slate background
+            HBRUSH bgBrush = CreateSolidBrush(RGB(10, 24, 18));
+            FillRect(memDC, &rc, bgBrush);
+            DeleteObject(bgBrush);
+
+            COLORREF border_col = (toast_snap.importance == ItemImportance::TRAP)
+                ? RGB(255, 115, 95)
+                : ((toast_snap.importance == ItemImportance::PROGRESSION)
+                    ? RGB(255, 215, 0)
+                    : ((toast_snap.importance == ItemImportance::USEFUL)
+                        ? RGB(110, 165, 255)
+                        : RGB(46, 204, 113)));
+
+            // Outer 2px glowing frame
+            HPEN framePen = CreatePen(PS_SOLID, 2, border_col);
+            HGDIOBJ oldPen = SelectObject(memDC, framePen);
+            HGDIOBJ oldBrush = SelectObject(memDC, GetStockObject(NULL_BRUSH));
+            RoundRect(memDC, 2, 2, w - 2, h - 2, 20, 20);
+
+            // Inner accent glow line
+            COLORREF inner_col = (toast_snap.importance == ItemImportance::TRAP)
+                ? RGB(255, 60, 40)
+                : RGB(46, 204, 113);
+            HPEN innerPen = CreatePen(PS_SOLID, 1, inner_col);
+            SelectObject(memDC, innerPen);
+            RoundRect(memDC, 4, 4, w - 4, h - 4, 16, 16);
+            SelectObject(memDC, oldPen);
+            SelectObject(memDC, oldBrush);
+            DeleteObject(framePen);
+            DeleteObject(innerPen);
+
+            // Large 48px faceted crystal icon on left (100% bigger!)
+            draw_faceted_crystal(memDC, 46, h / 2, 23, get_ap_importance_color(toast_snap.importance));
+
+            const char* font_family = g_croc_font_loaded ? "Darumadrop One" : "Segoe UI";
+            HFONT hFontMain = CreateFontA(26, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                          DEFAULT_PITCH | FF_SWISS, font_family);
+            HFONT hFontSub = CreateFontA(17, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                         DEFAULT_PITCH | FF_SWISS, font_family);
+
+            SetBkMode(memDC, TRANSPARENT);
+
+            const COLORREF col_gold = RGB(255, 230, 95);       // Archipelago Player Gold
+            const COLORREF col_text = RGB(242, 246, 244);      // Crisp text
+            const COLORREF col_item = get_ap_importance_color(toast_snap.importance);
+            const COLORREF col_loc  = RGB(85, 240, 140);       // Archipelago Location Green
+
+            std::string p1 = toast_snap.sender.empty() ? "Croc" : toast_snap.sender;
+            std::string p2 = toast_snap.receiver.empty() ? "Croc" : toast_snap.receiver;
+
+            // Line 1: Main Announcement
+            HGDIOBJ oldFont = SelectObject(memDC, hFontMain);
+            int cur_x = 90;
+            int line1_y = 15;
+            int max_x = w - 24;
+
+            if (toast_snap.importance == ItemImportance::TRAP && (toast_snap.item_name.find("Required") != std::string::npos || toast_snap.item_name.find("Locked") != std::string::npos)) {
+                // Door or Vehicle Gate Toast
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, toast_snap.item_name, RGB(255, 115, 95));
+            } else if (toast_snap.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc")) {
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, p1, col_gold);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, " found ", col_text);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, "!", col_text);
+            } else if (toast_snap.is_outgoing) {
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, p1, col_gold);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, " sent ", col_text);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, " to ", col_text);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, p2, col_gold);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, "!", col_text);
+            } else {
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, p1, col_gold);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, " sent ", col_text);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, " to ", col_text);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, p2, col_gold);
+                draw_colored_seg(memDC, cur_x, line1_y, max_x, "!", col_text);
+            }
+
+            // Line 2: Subtext / Location / Context
+            SelectObject(memDC, hFontSub);
+            int line2_x = 90;
+            int line2_y = 51;
+
+            if (!toast_snap.location.empty() && toast_snap.location != "Padlock" && toast_snap.location != "License") {
+                draw_colored_seg(memDC, line2_x, line2_y, max_x, "Location: ", RGB(165, 230, 195));
+                draw_colored_seg(memDC, line2_x, line2_y, max_x, toast_snap.location, col_loc);
+            } else if (toast_snap.importance == ItemImportance::TRAP) {
+                draw_colored_seg(memDC, line2_x, line2_y, max_x, "Ill effect lasts a flat 10 seconds", RGB(255, 160, 140));
+            } else {
+                draw_colored_seg(memDC, line2_x, line2_y, max_x, "Archipelago Randomizer", RGB(165, 230, 195));
+            }
+
+            SelectObject(memDC, oldFont);
+            DeleteObject(hFontMain);
+            DeleteObject(hFontSub);
+        }
+
+        BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
+        SelectObject(memDC, oldBmp);
+        DeleteObject(memBmp);
+        DeleteDC(memDC);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    return DefWindowProcA(hwnd, msg, wParam, lParam);
+}
+
+static BOOL CALLBACK FindCrocWindowCallback(HWND hwnd, LPARAM lParam) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd) && hwnd != g_toast_hwnd) {
+        LONG style = GetWindowLongA(hwnd, GWL_STYLE);
+        if ((style & WS_CAPTION) || (style & WS_POPUP)) {
+            RECT rc;
+            GetWindowRect(hwnd, &rc);
+            if ((rc.right - rc.left) >= 320 && (rc.bottom - rc.top) >= 240) {
+                *reinterpret_cast<HWND*>(lParam) = hwnd;
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
 static void background_tick_worker() {
+    HINSTANCE hInst = GetModuleHandleA(nullptr);
+    ensure_croc_font();
+
+    WNDCLASSEXA wcToast{};
+    wcToast.cbSize = sizeof(WNDCLASSEXA);
+    wcToast.style = CS_HREDRAW | CS_VREDRAW;
+    wcToast.lpfnWndProc = ToastWndProc;
+    wcToast.hInstance = hInst;
+    wcToast.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcToast.lpszClassName = "Croc2APToastWndClass";
+    RegisterClassExA(&wcToast);
+
+    // 100% enlarged toast window: 880x92 (was 620x46)
+    g_toast_hwnd = CreateWindowExA(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+        "Croc2APToastWndClass",
+        "Croc 2 AP Notification Toast",
+        WS_POPUP,
+        0, 0, 880, 92,
+        nullptr, nullptr, hInst, nullptr
+    );
+    if (g_toast_hwnd) {
+        SetLayeredWindowAttributes(g_toast_hwnd, 0, 242, LWA_ALPHA);
+        ShowWindow(g_toast_hwnd, SW_HIDE);
+    }
+
     DWORD last_tick = GetTickCount();
+
     while (g_ui_running.load()) {
-        Sleep(25);
+        MSG msg;
+        while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+
         DWORD now = GetTickCount();
         float dt = static_cast<float>(now - last_tick) / 1000.0f;
         last_tick = now;
         if (dt > 0.5f) dt = 0.5f;
+
+        bool show_toast = false;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             step_internal_locked(dt);
+
+            if (g_state.toast_active) {
+                if (now >= g_state.active_toast.expire_tick) {
+                    if (!g_state.toast_queue.empty()) {
+                        g_state.active_toast = g_state.toast_queue.front();
+                        g_state.toast_queue.pop_front();
+                        g_state.active_toast.expire_tick = now + 4200;
+                        show_toast = true;
+                    } else {
+                        g_state.toast_active = false;
+                        show_toast = false;
+                    }
+                } else {
+                    show_toast = true;
+                }
+            }
         }
+
+        if (g_toast_hwnd) {
+            if (show_toast) {
+                HWND game_hwnd = nullptr;
+                EnumWindows(FindCrocWindowCallback, reinterpret_cast<LPARAM>(&game_hwnd));
+                if (game_hwnd) {
+                    RECT grc;
+                    if (GetWindowRect(game_hwnd, &grc)) {
+                        int gw = grc.right - grc.left;
+                        int tw = 880;
+                        if (tw > gw - 32) tw = gw - 32;
+                        if (tw < 350) tw = 350;
+                        int th = 92;
+                        int tx = grc.left + (gw - tw) / 2;
+                        int ty = grc.bottom - th - 32;
+                        SetWindowPos(g_toast_hwnd, HWND_TOPMOST, tx, ty, tw, th, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    }
+                } else if (!IsWindowVisible(g_toast_hwnd)) {
+                    ShowWindow(g_toast_hwnd, SW_SHOWNOACTIVATE);
+                }
+                InvalidateRect(g_toast_hwnd, nullptr, FALSE);
+            } else {
+                if (IsWindowVisible(g_toast_hwnd)) {
+                    ShowWindow(g_toast_hwnd, SW_HIDE);
+                }
+            }
+        }
+
+        Sleep(25);
+    }
+
+    if (g_toast_hwnd) {
+        DestroyWindow(g_toast_hwnd);
+        g_toast_hwnd = nullptr;
     }
 }
 

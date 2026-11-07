@@ -26,7 +26,7 @@ namespace Croc2Launcher
 
     public static class UpdateManager
     {
-        public const string CurrentVersion = "1.0.6";
+        public const string CurrentVersion = "1.0.7";
         public const string DefaultRepo = "Vinrix/Croc2AP";
 
         static UpdateManager()
