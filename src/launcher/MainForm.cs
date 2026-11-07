@@ -96,6 +96,7 @@ namespace Croc2Launcher
         public MainForm(string[] args)
         {
             _startupArgs = args ?? new string[0];
+            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             InitializeComponent();
 
             _apClient = new ApClient();

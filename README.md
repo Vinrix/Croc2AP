@@ -1,6 +1,10 @@
-#  Croc 2 Archipelago Multiworld Randomizer & Standalone Launcher
+# Croc 2 Archipelago Multiworld Randomizer & Standalone Launcher
 
-[![Release](https://img.shields.io/badge/Release-v1.0.0-brightgreen.svg)](https://github.com/Vinrix/Croc2AP/releases)
+<p align="center">
+  <img src="assets/icon.png" width="180" height="180" alt="Croc 2 Archipelago Crystals Logo" />
+</p>
+
+[![Release](https://img.shields.io/badge/Release-v1.0.3-brightgreen.svg)](https://github.com/Vinrix/Croc2AP/releases)
 [![Archipelago](https://img.shields.io/badge/Archipelago-v0.6.0+-blue.svg)](https://archipelago.gg/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20(Steam%2FPC)-orange.svg)](https://store.steampowered.com/)
 [![CI/CD](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-blueviolet.svg)](https://github.com/Vinrix/Croc2AP/actions)

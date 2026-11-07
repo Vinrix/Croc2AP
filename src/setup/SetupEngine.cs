@@ -320,7 +320,7 @@ namespace Croc2AP.Setup
 
                 // Use PowerShell to create .lnk via WScript.Shell without external dependencies
                 string psCmd = string.Format(
-                    "-NoProfile -Command \"$s=(New-Object -COM WScript.Shell).CreateShortcut('{0}'); $s.TargetPath='{1}'; $s.WorkingDirectory='{2}'; $s.Description='Croc 2 Archipelago Randomizer Launcher'; $s.Save()\"",
+                    "-NoProfile -Command \"$s=(New-Object -COM WScript.Shell).CreateShortcut('{0}'); $s.TargetPath='{1}'; $s.WorkingDirectory='{2}'; $s.IconLocation='{1},0'; $s.Description='Croc 2 Archipelago Randomizer Launcher'; $s.Save()\"",
                     shortcutPath.Replace("'", "''"),
                     targetExePath.Replace("'", "''"),
                     Path.GetDirectoryName(targetExePath).Replace("'", "''")

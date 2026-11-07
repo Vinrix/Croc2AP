@@ -21,7 +21,7 @@ if not exist dist\croc2.apworld (
     exit /b 1
 )
 
-%CSC% /target:winexe /out:Croc2AP_Setup.exe ^
+%CSC% /target:winexe /out:Croc2AP_Setup.exe /win32icon:icon.ico ^
   /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll ^
   /resource:build\version.dll,version.dll ^
   /resource:croc2_mod.ini,croc2_mod.ini ^
@@ -29,12 +29,14 @@ if not exist dist\croc2.apworld (
   /resource:dist\croc2.apworld,croc2.apworld ^
   "/resource:templates\Croc 2.yaml,Croc 2.yaml" ^
   /resource:INSTALL_INSTRUCTIONS.txt,INSTALL_INSTRUCTIONS.txt ^
+  /resource:assets\icon.png,icon.png ^
+  /resource:icon.ico,icon.ico ^
   /recurse:src\setup\*.cs
 
 if %ERRORLEVEL% EQU 0 (
     echo.
     echo ============================================================
-    echo BUILD SUCCESSFUL: Croc2AP_Setup.exe created!
+    echo BUILD SUCCESSFUL: Croc2AP_Setup.exe created
     echo ============================================================
 ) else (
     echo.

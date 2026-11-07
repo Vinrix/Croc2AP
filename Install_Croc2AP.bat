@@ -81,6 +81,11 @@ if exist "%~dp0INSTALL_INSTRUCTIONS.txt" (
     copy /Y "%~dp0INSTALL_INSTRUCTIONS.txt" "%GAME_DIR%\INSTALL_INSTRUCTIONS.txt" >nul
 )
 
+:: Copy Icon
+if exist "%~dp0icon.ico" (
+    copy /Y "%~dp0icon.ico" "%GAME_DIR%\icon.ico" >nul
+)
+
 :: Locate apworld file
 set "APWORLD_SRC="
 if exist "%~dp0croc2.apworld" set "APWORLD_SRC=%~dp0croc2.apworld"

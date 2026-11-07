@@ -168,6 +168,8 @@ def package_release_zip(version: str) -> str:
         (os.path.join("dist", "croc2.apworld"), "croc2.apworld"),
         (os.path.join("templates", "Croc 2.yaml"), "Croc 2.yaml"),
         ("INSTALL_INSTRUCTIONS.txt", "INSTALL_INSTRUCTIONS.txt"),
+        ("icon.ico", "icon.ico"),
+        (os.path.join("assets", "icon.png"), os.path.join("assets", "icon.png")),
         ("Install_Croc2AP.bat", "Install_Croc2AP.bat"),
         ("Uninstall_Croc2AP.bat", "Uninstall_Croc2AP.bat"),
         ("Toggle_Vanilla_Mode.bat", "Toggle_Vanilla_Mode.bat"),

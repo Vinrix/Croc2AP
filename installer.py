@@ -159,6 +159,10 @@ def install_mod(
     if os.path.isfile(src_instr):
         shutil.copy2(src_instr, os.path.join(game_dir, "INSTALL_INSTRUCTIONS.txt"))
 
+    src_ico = os.path.join(ROOT_DIR, "icon.ico")
+    if os.path.isfile(src_ico):
+        shutil.copy2(src_ico, os.path.join(game_dir, "icon.ico"))
+
     if not skip_ap:
         custom_worlds_dir = os.path.join(ap_dir, "custom_worlds")
         templates_dir = os.path.join(ap_dir, "Players", "Templates")

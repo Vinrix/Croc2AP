@@ -24,6 +24,7 @@ namespace Croc2AP.Setup
         public SetupForm()
         {
             engine = new SetupEngine();
+            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             InitializeComponent();
             UpdateValidationStatus();
         }
@@ -47,13 +48,33 @@ namespace Croc2AP.Setup
                 Padding = new Padding(20, 15, 20, 10)
             };
 
+            PictureBox picLogo = new PictureBox
+            {
+                Size = new Size(58, 58),
+                Location = new Point(18, 13),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Transparent
+            };
+            byte[] iconBytes = engine.GetPayloadBytes("icon.png");
+            if (iconBytes != null)
+            {
+                try
+                {
+                    using (MemoryStream ms = new MemoryStream(iconBytes))
+                    {
+                        picLogo.Image = new Bitmap(ms);
+                    }
+                }
+                catch { }
+            }
+
             Label lblTitle = new Label
             {
                 Text = "Croc 2 Archipelago Randomizer",
                 Font = new Font("Segoe UI Semibold", 16f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(129, 199, 132),
                 AutoSize = true,
-                Location = new Point(20, 12)
+                Location = new Point(88, 12)
             };
 
             Label lblSubtitle = new Label
@@ -62,9 +83,10 @@ namespace Croc2AP.Setup
                 Font = new Font("Segoe UI", 9.25f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(170, 178, 195),
                 AutoSize = true,
-                Location = new Point(22, 45)
+                Location = new Point(90, 45)
             };
 
+            pnlHeader.Controls.Add(picLogo);
             pnlHeader.Controls.Add(lblTitle);
             pnlHeader.Controls.Add(lblSubtitle);
             this.Controls.Add(pnlHeader);

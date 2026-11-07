@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to release (e.g. v1.0.2)'
+        description: 'Version tag to release (e.g. v1.0.3)'
         required: true
-        default: 'v1.0.2'
+        default: 'v1.0.3'
 
 jobs:
   build-and-release:
@@ -85,7 +85,7 @@ jobs:
         run: |
           VER="${{ steps.get_version.outputs.VERSION }}"
           ZIP_NAME="Croc2Archipelago-v${VER}.zip"
-          mkdir -p dist/package
+          mkdir -p dist/package/assets
           cp Croc2AP_Setup.exe dist/package/
           cp Croc2ArchipelagoLauncher.exe dist/package/
           cp build/version.dll dist/package/
@@ -93,6 +93,8 @@ jobs:
           cp dist/croc2.apworld dist/package/
           cp "templates/Croc 2.yaml" dist/package/
           cp INSTALL_INSTRUCTIONS.txt dist/package/
+          cp icon.ico dist/package/
+          cp assets/icon.png dist/package/assets/
           cp Install_Croc2AP.bat dist/package/
           cp Uninstall_Croc2AP.bat dist/package/
           cp Toggle_Vanilla_Mode.bat dist/package/
@@ -115,3 +117,4 @@ jobs:
             templates/Croc 2.yaml
             Croc2ArchipelagoLauncher.exe
             build/version.dll
+            assets/icon.png

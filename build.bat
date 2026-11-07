@@ -4,7 +4,7 @@ echo Compiling Croc 2 Archipelago Standalone Launcher...
 
 set CSC="C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
-%CSC% /target:winexe /out:Croc2ArchipelagoLauncher.exe /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /recurse:src\launcher\*.cs
+%CSC% /target:winexe /out:Croc2ArchipelagoLauncher.exe /win32icon:icon.ico /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /recurse:src\launcher\*.cs
 
 if %ERRORLEVEL% EQU 0 (
     echo.
@@ -17,4 +17,3 @@ if %ERRORLEVEL% EQU 0 (
 )
 
 exit /b %ERRORLEVEL%
-
