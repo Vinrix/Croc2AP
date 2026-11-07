@@ -641,8 +641,10 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
     g_state.active_toast = toast;
     g_state.toast_active = true;
 
+    // Do NOT call synchronous ShowWindow(g_toast_hwnd) here!
+    // OverlayThreadProc runs every 25ms on its own UI thread and manages ShowWindow/Hide
+    // safely without cross-thread deadlock when the game thread holds g_mutex.
     if (g_toast_hwnd) {
-        ShowWindow(g_toast_hwnd, SW_SHOWNOACTIVATE);
         InvalidateRect(g_toast_hwnd, nullptr, FALSE);
     }
 }
@@ -896,7 +898,32 @@ static void load_config_ini(const char* ini_path) {
             g_state.shuffle_white_crystals = std::atoi(val.c_str());
         } else if (key == "shuffle_pete_store") {
             g_state.shuffle_pete_store = std::atoi(val.c_str());
+        } else if (key == "shuffle_abilities") {
+            g_state.shuffle_abilities = (val == "true" || val == "1");
+        } else if (key == "shuffle_levers") {
+            g_state.shuffle_levers = (val == "true" || val == "1");
+        } else if (key == "shuffle_vehicles") {
+            g_state.shuffle_vehicles = (val == "true" || val == "1");
+        } else if (key == "shuffle_plane_guns") {
+            g_state.shuffle_plane_guns = (val == "true" || val == "1");
         }
+    }
+
+    if (!g_state.in_active_save) {
+        if (!g_state.shuffle_abilities) {
+            g_state.abilities.tail_whack = true;
+            g_state.abilities.butt_stomp = true;
+            g_state.abilities.climbing_claws = true;
+            g_state.abilities.power_gloves = true;
+        } else {
+            g_state.abilities.tail_whack = false;
+            g_state.abilities.butt_stomp = false;
+            g_state.abilities.climbing_claws = false;
+            g_state.abilities.power_gloves = false;
+        }
+        g_state.abilities.lever_wrench = !g_state.shuffle_levers;
+        g_state.abilities.vehicle_license = !g_state.shuffle_vehicles;
+        g_state.abilities.airplane_ammo_feed = !g_state.shuffle_plane_guns;
     }
 }
 
@@ -3575,12 +3602,13 @@ static void drain_pending_native_inventory_grants() {
     };
 
     bool changed = false;
-    // Grant at most one of each item type per frame so every HUD popup animation is visible.
+    // Grant at most one of each item type per frame. Pass show_popup = 0 so background item grants
+    // do not trigger modal UI popup routines during gameplay polling.
     auto grant_one = [&](std::atomic<int>& pending, int32_t item_type) -> bool {
         int n = pending.load();
         if (n <= 0) return false;
         pending.fetch_sub(1);
-        fn_add_item(item_type, 1, 1, 0, 0);
+        fn_add_item(item_type, 1, 0, 0, 0);
         changed = true;
         return true;
     };
@@ -3735,12 +3763,24 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
 
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
-            } else if (!g_state.abilities.butt_stomp && (newly_pressed & 0x4000u) != 0) {
+            } else if (!g_state.abilities.butt_stomp) {
                 DWORD now_tick = GetTickCount();
-                if (now_tick - g_last_jump_press_tick < 650) {
+                int32_t jump_state = *reinterpret_cast<int32_t*>(g_exe_base + 0x000B9D3C);
+                bool is_airborne = (jump_state != 0) || (now_tick - g_last_jump_press_tick < 1400);
+                if (is_airborne && (newly_pressed & 0x4000u) != 0) {
                     buttons &= ~0x4000u; // Lock mid-air double-X (Butt Stomp) while allowing normal ground Jump!
-                } else {
+                } else if (!is_airborne && (newly_pressed & 0x4000u) != 0) {
                     g_last_jump_press_tick = now_tick;
+                }
+            }
+
+            if (!g_state.abilities.butt_stomp) {
+                // Lock Flip Jump (L1+R1 shoulder combo or 180 Quick Turn while moving) until Butt Stomp unlocked
+                if ((buttons & 0x0C00u) == 0x0C00u) {
+                    buttons &= ~0x0C00u;
+                }
+                if ((buttons & 0x0010u) != 0 && (buttons & 0x0C00u) != 0) {
+                    buttons &= ~0x0C00u;
                 }
             }
 
@@ -3760,19 +3800,19 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         }
     }
 
-    void* health_struct = reinterpret_cast<void*>(g_exe_base + RVA_HEALTH_STRUCT);
-    if (*reinterpret_cast<int32_t*>(health_struct) > 0) {
-        auto fn_dmg = reinterpret_cast<FnTakeHeartDamage>(g_exe_base + RVA_FN_TAKE_HEART_DAMAGE);
-        auto fn_pot = reinterpret_cast<FnAddHeartPot>(g_exe_base + RVA_FN_ADD_HEART_POT);
-        while (dmg_to_apply-- > 0) {
-            fn_dmg(health_struct);
+    int32_t* p_max_pots = reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT);
+    int32_t* p_curr_hearts = reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+    if (*p_max_pots > 0) {
+        if (dmg_to_apply > 0) {
+            *p_curr_hearts = std::max(0, *p_curr_hearts - dmg_to_apply);
         }
-        while (pots_to_apply-- > 0) {
-            fn_pot(health_struct);
+        if (pots_to_apply > 0) {
+            *p_max_pots += pots_to_apply;
+            *p_curr_hearts = *p_max_pots;
         }
         std::lock_guard<std::mutex> lock(g_mutex);
-        g_state.max_heart_pots = *reinterpret_cast<int32_t*>(health_struct);
-        g_state.current_hearts = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+        g_state.max_heart_pots = *p_max_pots;
+        g_state.current_hearts = *p_curr_hearts;
     }
 
     drain_pending_native_inventory_grants();
@@ -3922,8 +3962,8 @@ __declspec(dllexport) void __cdecl Croc2AP_Initialize(const char* ini_path) {
     {
         std::lock_guard<std::mutex> lock(croc2_ap::g_mutex);
         croc2_ap::g_state = croc2_ap::ModState{};
-        croc2_ap::init_default_door_shuffle_locked();
         croc2_ap::load_config_ini(ini_path);
+        croc2_ap::init_default_door_shuffle_locked();
         croc2_ap::load_yaml_player_names();
         croc2_ap::check_cmdline_flags();
         croc2_ap::g_state.add_log("Croc 2 Archipelago Hook initialized. Press F9 for Server Menu, F10 to Toggle Vanilla.");
