@@ -96,10 +96,13 @@ using FnRebuildInvWheel = void(__fastcall*)();
 using FnGiveNativeNoArg = void(__fastcall*)();
 using FnAddColoredCrystal = void(__fastcall*)(int32_t color_1_to_5);
 
+using FnTryAttachClimb = void(__fastcall*)(void* player_strat);
+
 static FnOnDoorTransition g_orig_on_door_transition = nullptr;
 static FnLoadMap g_orig_load_map = nullptr;
 static FnReadInput g_orig_read_input = nullptr;
 static FnSaveGameSlot g_orig_save_game_slot = nullptr;
+static FnTryAttachClimb g_orig_try_attach_climb = nullptr;
 
 // Canonical table of all 20 Village Stage Doors, their vanilla WADs, exact Archipelago IDs, and authentic in-game names
 struct DoorWadEntry {
@@ -3296,68 +3299,6 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             if (!g_state.abilities.power_gloves && !g_state.abilities.lever_wrench) {
                 buttons &= ~0x2000u; // Lock Circle (Carry / Lever Switch) until unlocked in seed
             }
-
-            // Strictly gate Climbing Claws: prevent Croc from clinging to or ascending climbable walls,
-            // meshes, monkey bars, and ropes when Climbing Claws ability has not been unlocked in the seed.
-            if (!g_state.abilities.climbing_claws && !is_vehicle_stage_wad(g_state.current_wad)) {
-                uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + 0x00BC7CE8);
-                bool is_climbing = false;
-                uintptr_t attach_ptr = 0;
-
-                if (player_strat != 0) {
-                    attach_ptr = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
-                    if (attach_ptr != 0) {
-                        int16_t surface_type = *reinterpret_cast<int16_t*>(attach_ptr + 4);
-                        if (surface_type == 0x10 || surface_type == 0x1e) {
-                            is_climbing = true;
-                        }
-                    }
-                }
-
-                int32_t movement_mode = *reinterpret_cast<int32_t*>(g_exe_base + 0x00BC8330);
-                uint8_t climb_flag = *reinterpret_cast<uint8_t*>(g_exe_base + 0x00B8E25C);
-                if (movement_mode == 0x1e000 || climb_flag != 0) {
-                    is_climbing = true;
-                }
-
-                if (is_climbing) {
-                    if (attach_ptr != 0) {
-                        *reinterpret_cast<int16_t*>(attach_ptr + 4) = -1;
-                    }
-                    if (player_strat != 0) {
-                        uintptr_t p118 = *reinterpret_cast<uintptr_t*>(player_strat + 0x118);
-                        if (p118 != 0) {
-                            *reinterpret_cast<int32_t*>(p118 + 0x14) = 0;
-                        }
-                        *reinterpret_cast<uint16_t*>(player_strat + 0xD2) = 0;
-                    }
-                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00BC8330) = 0;
-                    *reinterpret_cast<uint8_t*>(g_exe_base + 0x00B8E25C) = 0;
-                    *reinterpret_cast<uint8_t*>(g_exe_base + 0x00B8E25D) = 0;
-                    *reinterpret_cast<uint8_t*>(g_exe_base + 0x00B8E25E) = 0;
-                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00B8E260) = 0;
-                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00B8E264) = 0;
-
-                    // Strip upward climb input and force jump/drop release
-                    buttons &= ~0x0010u;
-                    buttons |= 0x4000u;
-
-                    static DWORD s_last_climb_warn_tick = 0;
-                    DWORD now_tick = GetTickCount();
-                    if (now_tick - s_last_climb_warn_tick > 2500) {
-                        s_last_climb_warn_tick = now_tick;
-                        trigger_bottom_toast_locked(
-                            false, "Climbing Claws Required!",
-                            ItemImportance::TRAP, "Logic", "Croc",
-                            "Climbing surface requires Climbing Claws!", 2500
-                        );
-                        g_state.add_log("Climb Blocked: Climbing Claws Required!");
-                        g_state.pending_events_json.push_back(
-                            "{\"event\":\"climb_blocked\",\"message\":\"Climbing Claws Required!\"}"
-                        );
-                    }
-                }
-            }
         }
     }
 
@@ -3378,6 +3319,53 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
 
     drain_pending_native_inventory_grants();
     return buttons;
+}
+
+// Hooked Opcode 394: Climbing Attachment Dispatch Slot (0x140025c80)
+// When Climbing Claws is not unlocked in the seed, Croc is prevented from latching onto climbable surfaces.
+// Instead of attaching, this smoothly invokes vanilla fallback 0x140069c20 (standard non-climbing movement).
+static void __fastcall Hooked_TryAttachClimb(void* player_strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
+        // Run collision check to see if player actually touched a climbable surface:
+        // 0x140062490(player_strat) -> climbable polygon
+        auto fn_find_climb = reinterpret_cast<void*(__fastcall*)(void*)>(g_exe_base + 0x00062490);
+        void* poly = fn_find_climb(player_strat);
+        if (poly != nullptr) {
+            // Check bounding / facing box:
+            // 0x1401e71d0(poly->c, poly->10, poly->18, poly->14)
+            auto fn_box_test = reinterpret_cast<uint8_t(__fastcall*)(int32_t, int32_t, int32_t, int32_t)>(g_exe_base + 0x001E71D0);
+            int32_t c = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(poly) + 0x0C);
+            int32_t d = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(poly) + 0x10);
+            int32_t r8 = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(poly) + 0x18);
+            int32_t r9 = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(poly) + 0x14);
+            if (fn_box_test(c, d, r8, r9) != 0) {
+                // Croc IS touching and facing a climbable wall, but lacks Climbing Claws!
+                static DWORD s_last_climb_warn_tick = 0;
+                DWORD now_tick = GetTickCount();
+                if (now_tick - s_last_climb_warn_tick > 2500) {
+                    s_last_climb_warn_tick = now_tick;
+                    std::lock_guard<std::mutex> lock(g_mutex);
+                    trigger_bottom_toast_locked(
+                        false, "Climbing Claws Required!",
+                        ItemImportance::TRAP, "Logic", "Croc",
+                        "Climbing surface requires Climbing Claws!", 2500
+                    );
+                    g_state.add_log("Climb Blocked: Climbing Claws Required!");
+                    g_state.pending_events_json.push_back(
+                        "{\"event\":\"climb_blocked\",\"message\":\"Climbing Claws Required!\"}"
+                    );
+                }
+            }
+        }
+        // Always reject climbing when Climbing Claws is not unlocked:
+        // call the exact vanilla fallback routine 0x140069c20
+        auto fn_fallback = reinterpret_cast<void(__fastcall*)(void*)>(g_exe_base + RVA_FN_CLIMB_REJECT_FALLBACK);
+        fn_fallback(player_strat);
+        return;
+    }
+    if (g_orig_try_attach_climb) {
+        g_orig_try_attach_climb(player_strat);
+    }
 }
 
 static void install_croc2_engine_hooks() {
@@ -3453,11 +3441,21 @@ static void install_croc2_engine_hooks() {
         VirtualProtect(fn_save_slot, 32, old_prot, &old_prot);
     }
 
+    // 5. Hook Climbing Attachment Dispatch Slot (0x007FA070 in .rdata, pointing to 0x140025c80)
+    uintptr_t* p_climb_slot = reinterpret_cast<uintptr_t*>(g_exe_base + RVA_CLIMB_DISPATCH_SLOT);
+    if (*p_climb_slot == (g_exe_base + RVA_FN_TRY_ATTACH_CLIMB)) {
+        g_orig_try_attach_climb = reinterpret_cast<FnTryAttachClimb>(*p_climb_slot);
+        DWORD old_prot_climb = 0;
+        VirtualProtect(p_climb_slot, sizeof(uintptr_t), PAGE_READWRITE, &old_prot_climb);
+        *p_climb_slot = reinterpret_cast<uintptr_t>(&Hooked_TryAttachClimb);
+        VirtualProtect(p_climb_slot, sizeof(uintptr_t), old_prot_climb, &old_prot_climb);
+    }
+
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot).");
+    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ClimbAttach).");
 }
 
 } // namespace croc2_ap
