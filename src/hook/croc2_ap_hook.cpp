@@ -44,7 +44,7 @@ static void generate_new_save_seed_locked(uint64_t seed);
 static void sync_state_to_save_footer_locked();
 static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& footer);
 static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std::string& check_desc);
-static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true);
+static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
 static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
 static void send_ws_location_check_locked(int location_id);
@@ -97,14 +97,14 @@ using FnGiveNativeNoArg = void(__fastcall*)();
 using FnAddColoredCrystal = void(__fastcall*)(int32_t color_1_to_5);
 
 using FnClimbAction = void(__fastcall*)(void* player_strat);
+using FnStratVmPushInt = void(__fastcall*)(void* player_strat, int32_t val);
 
 static FnOnDoorTransition g_orig_on_door_transition = nullptr;
 static FnLoadMap g_orig_load_map = nullptr;
 static FnReadInput g_orig_read_input = nullptr;
 static FnSaveGameSlot g_orig_save_game_slot = nullptr;
 static FnClimbAction g_orig_climb_wall_idle = nullptr;
-static FnClimbAction g_orig_climb_wall_move = nullptr;
-static FnClimbAction g_orig_try_attach_climb = nullptr;
+static FnClimbAction g_orig_climb_surface_check = nullptr;
 
 // Canonical table of all 20 Village Stage Doors, their vanilla WADs, exact Archipelago IDs, and authentic in-game names
 struct DoorWadEntry {
@@ -410,36 +410,54 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     }
 
     // 3. Build the 2,000-entry Individual White Crystal check pool (100 crystals per stage * 20 stages):
-    //    Sphere 1 White Crystals (first 20 White Crystals in Sailor Village stages 0..4 = 100 early slots)
-    //    include core abilities, Vehicle License, Stage Keys, inventory wheel items, colored crystals, heart pots, and traps.
+    //    Ensure the starting stage (door1_target, behind Sailor Village Door 1) has core abilities,
+    //    Stage Keys, and inventory wheel items in its first 20 White Crystals so the player can never softlock!
+    std::vector<int> wc_start_stage_slots;
     std::vector<int> wc_sphere1_slots;
     std::vector<int> wc_remaining_slots;
     for (int s = 0; s < 20; ++s) {
         for (int c = 0; c < 100; ++c) {
             int wc_idx = s * 100 + c;
-            if (s < 5 && c < 20) {
+            if (s == door1_target && c < 20) {
+                wc_start_stage_slots.push_back(wc_idx);
+            } else if (s < 5 && c < 20) {
                 wc_sphere1_slots.push_back(wc_idx);
             } else {
                 wc_remaining_slots.push_back(wc_idx);
             }
         }
     }
+    std::shuffle(wc_start_stage_slots.begin(), wc_start_stage_slots.end(), rng);
     std::shuffle(wc_sphere1_slots.begin(), wc_sphere1_slots.end(), rng);
     std::shuffle(wc_remaining_slots.begin(), wc_remaining_slots.end(), rng);
 
-    std::vector<int> wc_sphere1_items = {
-        7200001, 7200002, 7200003, 7200004, 7200005, // Core abilities
+    const int start_stage_items[20] = {
+        7200001, 7200002, 7200003, 7200004, 7200005, // Core abilities (Tail Whack, Butt Stomp, Climbing Claws, Power Gloves, Lever Wrench)
         7200006,                                     // Vehicle License
-        7200023, 7200024, 7200025,                   // Stage Keys
-        7200142, 7200142, 7200142,                   // 3 Clockwork Gobbos (Inventory Wheel)
-        7200143, 7200143, 7200143,                   // 3 Gummi Jump Red Jellies (Inventory Wheel)
-        7200144, 7200144, 7200144,                   // 3 Jelly Jump Blue Jellies (Inventory Wheel)
-        7200145, 7200145, 7200145,                   // 3 High Jelly Jump Green Jellies (Inventory Wheel)
-        7200146,                                     // Binoculars (Inventory Wheel)
-        7200019, 7200019, 7200020,                   // 2 Silver Keys + 1 Gold Key (Inventory Wheel & HUD)
-        7200012, 7200018,                            // 1 Jigsaw Piece + 1 Golden Gobbo (Inventory Wheel)
+        7200023, 7200024, 7200025, 7200026,          // All 4 locked Sailor Village Stage Door Keys
+        7200142,                                     // Clockwork Gobbo (Inventory Wheel)
+        7200143,                                     // Gummi Jump Red Jelly (Inventory Wheel)
+        7200144,                                     // Jelly Jump Blue Jelly (Inventory Wheel)
+        7200145,                                     // High Jelly Jump Green Jelly (Inventory Wheel)
+        7200146,                                     // Binoculars (HUD / Inventory)
+        7200019, 7200020,                            // Silver Key + Gold Key (Inventory Wheel & HUD)
+        7200021,                                     // Heart Pot
+        7200042,                                     // Find the Key! Save the Gobbo! - Red Crystal
+        7200148                                      // Croc Crystals (1)
+    };
+    for (size_t i = 0; i < 20 && i < wc_start_stage_slots.size(); ++i) {
+        g_state.solo_white_crystal_items[wc_start_stage_slots[i]] = start_stage_items[i];
+    }
+
+    std::vector<int> wc_sphere1_items = {
+        7200142, 7200142,                            // 2 Clockwork Gobbos
+        7200143, 7200143,                            // 2 Gummi Jump Red Jellies
+        7200144, 7200144,                            // 2 Jelly Jump Blue Jellies
+        7200145, 7200145,                            // 2 High Jelly Jump Green Jellies
+        7200019, 7200020,                            // Silver Key + Gold Key
+        7200012, 7200018,                            // 1 Jigsaw Piece + 1 Golden Gobbo
         7200021, 7200021,                            // 2 Heart Pots
-        7200042, 7200043, 7200044, 7200045, 7200046, // Sailor Door 1 Colored Crystals
+        7200043, 7200044, 7200045, 7200046,          // Sailor Door 1 Colored Crystals
         7200151, 7200152, 7200155                    // Early traps
     };
     const int early_wheel_cycle[6] = {7200143, 7200144, 7200145, 7200142, 7200148, 7200149};
@@ -573,7 +591,7 @@ static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& fo
     if (g_state.ap_items_applied < session_count) {
         std::vector<int> session_items = g_state.ap_received_item_ids;
         for (int i = g_state.ap_items_applied; i < session_count; ++i) {
-            apply_ap_item_by_id_locked(session_items[i], "Archipelago", "Sync", false);
+            apply_ap_item_by_id_locked(session_items[i], "Archipelago", "Sync", false, false);
         }
         g_state.ap_items_applied = session_count;
     }
@@ -626,7 +644,7 @@ static void generate_new_save_seed_locked(uint64_t seed) {
         reset_pending_native_grants(); // Avoid double-granting items queued before the save existed
         std::vector<int> saved_ap_items = g_state.ap_received_item_ids;
         for (int ap_id : saved_ap_items) {
-            apply_ap_item_by_id_locked(ap_id, "Archipelago", "Start Inventory / Sync", false);
+            apply_ap_item_by_id_locked(ap_id, "Archipelago", "Start Inventory / Sync", false, false);
         }
     }
     g_state.ap_items_applied = static_cast<int>(g_state.ap_received_item_ids.size());
@@ -678,33 +696,43 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
     toast.duration_ms = duration_ms;
     toast.expire_tick = now + duration_ms;
 
-    if (g_state.toast_active && now < g_state.active_toast.expire_tick && g_ui_running.load()) {
-        if (g_state.active_toast.item_name == toast.item_name &&
-            g_state.active_toast.location == toast.location) {
-            g_state.active_toast.expire_tick = now + duration_ms;
-            return;
+    const bool is_gate_warning =
+        (imp == ItemImportance::TRAP) &&
+        (item_name.find("Required") != std::string::npos ||
+         item_name.find("Locked") != std::string::npos);
+
+    // If the currently active toast has already expired on the clock, advance the queue first
+    // so a newly arriving toast never jumps ahead of already-queued toasts!
+    if (g_state.toast_active && g_ui_running.load() && now >= g_state.active_toast.expire_tick) {
+        if (!g_state.toast_queue.empty()) {
+            g_state.active_toast = g_state.toast_queue.front();
+            g_state.toast_queue.pop_front();
+            uint32_t dur = g_state.active_toast.duration_ms >= 5000 ? g_state.active_toast.duration_ms : 5000;
+            g_state.active_toast.expire_tick = now + dur;
+        } else {
+            g_state.toast_active = false;
         }
-        bool active_is_crystal_filler = (g_state.active_toast.item_name.find("Croc Crystals") != std::string::npos);
-        bool incoming_is_crystal_filler = (toast.item_name.find("Croc Crystals") != std::string::npos);
-        if (active_is_crystal_filler && !incoming_is_crystal_filler) {
-            // Immediately preempt generic crystal filler when a real item/move/key/gem arrives!
-            g_state.active_toast = toast;
-            return;
-        }
-        if (!active_is_crystal_filler && incoming_is_crystal_filler) {
-            // Never let generic crystal filler interrupt or queue behind an important 5-second item popup!
-            return;
-        }
-        if (active_is_crystal_filler && incoming_is_crystal_filler) {
-            g_state.active_toast = toast;
-            return;
-        }
-        if (g_state.toast_queue.empty() ||
-            !(g_state.toast_queue.back().item_name == toast.item_name &&
-              g_state.toast_queue.back().location == toast.location)) {
-            if (g_state.toast_queue.size() < 64) {
-                g_state.toast_queue.push_back(toast);
+    }
+
+    if (g_state.toast_active && g_ui_running.load()) {
+        if (is_gate_warning) {
+            if (g_state.active_toast.item_name == toast.item_name) {
+                g_state.active_toast.expire_tick = now + duration_ms;
             }
+            return;
+        }
+        // If the currently active toast is only a gate warning ("... Required!"), replace it immediately with the real item pickup!
+        bool active_is_gate_warning =
+            (g_state.active_toast.importance == ItemImportance::TRAP) &&
+            (g_state.active_toast.item_name.find("Required") != std::string::npos ||
+             g_state.active_toast.item_name.find("Locked") != std::string::npos);
+        if (active_is_gate_warning && g_state.toast_queue.empty()) {
+            g_state.active_toast = toast;
+            return;
+        }
+        // Strictly queue every single item pickup in FIFO order without overwriting or dropping!
+        if (g_state.toast_queue.size() < 256) {
+            g_state.toast_queue.push_back(toast);
         }
         return;
     }
@@ -753,9 +781,8 @@ static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std:
             ItemImportance imp = ItemImportance::PROGRESSION;
             get_ap_item_info(item_id, item_name, imp);
 
-            trigger_bottom_toast_locked(false, item_name, imp, "Croc", "Croc", check_desc);
             g_state.add_log("Check [" + check_desc + "] -> " + item_name);
-            apply_ap_item_by_id_locked(item_id, "Croc", check_desc, false);
+            apply_ap_item_by_id_locked(item_id, "Croc", check_desc, false, true);
         }
     }
 
@@ -820,9 +847,8 @@ static bool claim_white_crystal_check_locked(int stage_idx, int crystal_num_1_to
             ItemImportance imp = ItemImportance::PROGRESSION;
             get_ap_item_info(item_id, item_name, imp);
 
-            trigger_bottom_toast_locked(false, item_name, imp, "Croc", "Croc", desc);
             g_state.add_log("Check [" + desc + "] -> " + item_name);
-            apply_ap_item_by_id_locked(item_id, "Croc", desc, false);
+            apply_ap_item_by_id_locked(item_id, "Croc", desc, false, true);
         }
     }
 
@@ -1190,7 +1216,8 @@ static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance&
 static void apply_ap_item_by_id_locked(int item_id,
                                        const std::string& sender_name,
                                        const std::string& location_name,
-                                       bool record_persistent) {
+                                       bool record_persistent,
+                                       bool show_toast) {
     if (record_persistent && item_id > 0) {
         g_state.ap_received_item_ids.push_back(item_id);
     }
@@ -1199,7 +1226,7 @@ static void apply_ap_item_by_id_locked(int item_id,
     ItemImportance imp = ItemImportance::PROGRESSION;
     get_ap_item_info(item_id, item_name, imp);
 
-    if (item_id > 0) {
+    if (show_toast && item_id > 0) {
         g_state.pending_events_json.push_back(
             "{\"event\":\"item_received\",\"item_id\":" + std::to_string(item_id) +
             ",\"item_name\":\"" + json_escape(item_name) +
@@ -1412,10 +1439,9 @@ static void apply_ap_item_by_id_locked(int item_id,
     }
     std::string receiver = "Croc";
 
-    // Trigger bottom toast for incoming item: [Sender] sent [Item] to [Croc]!
-    // For direct grants/receives (give_item / multiworld items), this displays immediately.
-    // For solo check pickups (record_persistent == false), the check function already displays the outgoing toast!
-    if (record_persistent) {
+    // Trigger bottom toast for every new item pickup or incoming multiworld item so the
+    // on-screen toast queue and the Launcher Activity Log are 100% synchronized 1-to-1!
+    if (show_toast) {
         trigger_bottom_toast_locked(false, item_name, imp, sender, receiver, location_name);
     }
 
@@ -2706,8 +2732,12 @@ static void write_abs_jmp64(uint8_t* dst, const void* target, size_t total_len) 
 static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
     if (!g_exe_base) return;
 
-    // Title Screen / Main Menu is T1I1M001 (tribe == 1, level == 1, submap == 1, map_type == 3)
-    const bool is_title_screen = (curr.map_type == 3 && curr.tribe == 1 && curr.level == 1);
+    auto* footer = reinterpret_cast<Croc2RandoSaveFooter*>(
+        g_exe_base + RVA_SAVE_DATA_TABLE + RVA_RANDO_SAVE_FOOTER_OFF
+    );
+
+    // Title Screen / Main Menu (map_type == 3) or initial boot frames before a valid tribe (1..4) is loaded
+    const bool is_title_screen = (curr.map_type == 3 || curr.tribe < 1 || curr.tribe > 4);
     if (is_title_screen) {
         if (g_state.in_active_save || g_state.save_locked_to_mod) {
             g_state.in_active_save = false;
@@ -2715,6 +2745,10 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
             g_in_redirected_stage = false;
             g_state.add_log("Returned to Title Screen — Mod Toggle (F10) is now unlocked.");
         }
+        // Clear any in-memory footer magic while on the Title Screen so starting a New Game
+        // always initializes a clean seed with all randomized abilities locked!
+        footer->magic = 0;
+        footer->is_rando_save = 0;
         return;
     }
 
@@ -2722,10 +2756,6 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
     if (slot_idx >= 0 && slot_idx < 5) {
         g_state.active_save_slot = slot_idx;
     }
-
-    auto* footer = reinterpret_cast<Croc2RandoSaveFooter*>(
-        g_exe_base + RVA_SAVE_DATA_TABLE + RVA_RANDO_SAVE_FOOTER_OFF
-    );
 
     if (footer->magic == RANDO_SAVE_MAGIC && footer->is_rando_save == 1) {
         // Existing Randomizer Save loaded or active in memory!
@@ -3148,14 +3178,16 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                     claim_white_crystal_check_locked(stage_idx, c);
                 }
             }
-            if (level_crystals >= 10) {
-                claim_solo_check_locked(stage_idx, 0, std::string(kStageDoors[stage_idx].level_name) + " - 10 White Crystals");
-            }
-            if (level_crystals >= 25) {
-                claim_solo_check_locked(stage_idx, 1, std::string(kStageDoors[stage_idx].level_name) + " - 25 White Crystals");
-            }
-            if (level_crystals >= 40) {
-                claim_solo_check_locked(stage_idx, 2, std::string(kStageDoors[stage_idx].level_name) + " - 40 White Crystals");
+            if (g_state.shuffle_white_crystals == 0) {
+                if (level_crystals >= 10) {
+                    claim_solo_check_locked(stage_idx, 0, std::string(kStageDoors[stage_idx].level_name) + " - 10 White Crystals");
+                }
+                if (level_crystals >= 25) {
+                    claim_solo_check_locked(stage_idx, 1, std::string(kStageDoors[stage_idx].level_name) + " - 25 White Crystals");
+                }
+                if (level_crystals >= 40) {
+                    claim_solo_check_locked(stage_idx, 2, std::string(kStageDoors[stage_idx].level_name) + " - 40 White Crystals");
+                }
             }
         }
 
@@ -3227,37 +3259,53 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
                 g_ground_jump_in_progress = false;
             } else if (!g_state.abilities.butt_stomp) {
+                bool jump_pressed_edge = (newly_pressed & 0x4000u) != 0;
                 bool jump_button_down = (buttons & 0x4000u) != 0;
+                DWORD now_tick = GetTickCount();
 
-                // Read Croc's real in-game state machine (PlayerStrat + 0x118 -> vars + 0x2BC, and floor_poly at + 0xC8)
-                // State 0x8000 = Jumping / Airborne; 0x1000 = Standing/Walking; 0x2000 = Running; 0x3000 = 180-turn.
+                // Read Croc's real ground vs airborne state using croc2.exe's exact IsOnGround check (0x1401FC590):
+                // PlayerStrat->floor_poly (+0xC8) holds the floor height at offset +0x0, and PlayerStrat->pos_y (+0x50)
+                // is <= floor_height when standing on the floor and > floor_height the entire time Croc is airborne!
                 bool croc_is_airborne = false;
                 uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
                 uintptr_t croc_strat_def = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_CROC_STRAT_DEF);
-                if (player_strat != 0 &&
+                if (player_strat != 0 && croc_strat_def != 0 &&
                     *reinterpret_cast<uintptr_t*>(player_strat + 0x110) == croc_strat_def) {
-                    uint64_t floor_poly = *reinterpret_cast<uint64_t*>(player_strat + 0xC8);
-                    uintptr_t vars = *reinterpret_cast<uintptr_t*>(player_strat + 0x118);
-                    int32_t croc_state = (vars != 0) ? *reinterpret_cast<int32_t*>(vars + 0x2BC) : 0;
-                    croc_is_airborne = (croc_state == 0x8000) || (floor_poly == 0);
-                }
-
-                // In croc2.exe (0x140041220), 30Hz rising-edge button presses (RVA_PRESSED_BUTTONS, 0x140BC4B5C)
-                // are computed as (~[RVA_PREV_30HZ_BUTTONS] & [RVA_HELD_BUTTONS]).
-                // By clearing 0x4000 whenever Croc is airborne and either Jump was released or [RVA_PREV_30HZ_BUTTONS]
-                // does not already have 0x4000 held from the ground takeoff tick, a second rising edge of 0x4000
-                // can NEVER occur in mid-air even if the player spams Jump at 240Hz!
-                uint32_t prev_30hz = *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PREV_30HZ_BUTTONS);
-                if (croc_is_airborne) {
-                    if (!jump_button_down || ((prev_30hz & 0x4000u) == 0)) {
-                        g_ground_jump_in_progress = false;
-                    }
-                    if (!g_ground_jump_in_progress) {
-                        buttons &= ~0x4000u;
-                        *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PRESSED_BUTTONS) &= ~0x4000u;
+                    uintptr_t floor_poly = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
+                    if (floor_poly == 0) {
+                        croc_is_airborne = true;
+                    } else {
+                        int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
+                        int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
+                        if (croc_y > floor_y) {
+                            croc_is_airborne = true;
+                        }
                     }
                 } else {
-                    g_ground_jump_in_progress = jump_button_down;
+                    croc_is_airborne = (now_tick - g_last_jump_press_tick < 950);
+                }
+
+                // Also treat the first 160ms after ground jump press as takeoff so 240Hz button mashing
+                // on the ground before the 30Hz physics tick lifts Croc cannot queue a second press.
+                bool in_takeoff_or_air = croc_is_airborne || (now_tick - g_last_jump_press_tick < 160);
+
+                if (!in_takeoff_or_air) {
+                    if (jump_pressed_edge) {
+                        g_last_jump_press_tick = now_tick;
+                        g_ground_jump_in_progress = true;
+                    } else if (!jump_button_down) {
+                        g_ground_jump_in_progress = false;
+                    }
+                } else {
+                    if (!jump_button_down || (now_tick - g_last_jump_press_tick > 220)) {
+                        g_ground_jump_in_progress = false;
+                    }
+                }
+
+                if (!g_ground_jump_in_progress) {
+                    buttons &= ~0x4000u;
+                    *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PRESSED_BUTTONS) &= ~0x4000u;
+                    *reinterpret_cast<uint32_t*>(g_exe_base + RVA_HELD_BUTTONS) &= ~0x4000u;
                 }
 
                 // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
@@ -3318,16 +3366,24 @@ static void trigger_climb_blocked_toast_locked() {
     }
 }
 
-// Hooked Opcode 370: Wall/Vine/Ladder Climb Idle / Attachment Check (0x1401FAA90)
+// Hooked Opcode 370: Wall/Vine/Ladder Can-Climb Check (0x1401FAA90)
+// In croc2.exe, 0x1401FAA90 pushes 0x1000 (can climb) or 0 (cannot climb) onto player_strat's VM stack via 0x14005D8A0.
 static void __fastcall Hooked_ClimbWallIdle(void* player_strat) {
     if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
-        {
+        if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_TOUCH_SURFACE_FLAG) != 0) {
             std::lock_guard<std::mutex> lock(g_mutex);
             trigger_climb_blocked_toast_locked();
         }
+        *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
+        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_WALL_STATE_2) = 0;
+        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
         if (player_strat) {
-            auto fn_detach = reinterpret_cast<void(__fastcall*)(void*)>(g_exe_base + RVA_FN_CLIMB_WALL_DETACH);
-            fn_detach(player_strat);
+            uintptr_t vars = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(player_strat) + 0x118);
+            if (vars != 0) {
+                *reinterpret_cast<int32_t*>(vars + 0x54) = 0;
+            }
+            auto fn_vm_push = reinterpret_cast<FnStratVmPushInt>(g_exe_base + RVA_FN_STRAT_VM_PUSH_INT);
+            fn_vm_push(player_strat, 0);
         }
         return;
     }
@@ -3336,39 +3392,23 @@ static void __fastcall Hooked_ClimbWallIdle(void* player_strat) {
     }
 }
 
-// Hooked Opcode 377: Wall/Vine/Ladder Climb Movement (0x1401FAD40)
-static void __fastcall Hooked_ClimbWallMove(void* player_strat) {
+// Hooked Opcode 375: Climbable Surface / Monkey Bars Attachment Check (0x1401FACE0)
+// In croc2.exe, 0x1401FACE0 checks 0x140BC8310 and pushes the surface value (or 0) onto player_strat's VM stack via 0x14005D8A0.
+static void __fastcall Hooked_ClimbSurfaceCheck(void* player_strat) {
     if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
-        {
+        if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_SURFACE_TYPE) != 0) {
             std::lock_guard<std::mutex> lock(g_mutex);
             trigger_climb_blocked_toast_locked();
         }
+        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
         if (player_strat) {
-            auto fn_detach = reinterpret_cast<void(__fastcall*)(void*)>(g_exe_base + RVA_FN_CLIMB_WALL_DETACH);
-            fn_detach(player_strat);
+            auto fn_vm_push = reinterpret_cast<FnStratVmPushInt>(g_exe_base + RVA_FN_STRAT_VM_PUSH_INT);
+            fn_vm_push(player_strat, 0);
         }
         return;
     }
-    if (g_orig_climb_wall_move) {
-        g_orig_climb_wall_move(player_strat);
-    }
-}
-
-// Hooked Opcode 394: Monkey Bars / Ceiling Attachment Dispatch Slot (0x140025c80)
-static void __fastcall Hooked_TryAttachClimb(void* player_strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            trigger_climb_blocked_toast_locked();
-        }
-        if (player_strat) {
-            auto fn_fallback = reinterpret_cast<void(__fastcall*)(void*)>(g_exe_base + RVA_FN_CLIMB_REJECT_FALLBACK);
-            fn_fallback(player_strat);
-        }
-        return;
-    }
-    if (g_orig_try_attach_climb) {
-        g_orig_try_attach_climb(player_strat);
+    if (g_orig_climb_surface_check) {
+        g_orig_climb_surface_check(player_strat);
     }
 }
 
@@ -3445,7 +3485,7 @@ static void install_croc2_engine_hooks() {
         VirtualProtect(fn_save_slot, 32, old_prot, &old_prot);
     }
 
-    // 5. Hook Action Dispatch Table Climbing Slots (Vine/Wall/Ladder & Monkey Bars)
+    // 5. Hook Strat VM Climbing Check Slots (0x1401FAA90 & 0x1401FACE0)
     auto hook_dispatch_slot = [](uintptr_t slot_rva, uintptr_t expected_target, uintptr_t hooked_fn, FnClimbAction& orig_fn) {
         uintptr_t* p_slot = reinterpret_cast<uintptr_t*>(g_exe_base + slot_rva);
         if (*p_slot == (g_exe_base + expected_target)) {
@@ -3458,14 +3498,13 @@ static void install_croc2_engine_hooks() {
     };
 
     hook_dispatch_slot(RVA_CLIMB_WALL_IDLE_SLOT, RVA_FN_CLIMB_WALL_IDLE, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallIdle), g_orig_climb_wall_idle);
-    hook_dispatch_slot(RVA_CLIMB_WALL_MOVE_SLOT, RVA_FN_CLIMB_WALL_MOVE, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallMove), g_orig_climb_wall_move);
-    hook_dispatch_slot(RVA_CLIMB_DISPATCH_SLOT,  RVA_FN_TRY_ATTACH_CLIMB, reinterpret_cast<uintptr_t>(&Hooked_TryAttachClimb), g_orig_try_attach_climb);
+    hook_dispatch_slot(RVA_CLIMB_SURFACE_CHECK_SLOT, RVA_FN_CLIMB_SURFACE_CHECK, reinterpret_cast<uintptr_t>(&Hooked_ClimbSurfaceCheck), g_orig_climb_surface_check);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ClimbWall, ClimbBars).");
+    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ClimbWall, ClimbSurface).");
 }
 
 } // namespace croc2_ap

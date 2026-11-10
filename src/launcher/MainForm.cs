@@ -1440,8 +1440,9 @@ namespace Croc2Launcher
                             if (ev.ContainsKey("importance"))
                             {
                                 int impVal = Convert.ToInt32(ev["importance"]);
-                                if (impVal == 0) importance = "filler";
-                                else if (impVal == 2) importance = "useful";
+                                if (impVal == 0) importance = "progression";
+                                else if (impVal == 1) importance = "useful";
+                                else if (impVal == 2) importance = "filler";
                                 else if (impVal == 3) importance = "trap";
                             }
                             LogItemEvent(false, itemName, importance, senderName, "Croc", locName);

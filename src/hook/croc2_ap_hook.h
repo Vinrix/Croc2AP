@@ -42,15 +42,23 @@ constexpr uintptr_t RVA_FN_GIVE_CLOCKWORK_NAT    = 0x00066010;
 constexpr uintptr_t RVA_FN_GIVE_HEART_POT_NAT    = 0x00066120;
 constexpr uintptr_t RVA_FN_LOAD_MAP              = 0x00070B60;
 constexpr uintptr_t RVA_FN_SAVE_GAME_SLOT        = 0x001DCE40;
-constexpr uintptr_t RVA_FN_CLIMB_WALL_IDLE       = 0x001FAA90; // Opcode 370: Wall/Vine/Ladder climb idle
+constexpr uintptr_t RVA_FN_STRAT_VM_PUSH_INT     = 0x0005D8A0; // StratVM_PushInt(void* strat, int32_t val)
+constexpr uintptr_t RVA_FN_CLIMB_WALL_IDLE       = 0x001FAA90; // Opcode 370: Wall/Vine/Ladder can-climb check
 constexpr uintptr_t RVA_CLIMB_WALL_IDLE_SLOT     = 0x007F9FB0;
-constexpr uintptr_t RVA_FN_CLIMB_WALL_DETACH     = 0x001FAC70; // Opcode 372: Wall/Vine/Ladder climb detach & fall
+constexpr uintptr_t RVA_FN_CLIMB_WALL_DETACH     = 0x001FAC70; // Opcode 372: Wall/Vine/Ladder climb detach
 constexpr uintptr_t RVA_CLIMB_WALL_DETACH_SLOT   = 0x007F9FC0;
+constexpr uintptr_t RVA_FN_CLIMB_SURFACE_CHECK   = 0x001FACE0; // Opcode 375: Climbable surface / bars attach check
+constexpr uintptr_t RVA_CLIMB_SURFACE_CHECK_SLOT = 0x007F9FD8;
 constexpr uintptr_t RVA_FN_CLIMB_WALL_MOVE       = 0x001FAD40; // Opcode 377: Wall/Vine/Ladder climb movement
 constexpr uintptr_t RVA_CLIMB_WALL_MOVE_SLOT     = 0x007F9FE8;
-constexpr uintptr_t RVA_FN_TRY_ATTACH_CLIMB      = 0x00025C80; // Opcode 394: Monkey bars / ceiling attach
+constexpr uintptr_t RVA_FN_TRY_ATTACH_CLIMB      = 0x00025C80;
 constexpr uintptr_t RVA_FN_CLIMB_REJECT_FALLBACK = 0x00069C20;
 constexpr uintptr_t RVA_CLIMB_DISPATCH_SLOT      = 0x007FA070;
+constexpr uintptr_t RVA_CLIMB_SURFACE_TYPE       = 0x00BC8310; // int32_t non-zero when touching climbable surface
+constexpr uintptr_t RVA_CLIMB_WALL_STATE_2       = 0x00BC832C; // int32_t cleared when climb disallowed
+constexpr uintptr_t RVA_CLIMB_ALLOWED_BYTE       = 0x00BD1361; // uint8_t 1 when allowed to grab wall
+constexpr uintptr_t RVA_CLIMB_TOUCH_SURFACE_FLAG = 0x00BD1930; // int32_t non-zero when touching climbable wall/vine
+constexpr uintptr_t RVA_CLIMB_ACTIVE_STATE_FLAG  = 0x00BD19A0; // int32_t 1 when climbing wall/vine
 
 // Exact croc2.exe Global State RVAs
 constexpr uintptr_t RVA_ACTIVE_SAVE_SLOT         = 0x00B4D5A8; // int32_t save slot index (0..4)
