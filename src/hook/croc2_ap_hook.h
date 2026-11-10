@@ -89,12 +89,15 @@ constexpr uintptr_t RVA_PREV_MAP_SUBMAP          = 0x00BA9B74; // int32_t prev_s
 constexpr uintptr_t RVA_PREV_MAP_TYPE            = 0x00BA9B78; // int32_t prev_map_type
 constexpr uintptr_t RVA_HUD_BINOCULARS           = 0x00BA9B7C; // int32_t 1 = Binoculars owned
 constexpr uintptr_t RVA_HELD_BUTTONS             = 0x00BC4B54; // PS1 PAD bitmask (0x8000=Tail, 0x4000=Jump/Stomp, 0x0C00=Flip)
-constexpr uintptr_t RVA_PRESSED_BUTTONS          = 0x00BC4B5C;
+constexpr uintptr_t RVA_PREV_30HZ_BUTTONS        = 0x00BC4B58; // Previous 30Hz logic tick held buttons
+constexpr uintptr_t RVA_PRESSED_BUTTONS          = 0x00BC4B5C; // 30Hz rising-edge pressed buttons (~prev_30hz & held)
 constexpr uintptr_t RVA_STAGE_COLORED_COUNT      = 0x00BC4DAC; // int32_t 0..5 colored crystals collected in current stage
 constexpr uintptr_t RVA_INV_WHEEL_STATE          = 0x00BC4E9C; // int32_t 2 = inventory wheel ready to open
 constexpr uintptr_t RVA_INV_WHEEL_SEL_INDEX      = 0x00BC4EA4; // int32_t selected slot index in wheel
 constexpr uintptr_t RVA_INV_WHEEL_SLOTS_ARRAY    = 0x00BC4EB0; // 0x1C-byte slot entries in live inventory wheel
+constexpr uintptr_t RVA_PLAYER_PTR               = 0x00BC7CE8; // Pointer to active PlayerStrat instance
 constexpr uintptr_t RVA_MAP_FILENAME_STR         = 0x00BC8710;
+constexpr uintptr_t RVA_CROC_STRAT_DEF           = 0x00BD1540; // Pointer to Croc's on-foot Strat definition
 constexpr uintptr_t RVA_WAD_BUFFER_BASE          = 0x00BD25C0;
 
 // Colored Crystal bitflags per level (all 5 = 0x1F -> activates Golden Gobbo)
@@ -160,6 +163,7 @@ struct BottomToastNotification {
     std::string item_name;
     ItemImportance importance = ItemImportance::FILLER;
     std::string location;
+    uint32_t duration_ms = 5000;
     uint64_t expire_tick = 0;
 };
 

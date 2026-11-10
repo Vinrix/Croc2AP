@@ -46,7 +46,7 @@ static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& fo
 static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std::string& check_desc);
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
-static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 4500);
+static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
 static void send_ws_location_check_locked(int location_id);
 static void reset_pending_native_grants();
 static std::string json_escape(const std::string& s);
@@ -642,6 +642,10 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
                                        const std::string& receiver,
                                        const std::string& location,
                                        uint32_t duration_ms) {
+    if (duration_ms < 5000) {
+        duration_ms = 5000; // Hang around for a full 5 seconds per popup!
+    }
+
     BottomToastNotification toast;
     toast.is_outgoing = is_outgoing;
     toast.item_name = item_name;
@@ -666,11 +670,44 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
         }
     }
 
+    uint64_t now = static_cast<uint64_t>(GetTickCount());
     toast.is_self = is_self;
     toast.sender = s;
     toast.receiver = r;
     toast.location = location;
-    toast.expire_tick = static_cast<uint64_t>(GetTickCount()) + duration_ms;
+    toast.duration_ms = duration_ms;
+    toast.expire_tick = now + duration_ms;
+
+    if (g_state.toast_active && now < g_state.active_toast.expire_tick && g_ui_running.load()) {
+        if (g_state.active_toast.item_name == toast.item_name &&
+            g_state.active_toast.location == toast.location) {
+            g_state.active_toast.expire_tick = now + duration_ms;
+            return;
+        }
+        bool active_is_crystal_filler = (g_state.active_toast.item_name.find("Croc Crystals") != std::string::npos);
+        bool incoming_is_crystal_filler = (toast.item_name.find("Croc Crystals") != std::string::npos);
+        if (active_is_crystal_filler && !incoming_is_crystal_filler) {
+            // Immediately preempt generic crystal filler when a real item/move/key/gem arrives!
+            g_state.active_toast = toast;
+            return;
+        }
+        if (!active_is_crystal_filler && incoming_is_crystal_filler) {
+            // Never let generic crystal filler interrupt or queue behind an important 5-second item popup!
+            return;
+        }
+        if (active_is_crystal_filler && incoming_is_crystal_filler) {
+            g_state.active_toast = toast;
+            return;
+        }
+        if (g_state.toast_queue.empty() ||
+            !(g_state.toast_queue.back().item_name == toast.item_name &&
+              g_state.toast_queue.back().location == toast.location)) {
+            if (g_state.toast_queue.size() < 64) {
+                g_state.toast_queue.push_back(toast);
+            }
+        }
+        return;
+    }
 
     g_state.active_toast = toast;
     g_state.toast_active = true;
@@ -1922,24 +1959,25 @@ static std::string handle_command_locked(const std::string& req) {
     }
 
     if (cmd == "get_bottom_toast") {
+        const BottomToastNotification& t = g_state.toast_queue.empty() ? g_state.active_toast : g_state.toast_queue.back();
         std::ostringstream ss;
-        std::string p1 = g_state.active_toast.sender.empty() ? "Croc" : g_state.active_toast.sender;
-        std::string p2 = g_state.active_toast.receiver.empty() ? "Croc" : g_state.active_toast.receiver;
+        std::string p1 = t.sender.empty() ? "Croc" : t.sender;
+        std::string p2 = t.receiver.empty() ? "Croc" : t.receiver;
         std::string formatted;
-        if (g_state.active_toast.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc")) {
-            formatted = p1 + " got his own " + g_state.active_toast.item_name + "!";
+        if (t.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc")) {
+            formatted = p1 + " got his own " + t.item_name + "!";
         } else {
-            formatted = p1 + " sent " + g_state.active_toast.item_name + " to " + p2 + "!";
+            formatted = p1 + " sent " + t.item_name + " to " + p2 + "!";
         }
         ss << "{\"status\":\"ok\","
            << "\"active\":" << (g_state.toast_active ? "true" : "false") << ","
-           << "\"is_outgoing\":" << (g_state.active_toast.is_outgoing ? "true" : "false") << ","
-           << "\"is_self\":" << ((g_state.active_toast.is_self || p1 == p2) ? "true" : "false") << ","
+           << "\"is_outgoing\":" << (t.is_outgoing ? "true" : "false") << ","
+           << "\"is_self\":" << ((t.is_self || p1 == p2) ? "true" : "false") << ","
            << "\"sender\":\"" << json_escape(p1) << "\","
            << "\"receiver\":\"" << json_escape(p2) << "\","
-           << "\"item_name\":\"" << json_escape(g_state.active_toast.item_name) << "\","
-           << "\"importance\":\"" << importance_to_string(g_state.active_toast.importance) << "\","
-           << "\"location\":\"" << json_escape(g_state.active_toast.location) << "\","
+           << "\"item_name\":\"" << json_escape(t.item_name) << "\","
+           << "\"importance\":\"" << importance_to_string(t.importance) << "\","
+           << "\"location\":\"" << json_escape(t.location) << "\","
            << "\"formatted\":\"" << json_escape(formatted) << "\""
            << "}";
         return ss.str();
@@ -2301,108 +2339,39 @@ static COLORREF get_ap_importance_color(ItemImportance imp) {
     }
 }
 
-static void draw_colored_seg(HDC hdc, int& x, int y, int max_x, const std::string& text, COLORREF col) {
+static void draw_outlined_seg(HDC hdc, HFONT hFontOutline, HFONT hFontFill, int& x, int y, int max_x, const std::string& text, COLORREF col) {
     if (text.empty() || x >= max_x) return;
+
+    const UINT len = static_cast<UINT>(text.size());
+
+    // Pass 1: Crisp opaque black outline + drop shadow (Mario 64 Archipelago floating text style)
+    // Uses NONANTIALIASED_QUALITY so the outer silhouette has zero color-key fringing against RGB(1, 1, 1).
+    SelectObject(hdc, hFontOutline);
+    SetTextColor(hdc, RGB(0, 0, 0));
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            if (dx * dx + dy * dy <= 10) {
+                RECT rc_out = {x + dx, y + dy, max_x + 4, y + dy + 60};
+                ExtTextOutA(hdc, x + dx, y + dy, ETO_CLIPPED, &rc_out, text.c_str(), len, nullptr);
+            }
+        }
+    }
+    // Bold bottom-right drop shadow
+    for (int s = 3; s <= 4; ++s) {
+        RECT rc_sh = {x + s, y + s, max_x + 4, y + s + 60};
+        ExtTextOutA(hdc, x + s, y + s, ETO_CLIPPED, &rc_sh, text.c_str(), len, nullptr);
+    }
+
+    // Pass 2: Smooth anti-aliased colored interior fill (blends cleanly against the solid black outline underneath)
+    SelectObject(hdc, hFontFill);
     SetTextColor(hdc, col);
-    RECT clip_rc = {x, y, max_x, y + 40};
-    ExtTextOutA(hdc, x, y, ETO_CLIPPED, &clip_rc, text.c_str(), static_cast<UINT>(text.size()), nullptr);
+    RECT clip_rc = {x, y, max_x, y + 60};
+    ExtTextOutA(hdc, x, y, ETO_CLIPPED, &clip_rc, text.c_str(), len, nullptr);
+
     SIZE sz{};
     if (GetTextExtentPoint32A(hdc, text.c_str(), static_cast<int>(text.size()), &sz)) {
         x += sz.cx;
     }
-}
-
-static void draw_facet(HDC hdc, const POINT* pts, int count, COLORREF fill_col, COLORREF border_col) {
-    HBRUSH hBrush = CreateSolidBrush(fill_col);
-    HPEN hPen = CreatePen(PS_SOLID, 1, border_col);
-    HGDIOBJ oldB = SelectObject(hdc, hBrush);
-    HGDIOBJ oldP = SelectObject(hdc, hPen);
-    Polygon(hdc, pts, count);
-    SelectObject(hdc, oldB);
-    SelectObject(hdc, oldP);
-    DeleteObject(hBrush);
-    DeleteObject(hPen);
-}
-
-static void draw_faceted_crystal(HDC hdc, int cx, int cy, int radius, COLORREF base_col) {
-    int r = GetRValue(base_col);
-    int g = GetGValue(base_col);
-    int b = GetBValue(base_col);
-
-    COLORREF col_bright = RGB(std::min(255, r + 75), std::min(255, g + 75), std::min(255, b + 75));
-    COLORREF col_mid_light = RGB(std::min(255, r + 40), std::min(255, g + 40), std::min(255, b + 40));
-    COLORREF col_base = base_col;
-    COLORREF col_mid_dark = RGB((r * 3) / 4, (g * 3) / 4, (b * 3) / 4);
-    COLORREF col_deep_dark = RGB(r / 2, g / 2, b / 2);
-    COLORREF border_col = RGB(255, 255, 255);
-
-    int rx = radius;
-    int ry = radius;
-
-    int t_w = static_cast<int>(rx * 0.55f);
-    int t_y = cy - static_cast<int>(ry * 0.75f);
-    int m_w = static_cast<int>(rx * 0.35f);
-    int m_y = cy - static_cast<int>(ry * 0.15f);
-    int b_y = cy + ry;
-
-    // 1. Table (upper trapezoid)
-    POINT p_table[4] = {
-        {cx - t_w, t_y},
-        {cx + t_w, t_y},
-        {cx + m_w, m_y},
-        {cx - m_w, m_y}
-    };
-    draw_facet(hdc, p_table, 4, col_bright, border_col);
-
-    // 2. Upper Left Star
-    POINT p_ul[3] = {
-        {cx - t_w, t_y},
-        {cx - m_w, m_y},
-        {cx - rx, m_y}
-    };
-    draw_facet(hdc, p_ul, 3, col_mid_light, border_col);
-
-    // 3. Upper Right Star
-    POINT p_ur[3] = {
-        {cx + t_w, t_y},
-        {cx + rx, m_y},
-        {cx + m_w, m_y}
-    };
-    draw_facet(hdc, p_ur, 3, col_mid_light, border_col);
-
-    // 4. Center Lower Pavilion
-    POINT p_cl[3] = {
-        {cx - m_w, m_y},
-        {cx + m_w, m_y},
-        {cx, b_y}
-    };
-    draw_facet(hdc, p_cl, 3, col_base, border_col);
-
-    // 5. Left Lower Pavilion
-    POINT p_ll[3] = {
-        {cx - rx, m_y},
-        {cx - m_w, m_y},
-        {cx, b_y}
-    };
-    draw_facet(hdc, p_ll, 3, col_mid_dark, border_col);
-
-    // 6. Right Lower Pavilion
-    POINT p_rl[3] = {
-        {cx + m_w, m_y},
-        {cx + rx, m_y},
-        {cx, b_y}
-    };
-    draw_facet(hdc, p_rl, 3, col_deep_dark, border_col);
-
-    // Sparkle star on upper-left facet
-    int sx = cx - static_cast<int>(rx * 0.45f);
-    int sy = cy - static_cast<int>(ry * 0.45f);
-    HPEN whitePen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
-    HGDIOBJ oldPen = SelectObject(hdc, whitePen);
-    MoveToEx(hdc, sx - 4, sy, nullptr); LineTo(hdc, sx + 5, sy);
-    MoveToEx(hdc, sx, sy - 4, nullptr); LineTo(hdc, sx, sy + 5);
-    SelectObject(hdc, oldPen);
-    DeleteObject(whitePen);
 }
 
 static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2418,6 +2387,11 @@ static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
         HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
 
+        // Fill entire surface with transparent color key RGB(1, 1, 1) — no box or border!
+        HBRUSH keyBrush = CreateSolidBrush(RGB(1, 1, 1));
+        FillRect(memDC, &rc, keyBrush);
+        DeleteObject(keyBrush);
+
         BottomToastNotification toast_snap;
         bool active = false;
         {
@@ -2427,105 +2401,78 @@ static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         }
 
         if (active) {
-            // Deep Jungle / Dark Slate background
-            HBRUSH bgBrush = CreateSolidBrush(RGB(10, 24, 18));
-            FillRect(memDC, &rc, bgBrush);
-            DeleteObject(bgBrush);
-
-            COLORREF border_col = (toast_snap.importance == ItemImportance::TRAP)
-                ? RGB(255, 115, 95)
-                : ((toast_snap.importance == ItemImportance::PROGRESSION)
-                    ? RGB(255, 215, 0)
-                    : ((toast_snap.importance == ItemImportance::USEFUL)
-                        ? RGB(110, 165, 255)
-                        : RGB(46, 204, 113)));
-
-            // Outer 2px glowing frame
-            HPEN framePen = CreatePen(PS_SOLID, 2, border_col);
-            HGDIOBJ oldPen = SelectObject(memDC, framePen);
-            HGDIOBJ oldBrush = SelectObject(memDC, GetStockObject(NULL_BRUSH));
-            RoundRect(memDC, 2, 2, w - 2, h - 2, 20, 20);
-
-            // Inner accent glow line
-            COLORREF inner_col = (toast_snap.importance == ItemImportance::TRAP)
-                ? RGB(255, 60, 40)
-                : RGB(46, 204, 113);
-            HPEN innerPen = CreatePen(PS_SOLID, 1, inner_col);
-            SelectObject(memDC, innerPen);
-            RoundRect(memDC, 4, 4, w - 4, h - 4, 16, 16);
-            SelectObject(memDC, oldPen);
-            SelectObject(memDC, oldBrush);
-            DeleteObject(framePen);
-            DeleteObject(innerPen);
-
-            // Large 48px faceted crystal icon on left (100% bigger!)
-            draw_faceted_crystal(memDC, 46, h / 2, 23, get_ap_importance_color(toast_snap.importance));
-
             const char* font_family = g_croc_font_loaded ? "Darumadrop One" : "Segoe UI";
-            HFONT hFontMain = CreateFontA(26, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                          DEFAULT_PITCH | FF_SWISS, font_family);
-            HFONT hFontSub = CreateFontA(17, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                         DEFAULT_PITCH | FF_SWISS, font_family);
+            HFONT hFontMainOut = CreateFontA(36, 0, 0, 0, FW_EXTRABOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
+                                             DEFAULT_PITCH | FF_SWISS, font_family);
+            HFONT hFontMainFill = CreateFontA(36, 0, 0, 0, FW_EXTRABOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                                              DEFAULT_PITCH | FF_SWISS, font_family);
+            HFONT hFontSubOut = CreateFontA(25, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
+                                            DEFAULT_PITCH | FF_SWISS, font_family);
+            HFONT hFontSubFill = CreateFontA(25, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                                             DEFAULT_PITCH | FF_SWISS, font_family);
 
             SetBkMode(memDC, TRANSPARENT);
 
             const COLORREF col_gold = RGB(255, 230, 95);       // Archipelago Player Gold
-            const COLORREF col_text = RGB(242, 246, 244);      // Crisp text
+            const COLORREF col_text = RGB(245, 248, 250);      // Crisp white text
             const COLORREF col_item = get_ap_importance_color(toast_snap.importance);
             const COLORREF col_loc  = RGB(85, 240, 140);       // Archipelago Location Green
 
             std::string p1 = toast_snap.sender.empty() ? "Croc" : toast_snap.sender;
             std::string p2 = toast_snap.receiver.empty() ? "Croc" : toast_snap.receiver;
 
-            // Line 1: Main Announcement
-            HGDIOBJ oldFont = SelectObject(memDC, hFontMain);
-            int cur_x = 90;
-            int line1_y = 15;
-            int max_x = w - 24;
+            // Line 1: Main Floating Announcement (Mario 64 Archipelago bottom-left style)
+            HGDIOBJ oldFont = SelectObject(memDC, hFontMainFill);
+            int cur_x = 12;
+            int line1_y = 6;
+            int max_x = w - 12;
 
-            if (toast_snap.importance == ItemImportance::TRAP && (toast_snap.item_name.find("Required") != std::string::npos || toast_snap.item_name.find("Locked") != std::string::npos)) {
-                // Door or Vehicle Gate Toast
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, toast_snap.item_name, RGB(255, 115, 95));
+            if (toast_snap.importance == ItemImportance::TRAP &&
+                (toast_snap.item_name.find("Required") != std::string::npos ||
+                 toast_snap.item_name.find("Locked") != std::string::npos)) {
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, toast_snap.item_name, RGB(255, 115, 95));
             } else if (toast_snap.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc")) {
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, p1, col_gold);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, " found ", col_text);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, "!", col_text);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, "GOT ", col_text);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
             } else if (toast_snap.is_outgoing) {
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, p1, col_gold);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, " sent ", col_text);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, " to ", col_text);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, p2, col_gold);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, "!", col_text);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, "SENT ", col_text);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, " TO ", col_text);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, p2, col_gold);
             } else {
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, p1, col_gold);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, " sent ", col_text);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, " to ", col_text);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, p2, col_gold);
-                draw_colored_seg(memDC, cur_x, line1_y, max_x, "!", col_text);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, "GOT ", col_text);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, " FROM ", col_text);
+                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, p1, col_gold);
             }
 
-            // Line 2: Subtext / Location / Context
-            SelectObject(memDC, hFontSub);
-            int line2_x = 90;
-            int line2_y = 51;
+            // Line 2: Subtext / Sender / Location
+            int line2_x = 12;
+            int line2_y = 48;
 
             if (!toast_snap.location.empty() && toast_snap.location != "Padlock" && toast_snap.location != "License") {
-                draw_colored_seg(memDC, line2_x, line2_y, max_x, "Location: ", RGB(165, 230, 195));
-                draw_colored_seg(memDC, line2_x, line2_y, max_x, toast_snap.location, col_loc);
+                if (toast_snap.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc")) {
+                    draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, "FROM ", col_text);
+                    draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, toast_snap.location, col_loc);
+                } else {
+                    draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, toast_snap.location, col_loc);
+                }
             } else if (toast_snap.importance == ItemImportance::TRAP) {
-                draw_colored_seg(memDC, line2_x, line2_y, max_x, "Ill effect lasts a flat 10 seconds", RGB(255, 160, 140));
+                draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, "Ill effect lasts a flat 10 seconds", RGB(255, 160, 140));
             } else {
-                draw_colored_seg(memDC, line2_x, line2_y, max_x, "Archipelago Randomizer", RGB(165, 230, 195));
+                draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, "FROM ", col_text);
+                draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, p1, col_gold);
             }
 
             SelectObject(memDC, oldFont);
-            DeleteObject(hFontMain);
-            DeleteObject(hFontSub);
+            DeleteObject(hFontMainOut);
+            DeleteObject(hFontMainFill);
+            DeleteObject(hFontSubOut);
+            DeleteObject(hFontSubFill);
         }
 
         BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
@@ -2568,17 +2515,17 @@ static void background_tick_worker() {
     wcToast.lpszClassName = "Croc2APToastWndClass";
     RegisterClassExA(&wcToast);
 
-    // 100% enlarged toast window: 880x92 (was 620x46)
+    // Boxless floating text toast window (Mario 64 Archipelago style)
     g_toast_hwnd = CreateWindowExA(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
         "Croc2APToastWndClass",
         "Croc 2 AP Notification Toast",
         WS_POPUP,
-        0, 0, 880, 92,
+        0, 0, 960, 96,
         nullptr, nullptr, hInst, nullptr
     );
     if (g_toast_hwnd) {
-        SetLayeredWindowAttributes(g_toast_hwnd, 0, 242, LWA_ALPHA);
+        SetLayeredWindowAttributes(g_toast_hwnd, RGB(1, 1, 1), 255, LWA_COLORKEY);
         ShowWindow(g_toast_hwnd, SW_HIDE);
     }
 
@@ -2606,7 +2553,8 @@ static void background_tick_worker() {
                     if (!g_state.toast_queue.empty()) {
                         g_state.active_toast = g_state.toast_queue.front();
                         g_state.toast_queue.pop_front();
-                        g_state.active_toast.expire_tick = now + 4200;
+                        uint32_t dur = g_state.active_toast.duration_ms >= 5000 ? g_state.active_toast.duration_ms : 5000;
+                        g_state.active_toast.expire_tick = now + dur;
                         show_toast = true;
                     } else {
                         g_state.toast_active = false;
@@ -2626,12 +2574,12 @@ static void background_tick_worker() {
                     RECT grc;
                     if (GetWindowRect(game_hwnd, &grc)) {
                         int gw = grc.right - grc.left;
-                        int tw = 880;
-                        if (tw > gw - 32) tw = gw - 32;
-                        if (tw < 350) tw = 350;
-                        int th = 92;
-                        int tx = grc.left + (gw - tw) / 2;
-                        int ty = grc.bottom - th - 32;
+                        int tw = gw - 36;
+                        if (tw > 1100) tw = 1100;
+                        if (tw < 380) tw = 380;
+                        int th = 96;
+                        int tx = grc.left + 18;
+                        int ty = grc.bottom - th - 18;
                         SetWindowPos(g_toast_hwnd, HWND_TOPMOST, tx, ty, tw, th, SWP_NOACTIVATE | SWP_SHOWWINDOW);
                     }
                 } else if (!IsWindowVisible(g_toast_hwnd)) {
@@ -3091,20 +3039,19 @@ static void drain_pending_native_inventory_grants() {
     if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_PAUSE_MENU_ACTIVE) != 0) return; // Wait until unpaused
 
     auto fn_add_item = reinterpret_cast<FnAddInventoryItem>(g_exe_base + RVA_FN_ADD_INVENTORY_ITEM);
-    auto fn_rebuild  = reinterpret_cast<FnRebuildInvWheel>(g_exe_base + RVA_FN_REBUILD_INV_WHEEL);
     auto i32 = [](uintptr_t rva) -> int32_t& {
         return *reinterpret_cast<int32_t*>(g_exe_base + rva);
     };
 
-    bool changed = false;
-
     // Helper: fn_add_item(item_type, show_popup=0, delta=diff, 0, 0)
-    // In croc2.exe, arg3 (R8) is delta to add, arg2 (RDX) is modal popup flag.
+    // In croc2.exe, fn_add_item updates the count in 0x140BA9B40..B60, appends the slot to 0x140BC4EB0,
+    // and updates RVA_INV_WHEEL_SLOT_COUNT (0x140BA9B64).
+    // IMPORTANT: Never call 0x140045D30 (fn_rebuild) or fn_add_item(4, ...) on every frame, because
+    // 0x140045D30 zeroes RVA_INV_KEYS and resets RVA_INV_WHEEL_SEL_INDEX (0x140BC4EA4) to 0, locking the wheel!
     auto sync_item = [&](int32_t current_count, int32_t desired_count, int32_t item_type) {
         if (desired_count > current_count) {
             int32_t diff = desired_count - current_count;
             fn_add_item(item_type, 0, diff, 0, 0);
-            changed = true;
         }
     };
 
@@ -3129,11 +3076,10 @@ static void drain_pending_native_inventory_grants() {
     // Jigsaw Pieces -> Wheel item_type 10 (0x140BA9B60)
     sync_item(i32(RVA_INV_JIGSAW_PIECES), g_state.jigsaw_pieces, 10);
 
-    // Binoculars -> Wheel item_type 4 (0x140BA9B5C) + HUD flag (0x140BA9B7C)
-    if (g_state.binoculars && i32(RVA_INV_BINOCULARS) == 0) {
-        fn_add_item(4, 0, 1, 0, 0);
+    // Binoculars -> Native HUD flag at 0x140BA9B7C (see 0x140065FE0 in croc2.exe).
+    // Note: fn_add_item(4, ...) zeroes 0x140BA9B5C, so we must NOT check RVA_INV_BINOCULARS == 0!
+    if (g_state.binoculars && i32(RVA_HUD_BINOCULARS) == 0) {
         i32(RVA_HUD_BINOCULARS) = 1;
-        changed = true;
     }
 
     // Keys -> Wheel item_type 12 (0x140BA9B54) + HUD key counter (0x140BA9B30)
@@ -3151,11 +3097,13 @@ static void drain_pending_native_inventory_grants() {
     g_pending_colored_gems.store(0);
 
     reset_pending_native_grants();
+    g_need_full_inventory_sync.store(false);
 
-    if (changed || g_need_full_inventory_sync.exchange(false)) {
-        // Rebuild the 0x1C-byte slot array at 0x140BC4EB0, recompute [0x140BA9B64] slot count,
-        // and set [0x140BC4E9C] = 2 so the inventory wheel can be opened and cycled immediately with L2/R2.
-        fn_rebuild();
+    // Ensure the inventory wheel state is ready (2) whenever at least 1 wheel item is owned,
+    // without touching RVA_INV_WHEEL_SEL_INDEX (0x140BC4EA4) or RVA_INV_WHEEL_CUR_ITEM_ID (0x140BA9B68)
+    // so the player can freely cycle through items with L2 / R2!
+    if (i32(RVA_INV_WHEEL_SLOT_COUNT) > 0 && i32(RVA_INV_WHEEL_STATE) == 0) {
+        i32(RVA_INV_WHEEL_STATE) = 2;
     }
 }
 
@@ -3279,27 +3227,37 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
                 g_ground_jump_in_progress = false;
             } else if (!g_state.abilities.butt_stomp) {
-                DWORD now_tick = GetTickCount();
                 bool jump_button_down = (buttons & 0x4000u) != 0;
-                bool jump_newly_pressed = (newly_pressed & 0x4000u) != 0;
-                bool is_airborne = (now_tick - g_last_jump_press_tick < 1400);
 
-                if (!is_airborne && jump_newly_pressed) {
-                    // First ground jump registered
-                    g_last_jump_press_tick = now_tick;
-                    g_ground_jump_in_progress = true;
-                } else if (is_airborne) {
-                    if (!jump_button_down) {
-                        // Released Jump button in mid-air
+                // Read Croc's real in-game state machine (PlayerStrat + 0x118 -> vars + 0x2BC, and floor_poly at + 0xC8)
+                // State 0x8000 = Jumping / Airborne; 0x1000 = Standing/Walking; 0x2000 = Running; 0x3000 = 180-turn.
+                bool croc_is_airborne = false;
+                uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
+                uintptr_t croc_strat_def = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_CROC_STRAT_DEF);
+                if (player_strat != 0 &&
+                    *reinterpret_cast<uintptr_t*>(player_strat + 0x110) == croc_strat_def) {
+                    uint64_t floor_poly = *reinterpret_cast<uint64_t*>(player_strat + 0xC8);
+                    uintptr_t vars = *reinterpret_cast<uintptr_t*>(player_strat + 0x118);
+                    int32_t croc_state = (vars != 0) ? *reinterpret_cast<int32_t*>(vars + 0x2BC) : 0;
+                    croc_is_airborne = (croc_state == 0x8000) || (floor_poly == 0);
+                }
+
+                // In croc2.exe (0x140041220), 30Hz rising-edge button presses (RVA_PRESSED_BUTTONS, 0x140BC4B5C)
+                // are computed as (~[RVA_PREV_30HZ_BUTTONS] & [RVA_HELD_BUTTONS]).
+                // By clearing 0x4000 whenever Croc is airborne and either Jump was released or [RVA_PREV_30HZ_BUTTONS]
+                // does not already have 0x4000 held from the ground takeoff tick, a second rising edge of 0x4000
+                // can NEVER occur in mid-air even if the player spams Jump at 240Hz!
+                uint32_t prev_30hz = *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PREV_30HZ_BUTTONS);
+                if (croc_is_airborne) {
+                    if (!jump_button_down || ((prev_30hz & 0x4000u) == 0)) {
                         g_ground_jump_in_progress = false;
                     }
-
                     if (!g_ground_jump_in_progress) {
-                        // Mid-air jump / stomp is strictly blocked on every frame while airborne!
                         buttons &= ~0x4000u;
+                        *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PRESSED_BUTTONS) &= ~0x4000u;
                     }
                 } else {
-                    g_ground_jump_in_progress = false;
+                    g_ground_jump_in_progress = jump_button_down;
                 }
 
                 // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
