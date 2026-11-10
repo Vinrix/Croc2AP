@@ -96,13 +96,15 @@ using FnRebuildInvWheel = void(__fastcall*)();
 using FnGiveNativeNoArg = void(__fastcall*)();
 using FnAddColoredCrystal = void(__fastcall*)(int32_t color_1_to_5);
 
-using FnTryAttachClimb = void(__fastcall*)(void* player_strat);
+using FnClimbAction = void(__fastcall*)(void* player_strat);
 
 static FnOnDoorTransition g_orig_on_door_transition = nullptr;
 static FnLoadMap g_orig_load_map = nullptr;
 static FnReadInput g_orig_read_input = nullptr;
 static FnSaveGameSlot g_orig_save_game_slot = nullptr;
-static FnTryAttachClimb g_orig_try_attach_climb = nullptr;
+static FnClimbAction g_orig_climb_wall_idle = nullptr;
+static FnClimbAction g_orig_climb_wall_move = nullptr;
+static FnClimbAction g_orig_try_attach_climb = nullptr;
 
 // Canonical table of all 20 Village Stage Doors, their vanilla WADs, exact Archipelago IDs, and authentic in-game names
 struct DoorWadEntry {
@@ -3072,9 +3074,9 @@ static void reset_pending_native_grants() {
     g_pending_colored_gems.store(0);
 }
 
-// Runs on croc2.exe's own game thread (from Hooked_ReadInput). Pushes every pending AP / Solo item
+// Runs on croc2.exe's own game thread (from Hooked_ReadInput). Synchronizes every unlocked AP / Solo item
 // into the REAL in-game inventory wheel + HUD using croc2.exe's native inventory manager, so the
-// items visibly pop up and actually exist when the player opens their inventory.
+// items are always present, the wheel is populated, and the player can immediately cycle through them with L2/R2.
 static void drain_pending_native_inventory_grants() {
     if (!g_exe_base) return;
 
@@ -3095,44 +3097,64 @@ static void drain_pending_native_inventory_grants() {
     };
 
     bool changed = false;
-    // Grant at most one of each item type per frame. Pass show_popup = 0 so background item grants
-    // do not trigger modal UI popup routines during gameplay polling.
-    auto grant_one = [&](std::atomic<int>& pending, int32_t item_type) -> bool {
-        int n = pending.load();
-        if (n <= 0) return false;
-        pending.fetch_sub(1);
-        fn_add_item(item_type, 1, 0, 0, 0);
-        changed = true;
-        return true;
+
+    // Helper: fn_add_item(item_type, show_popup=0, delta=diff, 0, 0)
+    // In croc2.exe, arg3 (R8) is delta to add, arg2 (RDX) is modal popup flag.
+    auto sync_item = [&](int32_t current_count, int32_t desired_count, int32_t item_type) {
+        if (desired_count > current_count) {
+            int32_t diff = desired_count - current_count;
+            fn_add_item(item_type, 0, diff, 0, 0);
+            changed = true;
+        }
     };
 
-    grant_one(g_pending_red_jellies, 5);    // Gummi Jump (Red Jelly)      -> 0x140BA9B48
-    grant_one(g_pending_green_jellies, 6);  // High Jelly Jump (Green)     -> 0x140BA9B50
-    grant_one(g_pending_blue_jellies, 7);   // Jelly Jump (Blue Jelly)     -> 0x140BA9B4C
-    grant_one(g_pending_jigsaws, 10);       // Jigsaw Piece                -> 0x140BA9B60
-    grant_one(g_pending_golden_gobbos, 2);  // Golden Gobbo / Trophy       -> 0x140BA9B40
+    // Gummi Jump (Red Jelly) -> Wheel item_type 5 (0x140BA9B48)
+    sync_item(i32(RVA_INV_RED_JELLIES), g_state.red_jellies, 5);
 
-    if (grant_one(g_pending_clockwork, 8)) { // Clockwork Gobbo (wheel + HUD counter)
-        int32_t& hud = i32(RVA_HUD_CLOCKWORK_GOBBOS);
-        if (hud < 9) hud += 1;
+    // Jelly Jump (Blue Jelly) -> Wheel item_type 7 (0x140BA9B4C)
+    sync_item(i32(RVA_INV_BLUE_JELLIES), g_state.blue_jellies, 7);
+
+    // High Jelly Jump (Green Jelly) -> Wheel item_type 6 (0x140BA9B50)
+    sync_item(i32(RVA_INV_GREEN_JELLIES), g_state.green_jellies, 6);
+
+    // Clockwork Gobbo -> Wheel item_type 8 (0x140BA9B58) + HUD counter (0x140BA9B38)
+    if (g_state.clockwork_gobbos > i32(RVA_INV_CLOCKWORK)) {
+        sync_item(i32(RVA_INV_CLOCKWORK), g_state.clockwork_gobbos, 8);
+        i32(RVA_HUD_CLOCKWORK_GOBBOS) = std::min(9, g_state.clockwork_gobbos);
     }
-    if (grant_one(g_pending_keys, 12)) {     // Key (wheel + HUD key counter)
-        i32(RVA_HUD_KEYS) += 1;
-    }
-    if (grant_one(g_pending_binoculars, 4)) { // Binoculars (wheel + camera/HUD flag)
+
+    // Golden Gobbos / Trophies -> Wheel item_type 2 (0x140BA9B40)
+    sync_item(i32(RVA_INV_GOLDEN_GOBBOS), g_state.golden_gobbos, 2);
+
+    // Jigsaw Pieces -> Wheel item_type 10 (0x140BA9B60)
+    sync_item(i32(RVA_INV_JIGSAW_PIECES), g_state.jigsaw_pieces, 10);
+
+    // Binoculars -> Wheel item_type 4 (0x140BA9B5C) + HUD flag (0x140BA9B7C)
+    if (g_state.binoculars && i32(RVA_INV_BINOCULARS) == 0) {
+        fn_add_item(4, 0, 1, 0, 0);
         i32(RVA_HUD_BINOCULARS) = 1;
-        g_pending_binoculars.store(0);       // Binoculars are a single unlock
+        changed = true;
     }
 
+    // Keys -> Wheel item_type 12 (0x140BA9B54) + HUD key counter (0x140BA9B30)
+    int total_keys = g_state.silver_keys + g_state.gold_keys;
+    if (total_keys > i32(RVA_INV_KEYS)) {
+        sync_item(i32(RVA_INV_KEYS), total_keys, 12);
+        i32(RVA_HUD_KEYS) = total_keys;
+    }
+
+    // Wallet Crystals
     int crystals = g_pending_wallet_crystals.exchange(0);
     if (crystals > 0) {
         i32(RVA_WALLET_CRYSTALS) += crystals;
     }
-    g_pending_colored_gems.store(0); // Colored crystal counts are mirrored by the per-stage crystal sync above
+    g_pending_colored_gems.store(0);
+
+    reset_pending_native_grants();
 
     if (changed || g_need_full_inventory_sync.exchange(false)) {
         // Rebuild the 0x1C-byte slot array at 0x140BC4EB0, recompute [0x140BA9B64] slot count,
-        // and set [0x140BC4E9C] = 2 so the inventory wheel can be opened immediately.
+        // and set [0x140BC4E9C] = 2 so the inventory wheel can be opened and cycled immediately with L2/R2.
         fn_rebuild();
     }
 }
@@ -3321,46 +3343,70 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
     return buttons;
 }
 
-// Hooked Opcode 394: Climbing Attachment Dispatch Slot (0x140025c80)
-// When Climbing Claws is not unlocked in the seed, Croc is prevented from latching onto climbable surfaces.
-// Instead of attaching, this smoothly invokes vanilla fallback 0x140069c20 (standard non-climbing movement).
+static void trigger_climb_blocked_toast_locked() {
+    static DWORD s_last_climb_warn_tick = 0;
+    DWORD now_tick = GetTickCount();
+    if (now_tick - s_last_climb_warn_tick > 2500) {
+        s_last_climb_warn_tick = now_tick;
+        trigger_bottom_toast_locked(
+            false, "Climbing Claws Required!",
+            ItemImportance::TRAP, "Logic", "Croc",
+            "Climbing surface requires Climbing Claws!", 2500
+        );
+        g_state.add_log("Climb Blocked: Climbing Claws Required!");
+        g_state.pending_events_json.push_back(
+            "{\"event\":\"climb_blocked\",\"message\":\"Climbing Claws Required!\"}"
+        );
+    }
+}
+
+// Hooked Opcode 370: Wall/Vine/Ladder Climb Idle / Attachment Check (0x1401FAA90)
+static void __fastcall Hooked_ClimbWallIdle(void* player_strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            trigger_climb_blocked_toast_locked();
+        }
+        if (player_strat) {
+            auto fn_detach = reinterpret_cast<void(__fastcall*)(void*)>(g_exe_base + RVA_FN_CLIMB_WALL_DETACH);
+            fn_detach(player_strat);
+        }
+        return;
+    }
+    if (g_orig_climb_wall_idle) {
+        g_orig_climb_wall_idle(player_strat);
+    }
+}
+
+// Hooked Opcode 377: Wall/Vine/Ladder Climb Movement (0x1401FAD40)
+static void __fastcall Hooked_ClimbWallMove(void* player_strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            trigger_climb_blocked_toast_locked();
+        }
+        if (player_strat) {
+            auto fn_detach = reinterpret_cast<void(__fastcall*)(void*)>(g_exe_base + RVA_FN_CLIMB_WALL_DETACH);
+            fn_detach(player_strat);
+        }
+        return;
+    }
+    if (g_orig_climb_wall_move) {
+        g_orig_climb_wall_move(player_strat);
+    }
+}
+
+// Hooked Opcode 394: Monkey Bars / Ceiling Attachment Dispatch Slot (0x140025c80)
 static void __fastcall Hooked_TryAttachClimb(void* player_strat) {
     if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
-        // Run collision check to see if player actually touched a climbable surface:
-        // 0x140062490(player_strat) -> climbable polygon
-        auto fn_find_climb = reinterpret_cast<void*(__fastcall*)(void*)>(g_exe_base + 0x00062490);
-        void* poly = fn_find_climb(player_strat);
-        if (poly != nullptr) {
-            // Check bounding / facing box:
-            // 0x1401e71d0(poly->c, poly->10, poly->18, poly->14)
-            auto fn_box_test = reinterpret_cast<uint8_t(__fastcall*)(int32_t, int32_t, int32_t, int32_t)>(g_exe_base + 0x001E71D0);
-            int32_t c = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(poly) + 0x0C);
-            int32_t d = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(poly) + 0x10);
-            int32_t r8 = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(poly) + 0x18);
-            int32_t r9 = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(poly) + 0x14);
-            if (fn_box_test(c, d, r8, r9) != 0) {
-                // Croc IS touching and facing a climbable wall, but lacks Climbing Claws!
-                static DWORD s_last_climb_warn_tick = 0;
-                DWORD now_tick = GetTickCount();
-                if (now_tick - s_last_climb_warn_tick > 2500) {
-                    s_last_climb_warn_tick = now_tick;
-                    std::lock_guard<std::mutex> lock(g_mutex);
-                    trigger_bottom_toast_locked(
-                        false, "Climbing Claws Required!",
-                        ItemImportance::TRAP, "Logic", "Croc",
-                        "Climbing surface requires Climbing Claws!", 2500
-                    );
-                    g_state.add_log("Climb Blocked: Climbing Claws Required!");
-                    g_state.pending_events_json.push_back(
-                        "{\"event\":\"climb_blocked\",\"message\":\"Climbing Claws Required!\"}"
-                    );
-                }
-            }
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            trigger_climb_blocked_toast_locked();
         }
-        // Always reject climbing when Climbing Claws is not unlocked:
-        // call the exact vanilla fallback routine 0x140069c20
-        auto fn_fallback = reinterpret_cast<void(__fastcall*)(void*)>(g_exe_base + RVA_FN_CLIMB_REJECT_FALLBACK);
-        fn_fallback(player_strat);
+        if (player_strat) {
+            auto fn_fallback = reinterpret_cast<void(__fastcall*)(void*)>(g_exe_base + RVA_FN_CLIMB_REJECT_FALLBACK);
+            fn_fallback(player_strat);
+        }
         return;
     }
     if (g_orig_try_attach_climb) {
@@ -3441,21 +3487,27 @@ static void install_croc2_engine_hooks() {
         VirtualProtect(fn_save_slot, 32, old_prot, &old_prot);
     }
 
-    // 5. Hook Climbing Attachment Dispatch Slot (0x007FA070 in .rdata, pointing to 0x140025c80)
-    uintptr_t* p_climb_slot = reinterpret_cast<uintptr_t*>(g_exe_base + RVA_CLIMB_DISPATCH_SLOT);
-    if (*p_climb_slot == (g_exe_base + RVA_FN_TRY_ATTACH_CLIMB)) {
-        g_orig_try_attach_climb = reinterpret_cast<FnTryAttachClimb>(*p_climb_slot);
-        DWORD old_prot_climb = 0;
-        VirtualProtect(p_climb_slot, sizeof(uintptr_t), PAGE_READWRITE, &old_prot_climb);
-        *p_climb_slot = reinterpret_cast<uintptr_t>(&Hooked_TryAttachClimb);
-        VirtualProtect(p_climb_slot, sizeof(uintptr_t), old_prot_climb, &old_prot_climb);
-    }
+    // 5. Hook Action Dispatch Table Climbing Slots (Vine/Wall/Ladder & Monkey Bars)
+    auto hook_dispatch_slot = [](uintptr_t slot_rva, uintptr_t expected_target, uintptr_t hooked_fn, FnClimbAction& orig_fn) {
+        uintptr_t* p_slot = reinterpret_cast<uintptr_t*>(g_exe_base + slot_rva);
+        if (*p_slot == (g_exe_base + expected_target)) {
+            orig_fn = reinterpret_cast<FnClimbAction>(*p_slot);
+            DWORD old_prot_slot = 0;
+            VirtualProtect(p_slot, sizeof(uintptr_t), PAGE_READWRITE, &old_prot_slot);
+            *p_slot = hooked_fn;
+            VirtualProtect(p_slot, sizeof(uintptr_t), old_prot_slot, &old_prot_slot);
+        }
+    };
+
+    hook_dispatch_slot(RVA_CLIMB_WALL_IDLE_SLOT, RVA_FN_CLIMB_WALL_IDLE, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallIdle), g_orig_climb_wall_idle);
+    hook_dispatch_slot(RVA_CLIMB_WALL_MOVE_SLOT, RVA_FN_CLIMB_WALL_MOVE, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallMove), g_orig_climb_wall_move);
+    hook_dispatch_slot(RVA_CLIMB_DISPATCH_SLOT,  RVA_FN_TRY_ATTACH_CLIMB, reinterpret_cast<uintptr_t>(&Hooked_TryAttachClimb), g_orig_try_attach_climb);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ClimbAttach).");
+    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ClimbWall, ClimbBars).");
 }
 
 } // namespace croc2_ap

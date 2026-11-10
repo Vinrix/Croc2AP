@@ -42,7 +42,13 @@ constexpr uintptr_t RVA_FN_GIVE_CLOCKWORK_NAT    = 0x00066010;
 constexpr uintptr_t RVA_FN_GIVE_HEART_POT_NAT    = 0x00066120;
 constexpr uintptr_t RVA_FN_LOAD_MAP              = 0x00070B60;
 constexpr uintptr_t RVA_FN_SAVE_GAME_SLOT        = 0x001DCE40;
-constexpr uintptr_t RVA_FN_TRY_ATTACH_CLIMB      = 0x00025C80;
+constexpr uintptr_t RVA_FN_CLIMB_WALL_IDLE       = 0x001FAA90; // Opcode 370: Wall/Vine/Ladder climb idle
+constexpr uintptr_t RVA_CLIMB_WALL_IDLE_SLOT     = 0x007F9FB0;
+constexpr uintptr_t RVA_FN_CLIMB_WALL_DETACH     = 0x001FAC70; // Opcode 372: Wall/Vine/Ladder climb detach & fall
+constexpr uintptr_t RVA_CLIMB_WALL_DETACH_SLOT   = 0x007F9FC0;
+constexpr uintptr_t RVA_FN_CLIMB_WALL_MOVE       = 0x001FAD40; // Opcode 377: Wall/Vine/Ladder climb movement
+constexpr uintptr_t RVA_CLIMB_WALL_MOVE_SLOT     = 0x007F9FE8;
+constexpr uintptr_t RVA_FN_TRY_ATTACH_CLIMB      = 0x00025C80; // Opcode 394: Monkey bars / ceiling attach
 constexpr uintptr_t RVA_FN_CLIMB_REJECT_FALLBACK = 0x00069C20;
 constexpr uintptr_t RVA_CLIMB_DISPATCH_SLOT      = 0x007FA070;
 

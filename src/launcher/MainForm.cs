@@ -85,6 +85,7 @@ namespace Croc2Launcher
 
         private readonly List<ApNetworkItem> _receivedItemsQueue = new List<ApNetworkItem>();
         private int _itemsAppliedCount = 0;
+        private int _soloItemsReceivedCount = 0;
         private readonly HashSet<long> _checkedLocations = new HashSet<long>();
         private Dictionary<string, object> _cachedSlotData = null;
         private bool _slotDataConfigured = false;
@@ -1240,6 +1241,10 @@ namespace Croc2Launcher
                 );
 
                 LogFormatted("Launching Croc 2 in Standalone Randomizer Mode (Offline Seed)...", Color.DeepSkyBlue);
+                _soloItemsReceivedCount = 0;
+                _checkedLocations.Clear();
+                _lblChecksCount.Text = "Checks: 0";
+                _lblItemsCount.Text = "Items Received: 0";
                 GameDetector.LaunchGame(_paths, false);
                 LogFormatted("Croc 2 Randomizer started. In-game bottom toasts and rando mechanics active!", Color.LightGreen);
                 _pollTimer.Start();
@@ -1440,6 +1445,11 @@ namespace Croc2Launcher
                                 else if (impVal == 3) importance = "trap";
                             }
                             LogItemEvent(false, itemName, importance, senderName, "Croc", locName);
+                            if (!_apClient.IsConnected)
+                            {
+                                _soloItemsReceivedCount++;
+                                _lblItemsCount.Text = "Items Received: " + _soloItemsReceivedCount;
+                            }
                         }
                         else if (evType == "key_received")
                         {
