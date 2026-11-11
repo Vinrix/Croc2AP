@@ -5,6 +5,7 @@
 #include <winhttp.h>
 
 #include "croc2_ap_hook.h"
+#include "logo_zmod_data.h"
 
 #include <algorithm>
 #include <atomic>
@@ -98,6 +99,12 @@ using FnAddColoredCrystal = void(__fastcall*)(int32_t color_1_to_5);
 
 using FnClimbAction = void(__fastcall*)(void* player_strat);
 using FnStratVmPushInt = void(__fastcall*)(void* player_strat, int32_t val);
+using FnStratVmHandler = void(__fastcall*)(void* strat);
+using FnPlaySfxNoArg = void(__fastcall*)();
+using FnPlaySfx1Arg = void(__fastcall*)(int32_t arg);
+
+using FnGetZModForPSX = void*(__fastcall*)(void* renderer, void* psx_model);
+using FnDrawZMod = void(__fastcall*)(void* renderer, void* zmod, float* transform_mat, void* draw_params);
 
 static FnOnDoorTransition g_orig_on_door_transition = nullptr;
 static FnLoadMap g_orig_load_map = nullptr;
@@ -105,6 +112,16 @@ static FnReadInput g_orig_read_input = nullptr;
 static FnSaveGameSlot g_orig_save_game_slot = nullptr;
 static FnClimbAction g_orig_climb_wall_idle = nullptr;
 static FnClimbAction g_orig_climb_surface_check = nullptr;
+
+static FnStratVmHandler g_orig_pickup_heart_pot = nullptr;
+static FnStratVmHandler g_orig_pickup_inv_item = nullptr;
+static FnStratVmHandler g_orig_pickup_clockwork = nullptr;
+static FnStratVmHandler g_orig_pickup_key = nullptr;
+static FnStratVmHandler g_orig_pickup_gobbo = nullptr;
+static FnStratVmHandler g_orig_pickup_binoculars = nullptr;
+
+static FnDrawZMod g_orig_draw_zmod = nullptr;
+static FnGetZModForPSX g_orig_get_zmod_for_psx = nullptr;
 
 // Canonical table of all 20 Village Stage Doors, their vanilla WADs, exact Archipelago IDs, and authentic in-game names
 struct DoorWadEntry {
@@ -3412,6 +3429,250 @@ static void __fastcall Hooked_ClimbSurfaceCheck(void* player_strat) {
     }
 }
 
+// Helper: Trigger a randomized check for collectable pickups intercepted in the world
+static void trigger_collectable_pickup_check(const std::string& fallback_desc) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_state.is_randomizer_active()) return;
+
+    int stage_idx = find_stage_index_by_wad(g_state.current_wad);
+    if (stage_idx >= 0) {
+        // Find the first unclaimed sub-check (0..2 white crystal milestones or 3..7 colored crystals)
+        for (int c = 0; c < 8; ++c) {
+            int check_id = stage_idx * 9 + c;
+            int byte_idx = check_id / 8;
+            uint8_t bit_mask = static_cast<uint8_t>(1u << (check_id % 8));
+            if ((g_state.checks_claimed[byte_idx] & bit_mask) == 0) {
+                std::string desc = std::string(kStageDoors[stage_idx].level_name) + " - " + fallback_desc;
+                claim_solo_check_locked(stage_idx, c, desc);
+                return;
+            }
+        }
+    }
+
+    // If all in-stage checks claimed or in hub/village, grant randomized item or trigger toast
+    static uint32_t s_pickup_counter = 0;
+    s_pickup_counter++;
+    int item_id = 7200148; // fallback 1 crystal
+    if (g_state.current_save_seed != 0) {
+        int idx = s_pickup_counter % SOLO_CHECK_POOL_SIZE;
+        item_id = g_state.solo_check_items[idx];
+    }
+    apply_ap_item_by_id_locked(item_id, "Croc", fallback_desc, false, true);
+}
+
+// Opcode 171 (0xAB): PickupHeartPot
+static void __fastcall Hooked_PickupHeartPot(void* strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+        auto fn_sfx = reinterpret_cast<FnPlaySfx1Arg>(g_exe_base + RVA_FN_HUD_POPUP_HEARTS);
+        if (fn_sfx) fn_sfx(1);
+        trigger_collectable_pickup_check("Heart Pot Pickup");
+        return;
+    }
+    if (g_orig_pickup_heart_pot) {
+        g_orig_pickup_heart_pot(strat);
+    }
+}
+
+// Opcode 172 (0xAC): AddInventoryItem
+static void __fastcall Hooked_AddInventoryItem(void* strat) {
+    if (!strat) return;
+    uint32_t** p_ip = reinterpret_cast<uint32_t**>(strat);
+    uint32_t* ip = *p_ip;
+    *p_ip = ip + 1; // Advance bytecode instruction pointer by 1 dword
+    int32_t item_type = static_cast<int32_t>(*ip);
+
+    // Keep minigame ammo (14) and stage quest item (3) granting natively
+    if (item_type == 3 || item_type == 14 || !g_state.is_mod_enabled_toggle() || !g_state.is_randomizer_active()) {
+        auto fn_add = reinterpret_cast<FnAddInventoryItem>(g_exe_base + RVA_FN_ADD_INVENTORY_ITEM);
+        auto fn_sfx = reinterpret_cast<FnPlaySfx1Arg>(g_exe_base + RVA_FN_PLAY_SFX_INV_ITEM);
+        if (fn_add) fn_add(item_type, 1, 1, 0, 0);
+        if (fn_sfx) fn_sfx(item_type);
+        return;
+    }
+
+    auto fn_sfx = reinterpret_cast<FnPlaySfx1Arg>(g_exe_base + RVA_FN_PLAY_SFX_INV_ITEM);
+    if (fn_sfx) fn_sfx(item_type);
+
+    const char* type_name = "Item Pickup";
+    if (item_type == 2) type_name = "Golden Gobbo Pickup";
+    else if (item_type == 4) type_name = "Binoculars Pickup";
+    else if (item_type == 5) type_name = "Gummi Jump Pickup";
+    else if (item_type == 6) type_name = "High Jelly Jump Pickup";
+    else if (item_type == 7) type_name = "Jelly Jump Pickup";
+    else if (item_type == 8) type_name = "Clockwork Gobbo Pickup";
+    else if (item_type == 10) type_name = "Jigsaw Piece Pickup";
+    else if (item_type == 12) type_name = "Key Pickup";
+
+    trigger_collectable_pickup_check(type_name);
+}
+
+// Opcode 248 (0xF8): PickupClockwork
+static void __fastcall Hooked_PickupClockwork(void* strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_CLOCKWORK);
+        if (fn_sfx) fn_sfx();
+        trigger_collectable_pickup_check("Clockwork Gobbo Pickup");
+        return;
+    }
+    if (g_orig_pickup_clockwork) {
+        g_orig_pickup_clockwork(strat);
+    }
+}
+
+// Opcode 249 (0xF9): PickupKey
+static void __fastcall Hooked_PickupKey(void* strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_KEY);
+        if (fn_sfx) fn_sfx();
+        trigger_collectable_pickup_check("Key Pickup");
+        return;
+    }
+    if (g_orig_pickup_key) {
+        g_orig_pickup_key(strat);
+    }
+}
+
+// Opcode 250 (0xFA): PickupGobbo
+static void __fastcall Hooked_PickupGobbo(void* strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_GOBBO);
+        if (fn_sfx) fn_sfx();
+        trigger_collectable_pickup_check("Gobbo Pickup");
+        return;
+    }
+    if (g_orig_pickup_gobbo) {
+        g_orig_pickup_gobbo(strat);
+    }
+}
+
+// Opcode 270 (0x10E): PickupBinoculars (used by Sailor Village crate at 0x17736C!)
+static void __fastcall Hooked_PickupBinoculars(void* strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_BINOCULARS);
+        if (fn_sfx) fn_sfx();
+        trigger_collectable_pickup_check("Binoculars Pickup");
+        return;
+    }
+    if (g_orig_pickup_binoculars) {
+        g_orig_pickup_binoculars(strat);
+    }
+}
+
+// Helper: Check if a material name belongs to a non-gem collectable
+static bool is_non_gem_collectable_mat(const char* mat_name) {
+    if (!mat_name || mat_name[0] == '\0') return false;
+
+    // Never replace White Crystal (OBJ_011) or 5 Colored Crystals (OBJ_015..019)
+    if (std::strstr(mat_name, "OBJ_011") != nullptr ||
+        std::strstr(mat_name, "OBJ_015") != nullptr ||
+        std::strstr(mat_name, "OBJ_016") != nullptr ||
+        std::strstr(mat_name, "OBJ_017") != nullptr ||
+        std::strstr(mat_name, "OBJ_018") != nullptr ||
+        std::strstr(mat_name, "OBJ_019") != nullptr) {
+        return false;
+    }
+
+    // Match all non-gem collectables across all hubs and levels:
+    // Binoculars, Keys, Clockwork Gobbos, Jellies, Heart Pots, Hearts, Jigsaw Pieces, Golden Gobbos
+    if (std::strstr(mat_name, "OBJ_007") != nullptr || // Binoculars (crate)
+        std::strstr(mat_name, "OBJ_014") != nullptr || // Binoculars (shop)
+        std::strstr(mat_name, "OBJ_006") != nullptr || // Red Jelly / Gummi Jump
+        std::strstr(mat_name, "OBJ_008") != nullptr || // Blue Jelly / Jelly Jump
+        std::strstr(mat_name, "OBJ_010") != nullptr || // Green Jelly / Heart Pot
+        std::strstr(mat_name, "OBJ_036") != nullptr || // Level Jellies
+        std::strstr(mat_name, "OBJ_037") != nullptr ||
+        std::strstr(mat_name, "OBJ_009") != nullptr || // Key
+        std::strstr(mat_name, "OBJ_012") != nullptr || // Golden Gobbo
+        std::strstr(mat_name, "OBJ_013") != nullptr ||
+        std::strstr(mat_name, "OBJ_020") != nullptr || // Clockwork Gobbo pickup
+        std::strstr(mat_name, "OBJ_021") != nullptr || // Heart
+        std::strstr(mat_name, "OBJ_025") != nullptr) { // Jigsaw Piece
+        return true;
+    }
+    return false;
+}
+
+// Cached logo ZMod pointer per tribe
+static void* g_cached_logo_zmod[6] = {nullptr};
+
+static void* get_or_load_logo_zmod(void* renderer) {
+    if (!renderer || !g_exe_base) return nullptr;
+    int32_t tribe = *reinterpret_cast<int32_t*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+    if (tribe < 0 || tribe > 5) tribe = 1;
+
+    if (g_cached_logo_zmod[tribe] != nullptr) {
+        return g_cached_logo_zmod[tribe];
+    }
+
+    auto fn_load_zmod = reinterpret_cast<void*(__fastcall*)(void*, const char*, int32_t)>(g_exe_base + RVA_FN_LOAD_ZMOD);
+    auto fn_init_gpu = reinterpret_cast<void(__fastcall*)(void*, void*)>(g_exe_base + RVA_FN_INIT_ZMOD_GPU);
+
+    void* model_mgr = *reinterpret_cast<void**>(g_exe_base + RVA_MODEL_MANAGER);
+    if (!model_mgr || !fn_load_zmod || !fn_init_gpu) return nullptr;
+
+    char model_path[MAX_PATH] = {0};
+    std::snprintf(model_path, sizeof(model_path), "./remaster/models/original/T%d/ap_logo.zmod", tribe);
+    void* loaded_zmod = fn_load_zmod(model_mgr, model_path, 0);
+    if (!loaded_zmod) {
+        std::snprintf(model_path, sizeof(model_path), "./remaster/models/original/T0/ap_logo.zmod");
+        loaded_zmod = fn_load_zmod(model_mgr, model_path, 0);
+    }
+
+    if (loaded_zmod) {
+        fn_init_gpu(renderer, loaded_zmod);
+        g_cached_logo_zmod[tribe] = loaded_zmod;
+    }
+    return loaded_zmod;
+}
+
+// Hooked DrawZMod: Visually replace non-gem collectables with spinning 3D Archipelago logos!
+static void __fastcall Hooked_DrawZMod(void* renderer, void* zmod, float* transform_mat, void* draw_params) {
+    if (zmod && transform_mat && g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+        uintptr_t zmod_addr = reinterpret_cast<uintptr_t>(zmod);
+        uintptr_t subparts_ptr = *reinterpret_cast<uintptr_t*>(zmod_addr);
+        if (subparts_ptr != 0) {
+            uintptr_t mats_ptr = *reinterpret_cast<uintptr_t*>(subparts_ptr);
+            if (mats_ptr != 0) {
+                const char* mat_name = reinterpret_cast<const char*>(mats_ptr);
+                if (is_non_gem_collectable_mat(mat_name)) {
+                    void* logo_zmod = get_or_load_logo_zmod(renderer);
+                    if (logo_zmod) {
+                        float mat_copy[16];
+                        std::memcpy(mat_copy, transform_mat, sizeof(mat_copy));
+
+                        DWORD tick = GetTickCount();
+                        float angle = static_cast<float>(tick % 3600) * (3.14159265f / 1800.0f);
+                        float bob = std::sin(static_cast<float>(tick % 2000) * (3.14159265f / 1000.0f)) * 0.015f;
+                        mat_copy[13] += bob;
+
+                        float cos_a = std::cos(angle);
+                        float sin_a = std::sin(angle);
+                        float r00 = mat_copy[0] * cos_a + mat_copy[2] * -sin_a;
+                        float r02 = mat_copy[0] * sin_a + mat_copy[2] * cos_a;
+                        float r10 = mat_copy[4] * cos_a + mat_copy[6] * -sin_a;
+                        float r12 = mat_copy[4] * sin_a + mat_copy[6] * cos_a;
+                        mat_copy[0] = r00;
+                        mat_copy[2] = r02;
+                        mat_copy[4] = r10;
+                        mat_copy[6] = r12;
+
+                        auto fn_internal = reinterpret_cast<void(__fastcall*)(void*, void*, float*, void*)>(g_exe_base + RVA_FN_DRAW_ZMOD_INTERNAL);
+                        uintptr_t d3d_ctx = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(renderer) + 0x2d8);
+                        if (fn_internal && d3d_ctx != 0) {
+                            fn_internal(reinterpret_cast<void*>(d3d_ctx), logo_zmod, mat_copy, draw_params);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (g_orig_draw_zmod) {
+        g_orig_draw_zmod(renderer, zmod, transform_mat, draw_params);
+    }
+}
+
 static void install_croc2_engine_hooks() {
     if (g_hooks_installed) return;
     g_exe_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
@@ -3500,11 +3761,44 @@ static void install_croc2_engine_hooks() {
     hook_dispatch_slot(RVA_CLIMB_WALL_IDLE_SLOT, RVA_FN_CLIMB_WALL_IDLE, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallIdle), g_orig_climb_wall_idle);
     hook_dispatch_slot(RVA_CLIMB_SURFACE_CHECK_SLOT, RVA_FN_CLIMB_SURFACE_CHECK, reinterpret_cast<uintptr_t>(&Hooked_ClimbSurfaceCheck), g_orig_climb_surface_check);
 
+    // 6. Hook Strat VM Collectable & Inventory Pickup Slots (Opcode 171, 172, 248, 249, 250, 270)
+    auto hook_vm_slot = [](uintptr_t slot_rva, uintptr_t hooked_fn, FnStratVmHandler& orig_fn) {
+        uintptr_t* p_slot = reinterpret_cast<uintptr_t*>(g_exe_base + slot_rva);
+        orig_fn = reinterpret_cast<FnStratVmHandler>(*p_slot);
+        DWORD old_prot_slot = 0;
+        VirtualProtect(p_slot, sizeof(uintptr_t), PAGE_READWRITE, &old_prot_slot);
+        *p_slot = hooked_fn;
+        VirtualProtect(p_slot, sizeof(uintptr_t), old_prot_slot, &old_prot_slot);
+    };
+
+    hook_vm_slot(RVA_STRAT_VM_HEART_POT_SLOT, reinterpret_cast<uintptr_t>(&Hooked_PickupHeartPot), g_orig_pickup_heart_pot);
+    hook_vm_slot(RVA_STRAT_VM_INV_ITEM_SLOT, reinterpret_cast<uintptr_t>(&Hooked_AddInventoryItem), g_orig_pickup_inv_item);
+    hook_vm_slot(RVA_STRAT_VM_CLOCKWORK_SLOT, reinterpret_cast<uintptr_t>(&Hooked_PickupClockwork), g_orig_pickup_clockwork);
+    hook_vm_slot(RVA_STRAT_VM_KEY_SLOT, reinterpret_cast<uintptr_t>(&Hooked_PickupKey), g_orig_pickup_key);
+    hook_vm_slot(RVA_STRAT_VM_GOBBO_SLOT, reinterpret_cast<uintptr_t>(&Hooked_PickupGobbo), g_orig_pickup_gobbo);
+    hook_vm_slot(RVA_STRAT_VM_BINOCULARS_SLOT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
+
+    // 7. Hook DrawZMod (0x140125320, 12 bytes: mov rcx, [rcx+0x2d8]; jmp 0x14012db90)
+    uint8_t* fn_draw_zmod = reinterpret_cast<uint8_t*>(g_exe_base + RVA_FN_DRAW_ZMOD);
+    if (fn_draw_zmod[0] == 0x48 && fn_draw_zmod[1] == 0x8B && fn_draw_zmod[7] == 0xE9) {
+        uint8_t* tramp_draw = tramp_mem + 256;
+        std::memcpy(tramp_draw, fn_draw_zmod, 12);
+        // Compute relative jump from tramp_draw+7 to fn_draw_zmod+12
+        int32_t orig_rel = *reinterpret_cast<int32_t*>(fn_draw_zmod + 8);
+        uintptr_t jmp_target = (g_exe_base + RVA_FN_DRAW_ZMOD + 12) + orig_rel;
+        write_abs_jmp64(tramp_draw + 7, reinterpret_cast<const void*>(jmp_target), 14);
+        g_orig_draw_zmod = reinterpret_cast<FnDrawZMod>(tramp_draw);
+
+        VirtualProtect(fn_draw_zmod, 16, PAGE_EXECUTE_READWRITE, &old_prot);
+        write_abs_jmp64(fn_draw_zmod, reinterpret_cast<const void*>(&Hooked_DrawZMod), 14);
+        VirtualProtect(fn_draw_zmod, 16, old_prot, &old_prot);
+    }
+
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ClimbWall, ClimbSurface).");
+    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ClimbWall, ClimbSurface, Pickups, DrawZMod).");
 }
 
 } // namespace croc2_ap

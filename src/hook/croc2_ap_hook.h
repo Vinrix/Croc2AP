@@ -60,6 +60,29 @@ constexpr uintptr_t RVA_CLIMB_ALLOWED_BYTE       = 0x00BD1361; // uint8_t 1 when
 constexpr uintptr_t RVA_CLIMB_TOUCH_SURFACE_FLAG = 0x00BD1930; // int32_t non-zero when touching climbable wall/vine
 constexpr uintptr_t RVA_CLIMB_ACTIVE_STATE_FLAG  = 0x00BD19A0; // int32_t 1 when climbing wall/vine
 
+constexpr uintptr_t RVA_FN_DRAW_ZMOD             = 0x00125320;
+constexpr uintptr_t RVA_FN_GET_ZMOD_FOR_PSX      = 0x001251A0;
+constexpr uintptr_t RVA_FN_DRAW_ZMOD_INTERNAL    = 0x0012DB90;
+constexpr uintptr_t RVA_FN_LOAD_ZMOD             = 0x002C2DD0;
+constexpr uintptr_t RVA_FN_INIT_ZMOD_GPU         = 0x00124800;
+constexpr uintptr_t RVA_RENDERER_PTR             = 0x00B90CF0;
+constexpr uintptr_t RVA_MATERIAL_TABLE           = 0x00BD0900;
+constexpr uintptr_t RVA_MODEL_MANAGER            = 0x00BD08D0;
+
+// Strat VM Collectable & Inventory Opcode Handlers & Dispatch Table Slots
+constexpr uintptr_t RVA_STRAT_VM_DISPATCH_TABLE  = 0x007F9420;
+constexpr uintptr_t RVA_STRAT_VM_HEART_POT_SLOT  = 0x007F9978; // Opcode 171 (0xAB) -> 0x140066120
+constexpr uintptr_t RVA_STRAT_VM_INV_ITEM_SLOT   = 0x007F9980; // Opcode 172 (0xAC) -> 0x140062CD0
+constexpr uintptr_t RVA_STRAT_VM_CLOCKWORK_SLOT  = 0x007F9BE0; // Opcode 248 (0xF8) -> 0x140066010
+constexpr uintptr_t RVA_STRAT_VM_KEY_SLOT        = 0x007F9BE8; // Opcode 249 (0xF9) -> 0x140065F90
+constexpr uintptr_t RVA_STRAT_VM_GOBBO_SLOT      = 0x007F9BF0; // Opcode 250 (0xFA) -> 0x140065FD0
+constexpr uintptr_t RVA_STRAT_VM_BINOCULARS_SLOT = 0x007F9C90; // Opcode 270 (0x10E) -> 0x140065FE0
+
+constexpr uintptr_t RVA_FN_PLAY_SFX_KEY          = 0x00260DE0;
+constexpr uintptr_t RVA_FN_PLAY_SFX_CLOCKWORK    = 0x00260F90;
+constexpr uintptr_t RVA_FN_PLAY_SFX_BINOCULARS   = 0x00261060;
+constexpr uintptr_t RVA_FN_PLAY_SFX_INV_ITEM     = 0x00260DD0;
+
 // Exact croc2.exe Global State RVAs
 constexpr uintptr_t RVA_ACTIVE_SAVE_SLOT         = 0x00B4D5A8; // int32_t save slot index (0..4)
 constexpr uintptr_t RVA_PAUSE_MENU_ACTIVE        = 0x00B8E018;
