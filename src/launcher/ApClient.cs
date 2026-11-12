@@ -81,6 +81,8 @@ namespace Croc2Launcher
         public event Action<string> OnStatusChanged;
         public event Action<Dictionary<string, object>> OnConnected;
         public event Action<List<ApNetworkItem>, int> OnItemsReceived;
+        // DeathLink Bounce from another player: (source, cause)
+        public event Action<string, string> OnDeathLinkReceived;
         public event Action<ApItemSendInfo> OnItemSent;
 
         public ApClient()
@@ -310,6 +312,27 @@ namespace Croc2Launcher
                     }
                     break;
 
+                case "Bounced":
+                    {
+                        object tagsObj;
+                        bool isDeathLink = false;
+                        if (packet.Data.TryGetValue("tags", out tagsObj) && tagsObj is IEnumerable && !(tagsObj is string))
+                        {
+                            foreach (object t in (IEnumerable)tagsObj)
+                            {
+                                if (t != null && t.ToString() == "DeathLink") isDeathLink = true;
+                            }
+                        }
+                        var data = packet.GetDict("data");
+                        if (isDeathLink && data != null)
+                        {
+                            string source = data.ContainsKey("source") && data["source"] != null ? data["source"].ToString() : "";
+                            string cause = data.ContainsKey("cause") && data["cause"] != null ? data["cause"].ToString() : "";
+                            if (source != OurSlotName && OnDeathLinkReceived != null) OnDeathLinkReceived(source, cause);
+                        }
+                    }
+                    break;
+
                 case "PrintJSON":
                     string type = packet.GetString("type");
                     if (type == "ItemSend")
@@ -368,6 +391,38 @@ namespace Croc2Launcher
             var list = new List<object> { dict };
             string json = MiniJson.Serialize(list);
             await SendRawAsync(json);
+        }
+
+        public const int ClientGoal = 30; // Archipelago ClientStatus.CLIENT_GOAL
+
+        // Adds or removes the DeathLink tag so the server starts/stops relaying DeathLink bounces to us.
+        public async Task SetDeathLinkTagAsync(bool enabled)
+        {
+            var dict = new Dictionary<string, object>();
+            dict["cmd"] = "ConnectUpdate";
+            dict["tags"] = enabled ? new string[] { "AP", "Launcher", "DeathLink" } : new string[] { "AP", "Launcher" };
+            await SendRawAsync(MiniJson.Serialize(new List<object> { dict }));
+        }
+
+        public async Task SendDeathLinkAsync(string cause)
+        {
+            var data = new Dictionary<string, object>();
+            data["time"] = (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+            data["source"] = OurSlotName;
+            data["cause"] = cause;
+            var dict = new Dictionary<string, object>();
+            dict["cmd"] = "Bounce";
+            dict["tags"] = new string[] { "DeathLink" };
+            dict["data"] = data;
+            await SendRawAsync(MiniJson.Serialize(new List<object> { dict }));
+        }
+
+        public async Task SendStatusUpdateAsync(int status)
+        {
+            var dict = new Dictionary<string, object>();
+            dict["cmd"] = "StatusUpdate";
+            dict["status"] = status;
+            await SendRawAsync(MiniJson.Serialize(new List<object> { dict }));
         }
 
         public async Task SendRawAsync(string json)

@@ -130,6 +130,7 @@ namespace Croc2Launcher
             {
                 { "command", "configure_session" },
                 { "colored_crystals_mode", slotData.ContainsKey("colored_crystals_mode") ? Convert.ToInt32(slotData["colored_crystals_mode"]) : 1 },
+                { "lock_level_access", slotData.ContainsKey("lock_level_access") ? Convert.ToInt32(slotData["lock_level_access"]) : 1 },
                 { "shuffle_white_crystals", slotData.ContainsKey("shuffle_white_crystals") ? Convert.ToInt32(slotData["shuffle_white_crystals"]) : 1 },
                 { "shuffle_abilities", slotData.ContainsKey("shuffle_abilities") ? Convert.ToInt32(slotData["shuffle_abilities"]) : 1 },
                 { "shuffle_levers", slotData.ContainsKey("shuffle_levers") ? Convert.ToInt32(slotData["shuffle_levers"]) : 1 },
@@ -139,6 +140,33 @@ namespace Croc2Launcher
             };
 
             var resp = await SendCommandAsync(cfgReq);
+            return resp != null;
+        }
+
+        // Every check stored in the current save (sent again after (re)connecting)
+        public async Task<List<long>> GetClaimedLocationsAsync()
+        {
+            var result = new List<long>();
+            var resp = await SendCommandAsync(new Dictionary<string, object> { { "command", "get_claimed_locations" } });
+            object locs;
+            if (resp != null && resp.TryGetValue("locations", out locs) && locs is IEnumerable && !(locs is string))
+            {
+                foreach (object o in (IEnumerable)locs) result.Add(Convert.ToInt64(o));
+            }
+            return result;
+        }
+
+        public async Task SetDeathLinkAsync(bool enabled)
+        {
+            await SendCommandAsync(new Dictionary<string, object> { { "command", "set_death_link" }, { "enabled", enabled ? 1 : 0 } });
+        }
+
+        public async Task<bool> DeathLinkKillAsync(string source, string cause)
+        {
+            var resp = await SendCommandAsync(new Dictionary<string, object>
+            {
+                { "command", "deathlink_kill" }, { "source", source ?? "" }, { "cause", cause ?? "" }
+            });
             return resp != null;
         }
 

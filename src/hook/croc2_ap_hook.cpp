@@ -44,6 +44,7 @@ static void generate_new_save_seed_locked(uint64_t seed);
 static void sync_state_to_save_footer_locked();
 static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& footer);
 static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std::string& check_desc);
+static void debug_log_locked(const std::string& msg);
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
 static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
@@ -65,8 +66,6 @@ struct MapCoords {
 static uintptr_t g_exe_base = 0;
 static bool g_hooks_installed = false;
 static bool g_in_redirected_stage = false;
-static bool g_pending_door_redirect = false;
-static std::string g_pending_target_wad;
 static MapCoords g_saved_hub{1, 1, 1, 0};
 static MapCoords g_saved_orig_door{1, 2, 1, 0};
 static MapCoords g_saved_rand_stage{1, 4, 1, 0};
@@ -531,6 +530,7 @@ static void sync_state_to_save_footer_locked() {
             footer->stage_crystals[i] = g_state.stage_colored_crystals[kStageDoors[i].vanilla_wad];
         }
         std::memcpy(footer->checks_claimed, g_state.checks_claimed, 24);
+        std::memcpy(footer->extra_checks, g_state.extra_checks, sizeof(footer->extra_checks));
         std::memcpy(footer->white_crystals_claimed, g_state.white_crystals_claimed, sizeof(g_state.white_crystals_claimed));
         footer->red_jellies = static_cast<uint8_t>(g_state.red_jellies);
         footer->blue_jellies = static_cast<uint8_t>(g_state.blue_jellies);
@@ -590,6 +590,7 @@ static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& fo
         }
     }
     std::memcpy(g_state.checks_claimed, footer.checks_claimed, 24);
+    std::memcpy(g_state.extra_checks, footer.extra_checks, sizeof(g_state.extra_checks));
     std::memcpy(g_state.white_crystals_claimed, footer.white_crystals_claimed, sizeof(g_state.white_crystals_claimed));
 
     // Apply any Archipelago items received this session that this save hasn't seen yet
@@ -644,6 +645,7 @@ static void generate_new_save_seed_locked(uint64_t seed) {
     g_state.stage_colored_crystals.clear();
     g_state.activated_golden_gobbos.clear();
     std::memset(g_state.checks_claimed, 0, sizeof(g_state.checks_claimed));
+    std::memset(g_state.extra_checks, 0, sizeof(g_state.extra_checks));
     std::memset(g_state.white_crystals_claimed, 0, sizeof(g_state.white_crystals_claimed));
 
     build_logical_item_pool_for_seed_locked(seed);
@@ -755,6 +757,7 @@ static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std:
     if ((g_state.checks_claimed[byte_idx] & bit_mask) != 0) {
         return; // Already claimed in this save!
     }
+    debug_log_locked("CLAIM stage " + std::to_string(stage_idx) + " sub " + std::to_string(sub_check_idx) + " (" + check_desc + ")");
     g_state.checks_claimed[byte_idx] |= bit_mask;
 
     // Map Stage Clear (sub_check_idx == 8) and Colored Crystals 1..5 (sub_check_idx 3..7)
@@ -774,7 +777,7 @@ static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std:
         ",\"description\":\"" + json_escape(check_desc) + "\"}"
     );
 
-    const bool is_multiworld = g_state.conn.ap_server_connected;
+    const bool is_multiworld = g_state.conn.ap_server_connected || g_state.multiworld_session;
     if (g_state.conn.ap_server_connected) {
         send_ws_location_check_locked(location_id);
         g_state.add_log("Sent Check: " + check_desc + " (#" + std::to_string(location_id) + ")");
@@ -839,7 +842,7 @@ static bool claim_white_crystal_check_locked(int stage_idx, int crystal_num_1_to
         ",\"description\":\"" + json_escape(desc) + "\"}"
     );
 
-    const bool is_multiworld = g_state.conn.ap_server_connected;
+    const bool is_multiworld = g_state.conn.ap_server_connected || g_state.multiworld_session;
     if (g_state.conn.ap_server_connected) {
         send_ws_location_check_locked(location_id);
         g_state.add_log("Sent Check: " + desc + " (#" + std::to_string(location_id) + ")");
@@ -859,6 +862,100 @@ static bool claim_white_crystal_check_locked(int stage_idx, int crystal_num_1_to
 
     sync_state_to_save_footer_locked();
     return true;
+}
+
+// Test/diagnostic log: croc2_ap_debug.log next to croc2.exe, only when croc2_mod.ini has debug_watch = 1.
+static void debug_log_locked(const std::string& msg) {
+    if (!g_state.debug_watch) return;
+    static FILE* f = nullptr;
+    if (!f) {
+        char path[MAX_PATH] = {0};
+        GetModuleFileNameA(nullptr, path, MAX_PATH);
+        std::string p(path);
+        size_t slash = p.find_last_of("\\/");
+        p = (slash == std::string::npos ? std::string() : p.substr(0, slash + 1)) + "croc2_ap_debug.log";
+        f = std::fopen(p.c_str(), "a");
+        if (!f) return;
+        std::fprintf(f, "\n==== croc2_ap_hook debug session ====\n");
+    }
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    std::fprintf(f, "[%02d:%02d:%02d.%03d] %s\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, msg.c_str());
+    std::fflush(f);
+}
+
+// ============================================================================
+// Extra Archipelago locations (Golden Gobbos, Jigsaw Pieces, Pete's Store, Bosses)
+// Location IDs come from worlds/croc2/data/locations.json.
+// ============================================================================
+static constexpr int EXTRA_CHECK_GOLDEN_GOBBO = 0;  // + stage index (0..19)
+static constexpr int EXTRA_CHECK_JIGSAW       = 20; // + village index (0..3)
+static constexpr int EXTRA_CHECK_SHOP         = 24; // + village * 5 + slot (0..19)
+static constexpr int EXTRA_CHECK_BOSS         = 44; // + boss index (0..7)
+static constexpr int EXTRA_CHECK_COUNT        = 52;
+
+static constexpr int kJigsawLocations[4] = {7210068, 7210140, 7210212, 7210284};
+static constexpr int kShopLocationBase[4] = {7210001, 7210072, 7210144, 7210216};
+// Pete's Store slots: 0/1 Heart Pot Purchase 1/2, 2 Clockwork Gobbo, 3 Gummi Jump, 4 Jelly Jump
+enum ShopSlot { SHOP_HEART_POT_1 = 0, SHOP_HEART_POT_2 = 1, SHOP_CLOCKWORK = 2, SHOP_GUMMI_JUMP = 3, SHOP_JELLY_JUMP = 4 };
+
+static int extra_check_location_id(int bit) {
+    if (bit >= EXTRA_CHECK_GOLDEN_GOBBO && bit < EXTRA_CHECK_JIGSAW) {
+        return kStageDoors[bit - EXTRA_CHECK_GOLDEN_GOBBO].stage_clear_loc_id + 6;
+    }
+    if (bit >= EXTRA_CHECK_JIGSAW && bit < EXTRA_CHECK_SHOP) return kJigsawLocations[bit - EXTRA_CHECK_JIGSAW];
+    if (bit >= EXTRA_CHECK_SHOP && bit < EXTRA_CHECK_BOSS) {
+        int k = bit - EXTRA_CHECK_SHOP;
+        return kShopLocationBase[k / 5] + (k % 5);
+    }
+    if (bit >= EXTRA_CHECK_BOSS && bit < EXTRA_CHECK_COUNT) {
+        static constexpr int kBossLocIds[8] = {7210070, 7210071, 7210142, 7210143, 7210214, 7210215, 7210286, 7210287};
+        return kBossLocIds[bit - EXTRA_CHECK_BOSS];
+    }
+    return 0;
+}
+
+static bool extra_check_claimed_locked(int bit) {
+    return bit >= 0 && bit < EXTRA_CHECK_COUNT && (g_state.extra_checks[bit / 8] & (1u << (bit % 8))) != 0;
+}
+
+// Marks an extra location as found (persisted in the save) and reports it. Returns false if already claimed.
+static bool claim_extra_check_locked(int bit, const std::string& desc) {
+    if (bit < 0 || bit >= EXTRA_CHECK_COUNT || extra_check_claimed_locked(bit)) return false;
+    g_state.extra_checks[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+    int location_id = extra_check_location_id(bit);
+    g_state.pending_events_json.push_back(
+        "{\"event\":\"location_checked\",\"location_id\":" + std::to_string(location_id) +
+        ",\"description\":\"" + json_escape(desc) + "\"}"
+    );
+    send_ws_location_check_locked(location_id);
+    g_state.add_log("Check: " + desc + " (#" + std::to_string(location_id) + ")");
+    debug_log_locked("CLAIM extra bit " + std::to_string(bit) + " -> location " + std::to_string(location_id) + " (" + desc + ")");
+    sync_state_to_save_footer_locked();
+    return true;
+}
+
+// Every location this save has found, for clients to (re)send after connecting.
+static std::vector<int> all_claimed_location_ids_locked() {
+    std::vector<int> ids;
+    for (int stage = 0; stage < 20; ++stage) {
+        for (int sub = 3; sub <= 8; ++sub) { // 3..7 colored crystals, 8 stage clear (0..2 are solo-only)
+            int check_id = stage * 9 + sub;
+            if (g_state.checks_claimed[check_id / 8] & (1u << (check_id % 8))) {
+                ids.push_back(sub == 8 ? kStageDoors[stage].stage_clear_loc_id
+                                       : kStageDoors[stage].stage_clear_loc_id + (sub - 2));
+            }
+        }
+        for (int c = 0; c < 100; ++c) {
+            if (g_state.white_crystals_claimed[stage][c / 8] & (1u << (c % 8))) {
+                ids.push_back(7211000 + stage * 100 + c + 1);
+            }
+        }
+    }
+    for (int bit = 0; bit < EXTRA_CHECK_COUNT; ++bit) {
+        if (extra_check_claimed_locked(bit)) ids.push_back(extra_check_location_id(bit));
+    }
+    return ids;
 }
 
 static void init_default_door_shuffle_locked() {
@@ -993,6 +1090,10 @@ static void load_config_ini(const char* ini_path) {
             g_state.shuffle_levers = (val == "true" || val == "1");
         } else if (key == "shuffle_vehicles") {
             g_state.shuffle_vehicles = (val == "true" || val == "1");
+        } else if (key == "debug_watch") {
+            g_state.debug_watch = (val == "true" || val == "1");
+        } else if (key == "death_link") {
+            g_state.death_link_enabled = (val == "true" || val == "1");
         } else if (key == "shuffle_plane_guns") {
             g_state.shuffle_plane_guns = (val == "true" || val == "1");
         }
@@ -1241,7 +1342,7 @@ static void apply_ap_item_by_id_locked(int item_id,
         );
     }
 
-    // ID range mapped from worlds/croc2/data/items.json (7200001..7200156)
+    // ID range mapped from worlds/croc2/data/items.json (7200001..7200160)
     switch (item_id) {
         case 7200001: g_state.abilities.tail_whack = true; g_state.add_log("Unlocked Ability: Tail Whack!"); break;
         case 7200002: g_state.abilities.butt_stomp = true; g_state.add_log("Unlocked Ability: Butt Stomp!"); break;
@@ -1634,6 +1735,7 @@ static std::string handle_command_locked(const std::string& req) {
 
     if (cmd == "configure_session") {
         g_state.client_connected = true;
+        g_state.multiworld_session = true;
         g_state.colored_crystals_mode = extract_json_int(req, "colored_crystals_mode", 1);
         g_state.shuffle_white_crystals = extract_json_int(req, "shuffle_white_crystals", 3);
         g_state.lock_level_access = extract_json_int(req, "lock_level_access", 1) != 0;
@@ -1653,6 +1755,40 @@ static std::string handle_command_locked(const std::string& req) {
         if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
         if (!g_state.shuffle_plane_guns) g_state.abilities.airplane_ammo_feed = true;
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
+    }
+
+    if (cmd == "get_claimed_locations") {
+        // Lets a (re)connecting client resend every check this save has found, including ones made
+        // while no client was connected.
+        std::ostringstream ss;
+        ss << "{\"status\":\"ok\",\"locations\":[";
+        bool first = true;
+        for (int id : all_claimed_location_ids_locked()) {
+            ss << (first ? "" : ",") << id;
+            first = false;
+        }
+        ss << "]}";
+        return ss.str();
+    }
+
+    if (cmd == "set_death_link") {
+        g_state.death_link_enabled = extract_json_int(req, "enabled", 0) != 0;
+        g_state.add_log(std::string("DeathLink ") + (g_state.death_link_enabled ? "enabled." : "disabled."));
+        return "{\"status\":\"ok\"}";
+    }
+
+    if (cmd == "deathlink_kill") {
+        // A DeathLink from another player: Croc dies on the next game frame (see Hooked_ReadInput).
+        if (g_state.death_link_enabled) {
+            g_state.death_link_kill_pending = true;
+            std::string source = extract_json_string(req, "source");
+            std::string cause = extract_json_string(req, "cause");
+            g_state.add_log("DeathLink from " + (source.empty() ? std::string("another player") : source) +
+                            (cause.empty() ? std::string("") : (": " + cause)));
+            trigger_bottom_toast_locked(false, "DeathLink!", ItemImportance::TRAP, "Skull",
+                                        source.empty() ? "Archipelago" : source, cause.empty() ? "Croc was taken down" : cause);
+        }
+        return "{\"status\":\"ok\"}";
     }
 
     if (cmd == "set_door_destination") {
@@ -1731,7 +1867,7 @@ static std::string handle_command_locked(const std::string& req) {
 
         // Known Croc 2 item IDs go through the single canonical ID table so the item is guaranteed to
         // reach both the mod state AND the live croc2.exe inventory wheel / HUD.
-        if (item_id >= 7200001 && item_id <= 7200156) {
+        if (item_id >= 7200001 && item_id <= 7200160) {
             int item_index = extract_json_int(req, "item_index", -1);
             if (item_index >= 0 && item_index < g_state.ap_items_applied) {
                 // Already applied to this save (bridge reconnect / re-sync) - don't grant twice!
@@ -2717,7 +2853,14 @@ static void tcp_server_worker() {
 // ============================================================================
 // Live x64 Function Detours & Memory Hooks for croc2.exe
 // ============================================================================
-using FnGetStageSaveIndex = int32_t(__fastcall*)(int32_t tribe, int32_t level, int32_t submap, int32_t map_type);
+// Per-map progress byte in the save table: save[RVA_SAVE_DATA_TABLE + index + 0x304], one bit per flag
+// (bit 0 = map cleared). croc2.exe computes index = (tribe * 10 + level) * 4 + map_type in 0x14002B9C0 and
+// sets bits in the strat opcode at 0x140063460 using the CURRENT map's tribe/level/map_type. Sub-area
+// numbers are not part of it, so every sub-area of a map shares one byte, and L/B/S/I maps of the same
+// tribe+level each get their own (T1L2 = 48, T1B2 = 49).
+static int32_t map_flag_index(const MapCoords& m) {
+    return (m.tribe * 10 + m.level) * 4 + m.map_type;
+}
 
 static void write_abs_jmp64(uint8_t* dst, const void* target, size_t total_len) {
     // 14-byte absolute 64-bit jump: FF 25 00 00 00 00 <8-byte target address>
@@ -2741,8 +2884,9 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
         g_exe_base + RVA_SAVE_DATA_TABLE + RVA_RANDO_SAVE_FOOTER_OFF
     );
 
-    // Title Screen / Main Menu (curr.tribe < 1 || curr.tribe > 5) or initial boot frames
-    const bool is_title_screen = (curr.tribe < 1 || curr.tribe > 5);
+    // Title Screen / Main Menu or initial boot frames. Tribe 0 alone is not enough: T0L1M003 is a real
+    // stage (Inca Door 5, "Burning Down the Forest") and must not wipe the randomizer save state.
+    const bool is_title_screen = (curr.tribe < 0 || curr.tribe > 5) || (curr.tribe == 0 && curr.level == 0);
     if (is_title_screen) {
         if (g_state.in_active_save || g_state.save_locked_to_mod) {
             g_state.in_active_save = false;
@@ -2794,137 +2938,189 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
     }
 }
 
-static bool handle_map_transition_redirect() {
-    if (!g_exe_base) return true;
+// Map we most recently handed to croc2.exe's LoadMap. Used to tell "hub -> stage door" loads
+// apart from death reloads and sub-area moves. Note: croc2.exe calls OnDoorTransition (0x2BA00)
+// AFTER LoadMap (e.g. 0x2EF51 LoadMap -> 0x2EF9C -> 0x62E8E OnDoorTransition), so all redirect
+// decisions must be made here, at LoadMap time, before anything is loaded.
+static MapCoords g_last_loaded{0, 0, 0, 0};
+// True only for the single load that enters a shuffled stage or returns from one to its hub door.
+static bool g_fix_spawn_this_load = false;
 
-    auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
-    auto* prev = reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
+static bool is_hub_coords(const MapCoords& m) {
+    return m.tribe >= 1 && m.tribe <= 4 && m.level == 1 && m.map_type == 0;
+}
 
-    std::lock_guard<std::mutex> lock(g_mutex);
+// Exact stage-entrance WAD only (e.g. T1L4M001, T0L1M003), not a stage's sub-areas.
+static int find_stage_entrance_index(const std::string& wad) {
+    for (int i = 0; i < 20; ++i) {
+        if (wad == kStageDoors[i].vanilla_wad) return i;
+    }
+    return -1;
+}
 
-    inspect_and_sync_save_lifecycle_locked(*curr);
+// Refuses a hub -> stage load by sending Croc back to the hub, placed at the door he walked into.
+static MapCoords block_stage_load_locked(const MapCoords& door) {
+    g_saved_orig_door = door;
+    g_in_redirected_stage = true;   // lets the spawn fixup find this door in the hub
+    g_fix_spawn_this_load = true;
+    return g_last_loaded;
+}
 
-    const bool mod_on = g_state.is_mod_enabled_toggle();
+// Boss maps in EXTRA_CHECK_BOSS order (location IDs in extra_check_location_id)
+static constexpr const char* kBossWads[8] = {"T1B1M001", "T1B2M001", "T2B1M001", "T2B2M001",
+                                             "T3B1M001", "T3B2M001", "T4B1M001", "T4B2M001"};
+static constexpr const char* kBossNames[8] = {"Defeat Soveena The Squid", "Defeat Cannon Boat Keith",
+                                              "Defeat Flavio the Thermal Fish", "Defeat Lava Lamp Larry",
+                                              "Defeat Venus Fly Von-Trappe", "Defeat The Village Masher",
+                                              "Defeat Dante's Peak", "Defeat Dante's Final Fight"};
 
-    // Check if leaving a Village Hub (level == 1, map_type == 0, submap 1..3) into a Stage
-    const bool from_hub = (prev->tribe >= 1 && prev->tribe <= 4 && prev->level == 1);
-    const bool to_stage = (curr->tribe >= 1 && curr->tribe <= 4 && curr->level >= 2);
-    const bool to_hub   = (curr->tribe >= 1 && curr->tribe <= 4 && curr->level == 1);
+// The engine's per-map "completed" bit (same flag the hub doors use), keyed by the map's first sub-area.
+static bool map_clear_flag_set(const MapCoords& m) {
+    int32_t idx = map_flag_index(m);
+    if (idx < 0 || idx + 0x304 >= 0x17800) return false;
+    return (reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE)[idx + 0x304] & 1) != 0;
+}
 
-    if (!mod_on) {
+// Stage entered from a hub and whether its "cleared" bit was already set at that moment. Stage Clear
+// is only reported when the bit flips 0 -> 1 during the visit, so flags copied onto door slots (see the
+// hub-return path) or carried over from a vanilla playthrough never count as a fresh clear.
+static int g_entry_stage_idx = -1;
+static bool g_entry_stage_was_cleared = false;
+
+static void remember_stage_entry_locked(const MapCoords& stage_map) {
+    g_entry_stage_idx = find_stage_index_by_wad(coords_to_wad(stage_map));
+    g_entry_stage_was_cleared = g_entry_stage_idx >= 0 && map_clear_flag_set(stage_map);
+}
+
+// Called whenever Croc leaves a map. Reports Stage Clear for non-shuffled stages (shuffled ones are
+// reported by the hub-return path below) and boss defeats, which were previously never sent.
+static void report_completion_on_exit_locked(const MapCoords& left, const MapCoords& next) {
+    if (left.tribe < 0 || left.tribe > 9) return;
+    const std::string wad = coords_to_wad(left);
+    if (wad.size() < 8 || coords_to_wad(next).compare(0, 4, wad, 0, 4) == 0) return; // still inside the same stage
+
+    if (g_state.debug_watch) {
+        debug_log_locked("EXIT " + wad + " flags=0x" + [&] {
+            char b[8];
+            std::snprintf(b, sizeof(b), "%02X", reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE)[map_flag_index(left) + 0x304]);
+            return std::string(b);
+        }());
+    }
+    if (g_state.is_randomizer_active() && g_entry_stage_idx >= 0 &&
+        wad.compare(0, 4, kStageDoors[g_entry_stage_idx].vanilla_wad, 0, 4) == 0) {
+        MapCoords entry{};
+        if (wad_to_coords(kStageDoors[g_entry_stage_idx].vanilla_wad, entry) && map_clear_flag_set(entry) &&
+            !g_entry_stage_was_cleared) {
+            claim_solo_check_locked(g_entry_stage_idx, 8,
+                                    std::string(kStageDoors[g_entry_stage_idx].level_name) + " - Stage Clear");
+        }
+        g_entry_stage_idx = -1;
+    }
+    if (!g_state.is_randomizer_active()) return;
+
+    for (int b = 0; b < 8; ++b) {
+        MapCoords boss_coords{};
+        if (wad.compare(0, 4, kBossWads[b], 0, 4) != 0 || !wad_to_coords(kBossWads[b], boss_coords)) continue;
+        if (map_clear_flag_set(boss_coords)) claim_extra_check_locked(EXTRA_CHECK_BOSS + b, kBossNames[b]);
+        break;
+    }
+}
+
+// Decides which map actually gets loaded. Called from Hooked_LoadMap with g_mutex held.
+static MapCoords resolve_map_load_locked(const MapCoords& req) {
+    g_fix_spawn_this_load = false;
+    inspect_and_sync_save_lifecycle_locked(req);
+    report_completion_on_exit_locked(g_last_loaded, req);
+
+    if (!g_state.is_mod_enabled_toggle()) {
         g_in_redirected_stage = false;
-        g_pending_door_redirect = false;
-        g_pending_target_wad.clear();
-        g_state.current_wad = coords_to_wad(*curr);
-        return true;
+        g_state.current_wad = coords_to_wad(req);
+        return req;
     }
 
-    if (from_hub && to_stage) {
-        std::string orig_wad = coords_to_wad(*curr);
-        int orig_idx = find_stage_index_by_wad(orig_wad);
+    const std::string req_wad = coords_to_wad(req);
+    const int door_idx = find_stage_entrance_index(req_wad);
 
-        // Check if level access is locked and Croc does not have the key (Sailor Village Door 1 is open from start)
-        if (g_state.lock_level_access && orig_idx > 0 && g_state.is_randomizer_active()) {
-            bool has_key = (g_state.unlocked_doors.count(orig_wad) > 0) ||
-                           (g_state.unlocked_doors.count(kStageDoors[orig_idx].door_id) > 0);
+    if (is_hub_coords(g_last_loaded) && door_idx >= 0) {
+        // Locked door (Sailor Village Door 1 is open from the start)
+        if (g_state.lock_level_access && door_idx > 0 && g_state.is_randomizer_active()) {
+            bool has_key = g_state.unlocked_doors.count(req_wad) > 0 ||
+                           g_state.unlocked_doors.count(kStageDoors[door_idx].door_id) > 0;
             if (!has_key) {
-                *curr = *prev; // Block transition
-                static DWORD s_last_door_locked_toast = 0;
-                DWORD now = GetTickCount();
-                if (now - s_last_door_locked_toast > 2500) {
-                    s_last_door_locked_toast = now;
-                    std::string level_disp = (orig_idx >= 0) ? kStageDoors[orig_idx].level_name : orig_wad;
-                    trigger_bottom_toast_locked(false, level_disp + " Key Required!", ItemImportance::TRAP, "Padlock", "Croc", "Stage door is locked!");
-                    g_state.add_log("Door Locked: " + level_disp + " (Requires " + level_disp + " Key from checks!)");
-                    g_state.pending_events_json.push_back(
-                        "{\"event\":\"door_locked\",\"level_name\":\"" + json_escape(level_disp) +
-                        "\",\"stage_idx\":" + std::to_string(orig_idx) + "}"
-                    );
-                }
-                return false;
+                std::string level_disp = kStageDoors[door_idx].level_name;
+                trigger_bottom_toast_locked(false, level_disp + " Key Required!", ItemImportance::TRAP, "Padlock", "Croc", "Stage door is locked!");
+                g_state.add_log("Door Locked: " + level_disp + " (Requires " + level_disp + " Key from checks!)");
+                g_state.pending_events_json.push_back(
+                    "{\"event\":\"door_locked\",\"level_name\":\"" + json_escape(level_disp) +
+                    "\",\"stage_idx\":" + std::to_string(door_idx) + "}"
+                );
+                return block_stage_load_locked(req);
             }
         }
 
-        std::string dest_wad = orig_wad;
-        auto it = g_state.door_overrides.find(orig_wad);
-        if (it != g_state.door_overrides.end() && !it->second.empty()) {
-            dest_wad = it->second;
-        }
+        std::string dest_wad = req_wad;
+        auto it = g_state.door_overrides.find(req_wad);
+        if (it != g_state.door_overrides.end() && !it->second.empty()) dest_wad = it->second;
 
         int dest_idx = find_stage_index_by_wad(dest_wad);
         std::string dest_name = (dest_idx >= 0) ? kStageDoors[dest_idx].level_name : dest_wad;
 
-        // Block entering vehicle stages without Vehicle License!
         if (g_state.is_randomizer_active() && is_vehicle_stage_wad(dest_wad) && !g_state.abilities.vehicle_license) {
-            *curr = *prev; // Block transition
-            static DWORD s_last_vehicle_toast = 0;
-            DWORD now = GetTickCount();
-            if (now - s_last_vehicle_toast > 2500) {
-                s_last_vehicle_toast = now;
-                trigger_bottom_toast_locked(false, "Vehicle License Required!", ItemImportance::TRAP, "License", "Croc", dest_name + " requires Vehicle License!");
-                g_state.add_log("Vehicle Stage Locked: " + dest_name + " requires Vehicle License!");
-                g_state.pending_events_json.push_back(
-                    "{\"event\":\"vehicle_required\",\"level_name\":\"" + json_escape(dest_name) +
-                    "\",\"stage_idx\":" + std::to_string(dest_idx) + "}"
-                );
-            }
-            return false;
-        }
-
-        if (it != g_state.door_overrides.end() && !it->second.empty()) {
-            // Queue pending redirect for Hooked_LoadMap without prematurely mutating *curr
-            // so croc2.exe's native OnDoorTransition (0x14002BA00) authentic door logic executes cleanly.
-            g_pending_door_redirect = true;
-            g_pending_target_wad = dest_wad;
-            g_saved_hub = *prev;
-            g_saved_orig_door = *curr;
-
-            std::string orig_name = (orig_idx >= 0) ? kStageDoors[orig_idx].level_name : orig_wad;
-            std::string target_name = (dest_idx >= 0) ? kStageDoors[dest_idx].level_name : it->second;
-            g_state.last_door_redirect_desc =
-                orig_name + " -> " + target_name + " (Seed #" + g_state.current_seed_hex + ")";
-            g_state.add_log("Door Shuffle: " + orig_name + " -> " + target_name);
+            trigger_bottom_toast_locked(false, "Vehicle License Required!", ItemImportance::TRAP, "License", "Croc", dest_name + " requires Vehicle License!");
+            g_state.add_log("Vehicle Stage Locked: " + dest_name + " requires Vehicle License!");
             g_state.pending_events_json.push_back(
-                "{\"event\":\"door_entered\",\"orig_name\":\"" + json_escape(orig_name) +
-                "\",\"target_name\":\"" + json_escape(target_name) +
-                "\",\"target_wad\":\"" + json_escape(dest_wad) + "\"}"
+                "{\"event\":\"vehicle_required\",\"level_name\":\"" + json_escape(dest_name) +
+                "\",\"stage_idx\":" + std::to_string(dest_idx) + "}"
             );
-            return true;
+            return block_stage_load_locked(req);
         }
 
-        g_pending_door_redirect = false;
-        g_pending_target_wad.clear();
-        g_in_redirected_stage = false;
-        g_state.current_wad = orig_wad;
-        return true;
-    } else if (g_in_redirected_stage && to_hub) {
-        // Sync completion flag from the randomized stage to the original Hub door slot
-        auto fn_get_save_idx = reinterpret_cast<FnGetStageSaveIndex>(g_exe_base + RVA_FN_CALC_SAVE_INDEX);
-        int32_t rand_idx = fn_get_save_idx(
-            g_saved_rand_stage.tribe, g_saved_rand_stage.level,
-            g_saved_rand_stage.submap, g_saved_rand_stage.map_type
-        );
-        int32_t orig_idx = fn_get_save_idx(
-            g_saved_orig_door.tribe, g_saved_orig_door.level,
-            g_saved_orig_door.submap, g_saved_orig_door.map_type
-        );
-        if (rand_idx >= 0 && orig_idx >= 0) {
-            uint8_t* save_base = reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE);
-            if ((save_base[rand_idx + 0x304] & 1) != 0) {
-                save_base[orig_idx + 0x304] |= 1;
-                int stage_i = find_stage_index_by_wad(coords_to_wad(g_saved_rand_stage));
-                if (stage_i >= 0) {
-                    claim_solo_check_locked(stage_i, 8, std::string(kStageDoors[stage_i].level_name) + " - Stage Clear");
-                }
-            }
+        MapCoords dest{};
+        if (dest_wad == req_wad || !wad_to_coords(dest_wad, dest)) {
+            g_in_redirected_stage = false;
+            g_state.current_wad = req_wad;
+            remember_stage_entry_locked(req);
+            return req;
         }
-        return true;
-    } else {
-        g_pending_door_redirect = false;
-        g_pending_target_wad.clear();
-        g_state.current_wad = coords_to_wad(*curr);
-        return true;
+        remember_stage_entry_locked(dest);
+
+        g_saved_hub = g_last_loaded;
+        g_saved_orig_door = req;
+        g_saved_rand_stage = dest;
+        g_in_redirected_stage = true;
+        g_fix_spawn_this_load = true;
+        g_state.current_wad = dest_wad;
+
+        std::string orig_name = kStageDoors[door_idx].level_name;
+        g_state.last_door_redirect_desc = orig_name + " -> " + dest_name + " (Seed #" + g_state.current_seed_hex + ")";
+        g_state.add_log("Door Shuffle: " + orig_name + " -> " + dest_name);
+        g_state.pending_events_json.push_back(
+            "{\"event\":\"door_entered\",\"orig_name\":\"" + json_escape(orig_name) +
+            "\",\"target_name\":\"" + json_escape(dest_name) +
+            "\",\"target_wad\":\"" + json_escape(dest_wad) + "\"}"
+        );
+        return dest;
     }
+
+    if (g_in_redirected_stage && is_hub_coords(req)) {
+        // Leaving a shuffled stage. The game sends Croc to the hub of the stage's own tribe, which is
+        // wrong for cross-village shuffles (e.g. an Inca stage behind a Sailor door would exit into a
+        // possibly-locked Inca Village). Always return to the hub Croc actually entered from.
+        MapCoords back = is_hub_coords(g_saved_hub) ? g_saved_hub : req;
+
+        // Cross-village shuffle: the stage's own "cleared" bit lives in another village, so mirror it onto
+        // the door's original stage slot to keep this village's progress (door state, boss unlock) right.
+        // Within a village the set of cleared bits is already correct, so nothing is copied.
+        if (g_saved_rand_stage.tribe != g_saved_orig_door.tribe && map_clear_flag_set(g_saved_rand_stage)) {
+            reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE)[map_flag_index(g_saved_orig_door) + 0x304] |= 1;
+        }
+        g_fix_spawn_this_load = true; // place Croc at the hub door he originally entered
+        g_state.current_wad = coords_to_wad(back);
+        return back;
+    }
+
+    g_state.current_wad = req_wad;
+    return req;
 }
 
 static void fixup_spawn_trigger_after_map_load(void* map_header) {
@@ -2944,6 +3140,11 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
     uintptr_t trig_base = wad_buf + trig_offset;
     if (trig_base < wad_buf || trig_base >= wad_limit) return;
 
+    // Only touch level data on the one load that enters a shuffled stage or returns from one
+    // to its hub door. Vanilla loads, death reloads and sub-area moves are left alone.
+    if (!g_fix_spawn_this_load) return;
+    g_fix_spawn_this_load = false;
+
     // Prevent fatal assertion at 0x14005c9e4 ("Offset is outside of the memory range.")
     // and 0x140002166 / 0x140002401 ("Pointer is outside of the memory range."):
     // In croc2.exe, immediately after LoadMap returns at 0x14005c9a1, 0x14005c9d8 reads
@@ -2952,7 +3153,7 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
     // Because heap arena memory is outside wad_buf, any call to 0x1400020e0 fatally aborts.
     // When [trigger + 0x24] is 0, 0x14005c9db immediately branches to 0x14005cad3, skipping
     // the fatal routine entirely and cleanly completing level load.
-    // Zero +0x24 unconditionally across all triggers in the loaded map.
+    // Zero +0x24 across all triggers in the loaded map (redirected loads only, see gate above).
     for (uint16_t i = 0; i < trig_count; ++i) {
         uintptr_t t = trig_base + static_cast<uintptr_t>(i) * 0x54;
         if (t + 0x54 > wad_limit) break;
@@ -2967,11 +3168,6 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
         *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_ACTIVE_SPAWN_TRIGGER) = trig_base;
     }
 
-    // Only perform custom spawn trigger redirection when entering a randomized stage
-    // or returning from a randomized stage back to hub.
-    // For authentic new game dock spawn (boat in Sailor Village), save game loading, and standard transitions,
-    // let engine handle it naturally now that the triggers are safely sanitized.
-    if (!g_in_redirected_stage) return;
 
     auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
     auto* prev = reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
@@ -3065,33 +3261,26 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
 }
 
 static void __fastcall Hooked_OnDoorTransition() {
-    if (!handle_map_transition_redirect()) {
-        return; // Locked door! Do not initiate transition
-    }
+    // Runs after LoadMap; door redirects are decided in Hooked_LoadMap. Pure pass-through.
     g_orig_on_door_transition();
 }
 
 static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t submap, int32_t map_type) {
-    if (g_exe_base && g_pending_door_redirect && !g_pending_target_wad.empty()) {
+    if (g_exe_base) {
         std::lock_guard<std::mutex> lock(g_mutex);
-        g_pending_door_redirect = false;
-        MapCoords target_coords{};
-        if (wad_to_coords(g_pending_target_wad, target_coords)) {
-            tribe = target_coords.tribe;
-            level = target_coords.level;
-            submap = target_coords.submap;
-            map_type = target_coords.map_type;
-
-            auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
-            curr->tribe = tribe;
-            curr->level = level;
-            curr->submap = submap;
-            curr->map_type = map_type;
-
-            g_in_redirected_stage = true;
-            g_saved_rand_stage = target_coords;
-            g_state.current_wad = g_pending_target_wad;
+        MapCoords req{tribe, level, submap, map_type};
+        MapCoords dest = resolve_map_load_locked(req);
+        debug_log_locked("LoadMap " + coords_to_wad(req) + (coords_to_wad(dest) != coords_to_wad(req) ? " -> " + coords_to_wad(dest) : std::string()) +
+                         " (from " + coords_to_wad(g_last_loaded) + ", shuffled_stage=" + (g_in_redirected_stage ? "1" : "0") + ")");
+        if (dest.tribe != req.tribe || dest.level != req.level ||
+            dest.submap != req.submap || dest.map_type != req.map_type) {
+            tribe = dest.tribe;
+            level = dest.level;
+            submap = dest.submap;
+            map_type = dest.map_type;
+            *reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE) = dest;
         }
+        g_last_loaded = dest;
     }
 
     void* map_header = g_orig_load_map(tribe, level, submap, map_type);
@@ -3224,11 +3413,43 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
         inspect_and_sync_save_lifecycle_locked(*curr);
 
+        if (g_state.debug_watch && !g_state.is_mod_enabled_toggle()) {
+            static int32_t s_vanilla_prev_state = 0;
+            int32_t st = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+            if (st != s_vanilla_prev_state) {
+                debug_log_locked("state " + std::to_string(s_vanilla_prev_state) + " -> " + std::to_string(st) +
+                                 " map=" + coords_to_wad(*curr) + " (mod off)");
+                s_vanilla_prev_state = st;
+            }
+        }
         if (!g_state.is_mod_enabled_toggle()) {
             return buttons;
         }
 
-
+        // DeathLink. 0xB90D30 is the game's transition/state word: both damage paths
+        // (0x140065C06 and 0x140065F5E) set it to 1 when Croc dies (5 = hurt, 7 = door transition).
+        {
+            static int32_t s_prev_state = 0;
+            int32_t& state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+            const bool in_level = curr->tribe >= 1 && curr->tribe <= 5 && curr->map_type != 3;
+            const DWORD now = GetTickCount();
+            if (g_state.death_link_kill_pending && in_level && state != 1 && state != 7) {
+                g_state.death_link_kill_pending = false;
+                g_state.death_link_grace_until = now + 5000; // our own death, don't echo it back
+                state = 1;
+            }
+            if (state != s_prev_state && g_state.debug_watch) {
+                debug_log_locked("state " + std::to_string(s_prev_state) + " -> " + std::to_string(state) +
+                                " map=" + coords_to_wad(*curr));
+            }
+            if (state == 1 && s_prev_state != 1 && in_level && g_state.death_link_enabled &&
+                static_cast<int32_t>(now - g_state.death_link_grace_until) >= 0) {
+                g_state.pending_events_json.push_back(
+                    "{\"event\":\"death\",\"map\":\"" + coords_to_wad(*curr) + "\"}"
+                );
+            }
+            s_prev_state = state;
+        }
 
         // Only drain pending heart grants while actually in-game (never on the Title Screen),
         // so items received before a save is started/loaded are never silently lost.
@@ -3478,100 +3699,215 @@ static void trigger_climb_blocked_toast_locked() {
 }
 
 // Helper: Trigger a randomized check for collectable pickups intercepted in the world
-static void trigger_collectable_pickup_check(const std::string& fallback_desc) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_state.is_randomizer_active()) return;
+enum class Pickup { HeartPot, Clockwork, Key, Gobbo, Binoculars, GoldenGobbo, Jigsaw, RedJelly, BlueJelly, Other };
 
+static bool is_shop_coords(const MapCoords& m) {
+    return m.tribe >= 1 && m.tribe <= 4 && m.level == 1 && m.submap == 4 && m.map_type == 0;
+}
+static bool is_secret_level_coords(const MapCoords& m) {
+    return m.tribe >= 1 && m.tribe <= 4 && m.map_type == 2; // T?S1Mxxx
+}
+
+// Solo randomizer only: the original behaviour (in-stage bonus checks, then the seed's item pool).
+static void grant_solo_pickup_locked(const std::string& fallback_desc) {
     int stage_idx = find_stage_index_by_wad(g_state.current_wad);
     if (stage_idx >= 0) {
-        // Find the first unclaimed sub-check (0..2 white crystal milestones or 3..7 colored crystals)
-        for (int c = 0; c < 8; ++c) {
+        // Sub-checks 0..2 are the solo-only bonus slots. 3..7 belong to the Colored Crystals and are
+        // claimed by the crystal sync, never by unrelated pickups.
+        for (int c = 0; c < 3; ++c) {
             int check_id = stage_idx * 9 + c;
-            int byte_idx = check_id / 8;
-            uint8_t bit_mask = static_cast<uint8_t>(1u << (check_id % 8));
-            if ((g_state.checks_claimed[byte_idx] & bit_mask) == 0) {
-                std::string desc = std::string(kStageDoors[stage_idx].level_name) + " - " + fallback_desc;
-                claim_solo_check_locked(stage_idx, c, desc);
+            if ((g_state.checks_claimed[check_id / 8] & (1u << (check_id % 8))) == 0) {
+                claim_solo_check_locked(stage_idx, c, std::string(kStageDoors[stage_idx].level_name) + " - " + fallback_desc);
                 return;
             }
         }
     }
-
-    // If all in-stage checks claimed or in hub/village, grant randomized item
     static uint32_t s_pickup_counter = 0;
     s_pickup_counter++;
     int item_id = 7200148; // fallback 1 crystal
     if (g_state.current_save_seed != 0) {
-        int idx = s_pickup_counter % SOLO_CHECK_POOL_SIZE;
-        item_id = g_state.solo_check_items[idx];
+        item_id = g_state.solo_check_items[s_pickup_counter % SOLO_CHECK_POOL_SIZE];
     }
-    std::string check_name = (stage_idx < 0) ? ("Sailor Village - Pete's Store / " + fallback_desc) : fallback_desc;
-    apply_ap_item_by_id_locked(item_id, "Croc", check_name, false, true);
+    apply_ap_item_by_id_locked(item_id, "Croc", fallback_desc, false, true);
+}
+
+// Decides what an in-game pickup does. Returns true when the vanilla effect must be suppressed
+// (the pickup was an Archipelago location, or the solo randomizer replaced it).
+static bool handle_pickup_locked(Pickup kind, const std::string& desc) {
+    const MapCoords cur = *reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+    if (g_state.debug_watch) {
+        debug_log_locked("pickup " + desc + " map=" + coords_to_wad(cur) +
+                         " mod=" + (g_state.is_mod_enabled_toggle() ? "on" : "off"));
+    }
+    if (!g_state.is_mod_enabled_toggle() || !g_state.is_randomizer_active()) return false;
+    const bool multiworld = g_state.multiworld_session || g_state.conn.ap_server_connected;
+
+    // Swap Meet Pete's Store purchases
+    if (is_shop_coords(cur)) {
+        if (g_state.shuffle_pete_store != 1) return false; // vanilla shop
+        const int village = cur.tribe - 1;
+        int slot = -1;
+        if (kind == Pickup::HeartPot) {
+            slot = extra_check_claimed_locked(EXTRA_CHECK_SHOP + village * 5 + SHOP_HEART_POT_1) ? SHOP_HEART_POT_2 : SHOP_HEART_POT_1;
+        } else if (kind == Pickup::Clockwork) {
+            slot = SHOP_CLOCKWORK;
+        } else if (kind == Pickup::RedJelly) {
+            slot = SHOP_GUMMI_JUMP;
+        } else if (kind == Pickup::BlueJelly) {
+            slot = SHOP_JELLY_JUMP;
+        }
+        if (slot < 0) return false;
+        static const char* kSlotNames[5] = {"Heart Pot Purchase 1", "Heart Pot Purchase 2", "Clockwork Gobbo Purchase",
+                                            "Gummi Jump Purchase", "Jelly Jump Purchase"};
+        claim_extra_check_locked(EXTRA_CHECK_SHOP + village * 5 + slot,
+                                 std::string(kStageDoors[village * 5].hub_name) + " - Pete's Store: " + kSlotNames[slot]);
+        return true; // the purchased item comes from the multiworld / seed instead
+    }
+
+    if (kind == Pickup::GoldenGobbo) {
+        int stage_idx = find_stage_index_by_wad(g_state.current_wad);
+        if (stage_idx >= 0) {
+            claim_extra_check_locked(EXTRA_CHECK_GOLDEN_GOBBO + stage_idx,
+                                     std::string(kStageDoors[stage_idx].level_name) + " - Golden Gobbo");
+        }
+        return multiworld; // in a multiworld, Golden Gobbos are items sent by the server
+    }
+
+    if (kind == Pickup::Jigsaw) {
+        if (is_secret_level_coords(cur)) {
+            claim_extra_check_locked(EXTRA_CHECK_JIGSAW + (cur.tribe - 1),
+                                     std::string(kStageDoors[(cur.tribe - 1) * 5].hub_name) + " - Jigsaw Piece");
+        }
+        return multiworld;
+    }
+
+    // Ordinary collectables (heart pots, keys, gobbos, clockwork gobbos, binoculars) are not
+    // Archipelago locations, so in a multiworld they keep their vanilla effect.
+    if (multiworld || kind == Pickup::Other || kind == Pickup::RedJelly || kind == Pickup::BlueJelly) return false;
+    grant_solo_pickup_locked(desc);
+    return true;
+}
+
+static bool handle_pickup(Pickup kind, const std::string& desc) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return handle_pickup_locked(kind, desc);
 }
 
 // Opcode 171 (0xAB): PickupHeartPot
 static void __fastcall Hooked_PickupHeartPot(void* strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+    if (handle_pickup(Pickup::HeartPot, "Heart Pot Pickup")) {
         auto fn_sfx = reinterpret_cast<FnPlaySfx1Arg>(g_exe_base + RVA_FN_HUD_POPUP_HEARTS);
         if (fn_sfx) fn_sfx(1);
-        trigger_collectable_pickup_check("Heart Pot Pickup");
         return;
     }
-    if (g_orig_pickup_heart_pot) {
-        g_orig_pickup_heart_pot(strat);
-    }
+    if (g_orig_pickup_heart_pot) g_orig_pickup_heart_pot(strat);
 }
 
 // Opcode 248 (0xF8): PickupClockwork
 static void __fastcall Hooked_PickupClockwork(void* strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
-        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_CLOCKWORK);
-        if (fn_sfx) fn_sfx();
-        trigger_collectable_pickup_check("Clockwork Gobbo Pickup");
+    if (handle_pickup(Pickup::Clockwork, "Clockwork Gobbo Pickup")) {
+        // Same HUD feedback the game's own handler (0x140066010) shows. Do NOT call its tail target
+        // 0x140260F90: that is an achievement check, not a sound.
+        reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_CLOCKWORK)();
         return;
     }
-    if (g_orig_pickup_clockwork) {
-        g_orig_pickup_clockwork(strat);
-    }
+    if (g_orig_pickup_clockwork) g_orig_pickup_clockwork(strat);
 }
 
 // Opcode 249 (0xF9): PickupKey
 static void __fastcall Hooked_PickupKey(void* strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
-        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_KEY);
-        if (fn_sfx) fn_sfx();
-        trigger_collectable_pickup_check("Key Pickup");
+    if (handle_pickup(Pickup::Key, "Key Pickup")) {
+        // Same HUD feedback the game's own handler (0x140065F90) shows. Its tail target 0x140260DE0
+        // awards the "firstGoldenGobbo" achievement, so it must not be called here.
+        reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_KEY)();
         return;
     }
-    if (g_orig_pickup_key) {
-        g_orig_pickup_key(strat);
-    }
+    if (g_orig_pickup_key) g_orig_pickup_key(strat);
 }
 
 // Opcode 250 (0xFA): PickupGobbo
 static void __fastcall Hooked_PickupGobbo(void* strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
-        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_GOBBO);
-        if (fn_sfx) fn_sfx();
-        trigger_collectable_pickup_check("Gobbo Pickup");
+    if (handle_pickup(Pickup::Gobbo, "Gobbo Pickup")) {
+        // The game's own handler only tail-calls 0x140041520, which is an empty function: no feedback.
         return;
     }
-    if (g_orig_pickup_gobbo) {
-        g_orig_pickup_gobbo(strat);
-    }
+    if (g_orig_pickup_gobbo) g_orig_pickup_gobbo(strat);
 }
 
 // Opcode 270 (0x10E): PickupBinoculars (used by Sailor Village crate at 0x17736C!)
 static void __fastcall Hooked_PickupBinoculars(void* strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
-        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_BINOCULARS);
-        if (fn_sfx) fn_sfx();
-        trigger_collectable_pickup_check("Magic Eye-Zoomers (Binoculars) Pickup");
+    if (handle_pickup(Pickup::Binoculars, "Magic Eye-Zoomers (Binoculars) Pickup")) {
+        // The game's own handler (0x140065FE0) only jumps to 0x140261060, an achievement check, so there
+        // is no native popup to show here.
         return;
     }
-    if (g_orig_pickup_binoculars) {
-        g_orig_pickup_binoculars(strat);
+    if (g_orig_pickup_binoculars) g_orig_pickup_binoculars(strat);
+}
+
+// Opcode 172 (0xAC): GiveInventoryItem(type) -> AddInventoryItem(type, 1, 1, 0) at 0x140041600.
+// The item type is the next int32 in the strat script stream (*(int32_t**)strat). Types match the
+// inventory wheel: 2 Golden Gobbo, 5 Red Jelly, 7 Blue Jelly, 8 Clockwork Gobbo, 10 Jigsaw Piece.
+static FnStratVmHandler g_orig_give_inv_item = nullptr;
+static void __fastcall Hooked_GiveInventoryItem(void* strat) {
+    int32_t type = **reinterpret_cast<int32_t**>(strat);
+    Pickup kind = Pickup::Other;
+    switch (type) {
+        case 2: kind = Pickup::GoldenGobbo; break;
+        case 5: kind = Pickup::RedJelly; break;
+        case 7: kind = Pickup::BlueJelly; break;
+        case 8: kind = Pickup::Clockwork; break;
+        case 10: kind = Pickup::Jigsaw; break;
+        default: break;
     }
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_state.debug_watch) {
+            debug_log_locked("GiveInventoryItem type=" + std::to_string(type) + " map=" + g_state.current_wad);
+        }
+    }
+    if (kind != Pickup::Other && handle_pickup(kind, "Inventory Item " + std::to_string(type))) {
+        *reinterpret_cast<int32_t**>(strat) += 1; // consume the opcode's argument like the original does
+        return;
+    }
+    if (g_orig_give_inv_item) g_orig_give_inv_item(strat);
+}
+
+// ============================================================================
+// Achievements (logging only for now, see docs/achievements.md)
+// AchievementManager::SetAchievementValue (0x14025FF00) and ::IncrementAchievement (0x14025F900)
+// take (const std::string* id, int32_t value). id is an MSVC std::string: the characters are inline
+// unless capacity (+0x18) >= 16, in which case +0x0 points to them; size is at +0x10.
+// ============================================================================
+using FnAchievement = uint64_t(__fastcall*)(void* id, int32_t value);
+static FnAchievement g_orig_set_achievement = nullptr;
+static FnAchievement g_orig_increment_achievement = nullptr;
+
+static std::string read_msvc_string(const void* str) {
+    if (!str) return std::string();
+    const uint8_t* b = static_cast<const uint8_t*>(str);
+    uint64_t size = *reinterpret_cast<const uint64_t*>(b + 0x10);
+    uint64_t cap = *reinterpret_cast<const uint64_t*>(b + 0x18);
+    if (size > 64 || cap < size) return std::string("?");
+    const char* chars = cap >= 16 ? *reinterpret_cast<const char* const*>(b) : reinterpret_cast<const char*>(b);
+    return chars ? std::string(chars, static_cast<size_t>(size)) : std::string();
+}
+
+static void log_achievement(const char* kind, void* id, int32_t value) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_state.debug_watch) return;
+    const MapCoords cur = *reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+    debug_log_locked(std::string("ACHIEVEMENT ") + kind + " " + read_msvc_string(id) + " value=" +
+                     std::to_string(value) + " map=" + coords_to_wad(cur));
+}
+
+static uint64_t __fastcall Hooked_SetAchievement(void* id, int32_t value) {
+    log_achievement("set", id, value);
+    return g_orig_set_achievement(id, value);
+}
+
+static uint64_t __fastcall Hooked_IncrementAchievement(void* id, int32_t value) {
+    log_achievement("increment", id, value);
+    return g_orig_increment_achievement(id, value);
 }
 
 // SetActionState (0x14022E290): Core engine action state transition handler
@@ -3673,6 +4009,25 @@ static void install_croc2_engine_hooks() {
         VirtualProtect(fn_set_action, 32, old_prot, &old_prot);
     }
 
+    // 5b. Achievement logging hooks (18-byte prologue: 55 56 57 48 81 EC 40 01 00 00 48 8D AC 24 80 00 00 00)
+    {
+        static const uint8_t kAchPrologue[18] = {0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x40, 0x01, 0x00,
+                                                 0x00, 0x48, 0x8D, 0xAC, 0x24, 0x80, 0x00, 0x00, 0x00};
+        auto hook_ach = [&](uintptr_t rva, uint8_t* tramp, const void* hooked, FnAchievement& orig) {
+            uint8_t* fn = reinterpret_cast<uint8_t*>(g_exe_base + rva);
+            if (std::memcmp(fn, kAchPrologue, sizeof(kAchPrologue)) != 0) return;
+            std::memcpy(tramp, fn, 18);
+            write_abs_jmp64(tramp + 18, fn + 18, 14);
+            orig = reinterpret_cast<FnAchievement>(tramp);
+            DWORD prot = 0;
+            VirtualProtect(fn, 32, PAGE_EXECUTE_READWRITE, &prot);
+            write_abs_jmp64(fn, hooked, 18);
+            VirtualProtect(fn, 32, prot, &prot);
+        };
+        hook_ach(RVA_FN_SET_ACHIEVEMENT, tramp_mem + 320, reinterpret_cast<const void*>(&Hooked_SetAchievement), g_orig_set_achievement);
+        hook_ach(RVA_FN_INCREMENT_ACHIEVEMENT, tramp_mem + 384, reinterpret_cast<const void*>(&Hooked_IncrementAchievement), g_orig_increment_achievement);
+    }
+
     // 6. Hook Strat VM Collectable & Inventory Pickup Slots (Opcodes 171, 248, 249, 250, 270)
     auto hook_strat_slot = [](uintptr_t slot_rva, uintptr_t expected_target, uintptr_t hooked_fn, FnStratVmHandler& orig_fn) {
         uintptr_t* p_slot = reinterpret_cast<uintptr_t*>(g_exe_base + slot_rva);
@@ -3689,6 +4044,7 @@ static void install_croc2_engine_hooks() {
     hook_strat_slot(RVA_STRAT_VM_CLOCKWORK_SLOT, RVA_FN_GIVE_CLOCKWORK_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupClockwork), g_orig_pickup_clockwork);
     hook_strat_slot(RVA_STRAT_VM_KEY_SLOT, RVA_FN_GIVE_KEY_NATIVE, reinterpret_cast<uintptr_t>(&Hooked_PickupKey), g_orig_pickup_key);
     hook_strat_slot(RVA_STRAT_VM_GOBBO_SLOT, RVA_FN_GIVE_GOBBO_NATIVE, reinterpret_cast<uintptr_t>(&Hooked_PickupGobbo), g_orig_pickup_gobbo);
+    hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);

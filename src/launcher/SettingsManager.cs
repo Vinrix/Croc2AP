@@ -32,6 +32,7 @@ namespace Croc2Launcher
         public int TrapWeight { get; set; }
         public bool FireBreakoutTrap { get; set; }
         public bool DeathLink { get; set; }
+        public string Theme { get; set; } // "system", "light" or "dark"
 
         public LauncherSettings()
         {
@@ -58,6 +59,7 @@ namespace Croc2Launcher
             TrapWeight = 15;
             FireBreakoutTrap = true;
             DeathLink = false;
+            Theme = "system";
         }
     }
 
@@ -170,6 +172,11 @@ namespace Croc2Launcher
                             bool b;
                             if (bool.TryParse(dict["FireBreakoutTrap"].ToString(), out b)) settings.FireBreakoutTrap = b;
                         }
+                        if (dict.ContainsKey("Theme") && dict["Theme"] != null)
+                        {
+                            string th = dict["Theme"].ToString();
+                            if (th == "light" || th == "dark" || th == "system") settings.Theme = th;
+                        }
                         if (dict.ContainsKey("DeathLink") && dict["DeathLink"] != null)
                         {
                             bool b;
@@ -211,6 +218,7 @@ namespace Croc2Launcher
                 dict["TrapWeight"] = settings.TrapWeight;
                 dict["FireBreakoutTrap"] = settings.FireBreakoutTrap;
                 dict["DeathLink"] = settings.DeathLink;
+                dict["Theme"] = settings.Theme ?? "system";
 
                 string json = MiniJson.Serialize(dict);
                 File.WriteAllText(filePath, json);

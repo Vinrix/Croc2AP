@@ -40,6 +40,9 @@ constexpr uintptr_t RVA_FN_GIVE_GOBBO_NATIVE     = 0x00065FD0;
 constexpr uintptr_t RVA_FN_GIVE_BINOCULARS_NAT   = 0x00065FE0;
 constexpr uintptr_t RVA_FN_GIVE_CLOCKWORK_NAT    = 0x00066010;
 constexpr uintptr_t RVA_FN_GIVE_HEART_POT_NAT    = 0x00066120;
+constexpr uintptr_t RVA_FN_GIVE_INV_ITEM_NAT     = 0x00062CD0; // Opcode 172 handler: GiveInventoryItem(type)
+constexpr uintptr_t RVA_FN_SET_ACHIEVEMENT       = 0x0025FF00; // AchievementManager::SetAchievementValue(std::string*, int)
+constexpr uintptr_t RVA_FN_INCREMENT_ACHIEVEMENT = 0x0025F900; // AchievementManager::IncrementAchievement(std::string*, int)
 constexpr uintptr_t RVA_FN_LOAD_MAP              = 0x00070B60;
 constexpr uintptr_t RVA_FN_SAVE_GAME_SLOT        = 0x001DCE40;
 constexpr uintptr_t RVA_FN_SET_ACTION_STATE      = 0x0022E290; // SetActionState(void* strat, int32_t action_id)
@@ -74,10 +77,13 @@ constexpr uintptr_t RVA_STRAT_VM_KEY_SLOT        = 0x007F9BE8; // Opcode 249 (0x
 constexpr uintptr_t RVA_STRAT_VM_GOBBO_SLOT      = 0x007F9BF0; // Opcode 250 (0xFA) -> 0x140065FD0
 constexpr uintptr_t RVA_STRAT_VM_BINOCULARS_SLOT = 0x007F9C90; // Opcode 270 (0x10E) -> 0x140065FE0
 
-constexpr uintptr_t RVA_FN_PLAY_SFX_KEY          = 0x00260DE0;
-constexpr uintptr_t RVA_FN_PLAY_SFX_CLOCKWORK    = 0x00260F90;
-constexpr uintptr_t RVA_FN_PLAY_SFX_BINOCULARS   = 0x00261060;
-constexpr uintptr_t RVA_FN_PLAY_SFX_INV_ITEM     = 0x00260DD0;
+// NOT sound effects: these are the AchievementManager checks the game's pickup handlers tail-call
+// (each builds an achievement ID and calls RVA_FN_SET_ACHIEVEMENT). Calling them unlocks real Steam
+// achievements, so the mod must never use them as pickup feedback. Kept only as documentation.
+constexpr uintptr_t RVA_FN_ACH_CHECK_KEY         = 0x00260DE0; // was RVA_FN_PLAY_SFX_KEY; sets "firstGoldenGobbo"
+constexpr uintptr_t RVA_FN_ACH_CHECK_CLOCKWORK   = 0x00260F90; // was RVA_FN_PLAY_SFX_CLOCKWORK
+constexpr uintptr_t RVA_FN_ACH_CHECK_BINOCULARS  = 0x00261060; // was RVA_FN_PLAY_SFX_BINOCULARS
+constexpr uintptr_t RVA_FN_ACH_CHECK_INV_ITEM    = 0x00260DD0; // was RVA_FN_PLAY_SFX_INV_ITEM; opcode 172 tail-jumps here with the item type
 
 // Exact croc2.exe Global State RVAs
 constexpr uintptr_t RVA_ACTIVE_SAVE_SLOT         = 0x00B4D5A8; // int32_t save slot index (0..4)
@@ -165,6 +171,9 @@ struct Croc2RandoSaveFooter {
     uint8_t clockwork_gobbos = 0;
     uint8_t binoculars = 0;
     uint32_t ap_items_applied = 0;    // Number of Archipelago ReceivedItems (by index) already applied to this save
+    // Added later; zero on older saves. Bits: 0..19 Golden Gobbo per stage, 20..23 Jigsaw per village,
+    // 24..43 Pete's Store slot (village*5 + slot), 44..51 bosses. See EXTRA_CHECK_* in croc2_ap_hook.cpp.
+    uint8_t extra_checks[8] = {0};
 };
 #pragma pack(pop)
 
@@ -242,6 +251,13 @@ struct ModState {
     bool config_enabled = true;
     bool forced_vanilla_cmdline = false;
     bool client_connected = false;
+    // Set once an Archipelago client (launcher / Croc2Client) configures a multiworld slot over the
+    // localhost bridge. While set, checks are only reported to the server, never granted locally.
+    bool multiworld_session = false;
+    bool death_link_enabled = false;
+    bool debug_watch = false;               // croc2_mod.ini debug_watch = 1: log detection signals for testing
+    bool death_link_kill_pending = false;   // set by a received DeathLink, applied on the game thread
+    uint32_t death_link_grace_until = 0;    // GetTickCount() before which a death is ours, not reported
     bool manual_override_disabled = false;
     bool in_active_save = false;
     bool save_locked_to_mod = false; // True when playing a save created with the mod enabled!
@@ -306,6 +322,7 @@ struct ModState {
     int solo_check_items[SOLO_CHECK_POOL_SIZE] = {0};
     int solo_white_crystal_items[2000] = {0};
     uint8_t checks_claimed[24] = {0};
+    uint8_t extra_checks[8] = {0};
     uint8_t white_crystals_claimed[20][13] = {{0}};
 
     // Player runtime state

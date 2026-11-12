@@ -5,6 +5,7 @@ from BaseClasses import CollectionState, MultiWorld
 from worlds.generic.Rules import set_rule
 from .locations import LEVEL_MAPPING, LOCATION_NAME_TO_DATA
 from .options import ColoredCrystalsMode, Croc2Options, Goal, ShufflePeteStore
+from .regions import VEHICLE_STAGE_WADS
 
 
 def has_ability(state: CollectionState, player: int, options: Croc2Options, ability_name: str) -> bool:
@@ -45,6 +46,11 @@ def can_activate_golden_gobbo(
     return all(state.has(f"{level_prefix} - {c} Crystal", player) for c in colors)
 
 
+REGION_TO_WAD = {
+    f"{hub['name']} - {lvl['name']}": lvl["wad"] for hub in LEVEL_MAPPING["hubs"] for lvl in hub["levels"]
+}
+
+
 def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) -> None:
     """Applies entrance and location rules across all regions in the Croc 2 world."""
     hubs = LEVEL_MAPPING["hubs"]
@@ -75,11 +81,21 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
             door_ent = multiworld.get_entrance(
                 f"{hub_name} Door {lvl['door_num']} Entrance", player
             )
-            if options.lock_level_access.value and not (
+            needs_key = bool(options.lock_level_access.value) and not (
                 hub["id"] == "sailor_village" and lvl["door_num"] == 1
-            ):
-                key_name = f"{lvl['name']} Key"
-                set_rule(door_ent, lambda state, kn=key_name: state.has(kn, player))
+            )
+            key_name = f"{lvl['name']} Key"
+            # The hook refuses entry to vehicle stages without the Vehicle License, so the door
+            # leading to one (wherever Door Shuffle put it) needs the license in logic too.
+            target_wad = REGION_TO_WAD.get(door_ent.connected_region.name if door_ent.connected_region else "")
+            needs_license = target_wad in VEHICLE_STAGE_WADS
+            set_rule(
+                door_ent,
+                lambda state, kn=key_name, nk=needs_key, nl=needs_license: (
+                    (not nk or state.has(kn, player))
+                    and (not nl or has_ability(state, player, options, "Vehicle License"))
+                ),
+            )
 
         # Secret Level entrance (requires Golden Gobbos + secret stage abilities)
         sec = hub["secret_level"]
