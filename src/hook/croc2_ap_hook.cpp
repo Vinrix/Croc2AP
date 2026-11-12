@@ -74,9 +74,8 @@ static std::atomic<int> g_pending_fire_hurt{0}; // Fire Breakout hits, applied v
 static std::atomic<int> g_debug_hurt_opcode{0};  // debug_watch only: run strat opcode 154/155/455/457 on Croc
 static std::atomic<DWORD> g_hit_log_until{0};    // debug_watch: log every action change until this tick
 static std::atomic<int> g_pending_lava_hurt{0};  // run Croc's own lava-hurt script routine (bounce, flash, -1 heart)
-// Where to enter the routine: 0x68 skips its first step (opcode 94 "spawn effect" = the tail smoke), which
-// crashed when started outside a real lava hit; 0 starts at the very beginning.
-static std::atomic<int> g_lava_entry_offset{0x68};
+// Where to enter the routine (0 = its first step, opcode 124/94 which spawn the tail smoke).
+static std::atomic<int> g_lava_entry_offset{0};
 static int g_script_trace_after = 0;             // debug_watch script tracer: steps still to log
 static std::atomic<int> g_pending_heart_pots{0};
 static std::atomic<int> g_pending_keys{0};
@@ -1766,7 +1765,7 @@ static std::string handle_command_locked(const std::string& req) {
 
     if (cmd == "debug_lava_hurt") {
         if (!g_state.debug_watch) return "{\"status\":\"refused\"}";
-        g_lava_entry_offset.store(extract_json_int(req, "entry", 0x68));
+        g_lava_entry_offset.store(extract_json_int(req, "entry", 0));
         g_pending_lava_hurt.fetch_add(1);
         return "{\"status\":\"ok\"}";
     }
@@ -3838,6 +3837,13 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             }
             int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
             if (found) {
+                // The routine is a subroutine: it ends with opcode 127, which pops a 64-bit return address off
+                // the strat's value stack (high half first, then low; see 0x14005DB80). Push Croc's current
+                // script position the same way a real call does, so the routine returns to where he was.
+                using FnPush = void(__fastcall*)(void* strat, int32_t value);
+                auto push = reinterpret_cast<FnPush>(g_exe_base + RVA_FN_STRAT_VM_PUSH_INT);
+                push(player, static_cast<int32_t>(script_pos & 0xFFFFFFFFu));
+                push(player, static_cast<int32_t>(script_pos >> 32));
                 *reinterpret_cast<uintptr_t*>(player) = found + g_lava_entry_offset.load();
                 g_script_trace_after = 80; // debug_watch tracer: log the steps Croc runs from here
             } else {
