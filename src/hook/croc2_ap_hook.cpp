@@ -70,7 +70,6 @@ static MapCoords g_saved_hub{1, 1, 1, 0};
 static MapCoords g_saved_orig_door{1, 2, 1, 0};
 static MapCoords g_saved_rand_stage{1, 4, 1, 0};
 static std::atomic<int> g_pending_heart_damage{0};
-static std::atomic<int> g_pending_fire_hurt{0}; // Fire Breakout hits, applied via the game's own hurt routine
 static std::atomic<int> g_debug_hurt_opcode{0};  // debug_watch only: run strat opcode 154/155/455/457 on Croc
 static std::atomic<DWORD> g_hit_log_until{0};    // debug_watch: log every action change until this tick
 static std::atomic<int> g_pending_lava_hurt{0};  // run Croc's own lava-hurt script routine (bounce, flash, -1 heart)
@@ -1442,8 +1441,8 @@ static void apply_ap_item_by_id_locked(int item_id,
             g_pending_wallet_crystals.fetch_add(10);
             g_state.add_log("Received Croc Crystals (+10)!");
             break;
-        case 7200151: // Fire Breakout Trap: the game's own "Croc gets hurt" (heart loss, flinch and knockback)
-            g_pending_fire_hurt.fetch_add(1);
+        case 7200151: // Fire Breakout Trap: Croc's own lava reaction (bounce, tail smoke, flash, -1 heart)
+            g_pending_lava_hurt.fetch_add(1); // Croc's own lava reaction: bounce, tail smoke, flash, -1 heart
             g_state.fire_trap.active = true;
             g_state.fire_trap.timer = 2.0f;
             g_state.add_log("🔥 TRAP! Fire Breakout: Instant Heart Lost with Fire Knockback!");
@@ -2051,7 +2050,7 @@ static std::string handle_command_locked(const std::string& req) {
         if (trap_type == "fire_breakout") {
             display_name = "Fire Breakout Trap";
             if (g_state.current_hearts > 0) g_state.current_hearts -= 1; // bookkeeping; resynced from the game
-            g_pending_fire_hurt.fetch_add(1);                             // real effect: game's hurt routine
+            g_pending_lava_hurt.fetch_add(1);                             // real effect: Croc's lava reaction
             g_state.fire_trap.active = true;
             g_state.fire_trap.timer = 2.0f;
             g_state.add_log("🔥 FIRE BREAKOUT TRAP! Instant Heart Lost with Fire Knockback!");
@@ -3776,28 +3775,6 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         s_prev_hearts = hearts;
     }
 
-    // Fire Breakout Trap: run strat opcode 154 (0x140065BD0) on Croc's own strat. In-game testing showed an
-    // enemy hit is Croc's script executing exactly this opcode (heart loss, heart HUD popup, death at zero
-    // hearts). Opcode 155 (0x140065F20, "stReset_to_checkpoint") was used before and teleported Croc back to
-    // the stage entrance. The flinch/knockback around it lives in Croc's script and is not reproduced yet.
-    if (g_pending_fire_hurt.load() > 0) {
-        void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
-        int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
-        int32_t paused = *reinterpret_cast<int32_t*>(g_exe_base + RVA_PAUSE_MENU_ACTIVE);
-        auto* cur = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
-        bool in_level = cur->tribe >= 1 && cur->tribe <= 5 && cur->map_type != 3;
-        if (player && state == 0 && paused == 0 && in_level &&
-            *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT) > 0) {
-            g_pending_fire_hurt.fetch_sub(1);
-            int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
-            using FnHurtCroc = void(__fastcall*)(void* strat);
-            reinterpret_cast<FnHurtCroc>(g_exe_base + RVA_FN_HURT_CROC_HIT)(player);
-            std::lock_guard<std::mutex> lock(g_mutex);
-            debug_log_locked("TRAP fire: HurtCroc, hearts " + std::to_string(before) + " -> " +
-                             std::to_string(*reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4)));
-        }
-    }
-
     // Croc's lava-hurt routine. Traced in-game (debug_watch script tracer): when Croc touches lava his own
     // strat script jumps to a routine that starts with "124 652720 / 94 0 2 8 0" and, 0x68 bytes later,
     // "181 0 / 7 16 / 10 4096". It plays the bounce, the tail smoke and the flash, removes a heart through
@@ -3808,7 +3785,9 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
         int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
         int32_t paused = *reinterpret_cast<int32_t*>(g_exe_base + RVA_PAUSE_MENU_ACTIVE);
-        if (player && state == 0 && paused == 0 && *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT) > 0) {
+        const MapCoords* where = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+        bool in_level = where->tribe >= 1 && where->tribe <= 5 && where->map_type != 3;
+        if (player && in_level && state == 0 && paused == 0 && *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT) > 0) {
             g_pending_lava_hurt.fetch_sub(1);
             uintptr_t script_pos = *reinterpret_cast<uintptr_t*>(player);
             static const int32_t kHead[7] = {124, 652720, 94, 0, 2, 8, 0};
