@@ -1,0 +1,85 @@
+name: Test Build (pull requests)
+
+# Builds everything a release would contain and attaches it to the pull request as a downloadable
+# "Croc2AP-test-build" zip, so changes can be tried before merging. Nothing is published.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up MinGW-w64 (GCC/G++)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: Compile C++ Hook DLL & Test Host (MinGW-w64)
+        shell: msys2 {0}
+        run: |
+          mkdir -p build
+          g++ -shared -std=c++17 -O2 -s -Wall -Wextra -static -static-libgcc -static-libstdc++ \
+            src/hook/croc2_ap_hook.cpp src/hook/version.def \
+            -o build/croc2_ap_hook.dll \
+            -lws2_32 -lwinhttp -lgdi32 -luser32
+          cp build/croc2_ap_hook.dll build/version.dll
+          if [ -f tests/test_host.cpp ]; then
+            g++ -std=c++17 -O2 -s -Wall -Wextra -static -static-libgcc -static-libstdc++ \
+              tests/test_host.cpp -o build/test_host.exe
+          fi
+
+      - name: Compile C# Standalone Launcher
+        shell: cmd
+        run: |
+          call build.bat
+          if not exist Croc2ArchipelagoLauncher.exe exit /b 1
+
+      - name: Build croc2.apworld & Run Test Suite
+        shell: bash
+        run: |
+          python installer.py --build-apworld
+          python -m unittest tests/test_croc2_ap.py
+
+      - name: Compile 1-Click Installer Setup EXE
+        shell: cmd
+        run: |
+          call build_setup.bat
+          if not exist Croc2AP_Setup.exe exit /b 1
+
+      - name: Assemble Test Package
+        shell: bash
+        run: |
+          mkdir -p dist/package/assets
+          cp Croc2AP_Setup.exe dist/package/
+          cp Croc2ArchipelagoLauncher.exe dist/package/
+          cp build/version.dll dist/package/
+          cp croc2_mod.ini dist/package/
+          cp dist/croc2.apworld dist/package/
+          cp "templates/Croc 2.yaml" dist/package/
+          cp INSTALL_INSTRUCTIONS.txt dist/package/
+          cp icon.ico dist/package/
+          cp assets/icon.png dist/package/assets/
+          cp Install_Croc2AP.bat dist/package/
+          cp Uninstall_Croc2AP.bat dist/package/
+          cp Toggle_Vanilla_Mode.bat dist/package/
+          cp README.md dist/package/
+
+      - name: Upload Test Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Croc2AP-test-build
+          path: dist/package/
+          retention-days: 30
