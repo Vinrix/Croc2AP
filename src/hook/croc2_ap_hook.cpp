@@ -3844,6 +3844,11 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 auto push = reinterpret_cast<FnPush>(g_exe_base + RVA_FN_STRAT_VM_PUSH_INT);
                 push(player, static_cast<int32_t>(script_pos & 0xFFFFFFFFu));
                 push(player, static_cast<int32_t>(script_pos >> 32));
+                // Lava sets Croc's script variable 19 to 1.0 (4096) right before calling the routine; at
+                // +0xC0 the routine compares it with 4096 (opcode 19, then 130) and skips the heart loss
+                // otherwise. Croc's own script clears it again next frame. Variables are int32[] at +0x118.
+                int32_t* croc_vars = *reinterpret_cast<int32_t**>(reinterpret_cast<uint8_t*>(player) + 0x118);
+                if (croc_vars) croc_vars[19] = 4096;
                 *reinterpret_cast<uintptr_t*>(player) = found + g_lava_entry_offset.load();
                 g_script_trace_after = 80; // debug_watch tracer: log the steps Croc runs from here
             } else {
