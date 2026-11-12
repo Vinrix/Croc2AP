@@ -3543,45 +3543,8 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         // Sync Colored Crystal count for current stage -> activates Golden Gobbo at 5/5!
         uintptr_t crystal_ptr = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_COLORED_CRYSTAL_PTR);
         if (crystal_ptr != 0) {
-            int32_t in_stage_val = *reinterpret_cast<int32_t*>(crystal_ptr);
-            int in_stage_gems = in_stage_val / 0x1000;
-            static const char* kGemColors[5] = {"Red", "Blue", "Green", "Yellow", "Purple"};
-            auto claim_next_gem = [&]() {
-                for (int g = 0; g < 5; ++g) {
-                    int check_id = stage_idx * 9 + 3 + g;
-                    if ((g_state.checks_claimed[check_id / 8] & (1u << (check_id % 8))) == 0) {
-                        claim_solo_check_locked(stage_idx, 3 + g,
-                            std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[g] + " Crystal");
-                        return;
-                    }
-                }
-            };
-            // When crystals are shuffled, the counter below is reset every frame to the crystals RECEIVED,
-            // so a pickup shows up as the counter rising above the value written last frame. (The old code
-            // claimed by total count, which after the reset was always 1: only "Red" could ever be sent.)
-            static int s_gem_stage = -2;
-            static int s_gem_last_written = -1;
-            static DWORD s_gem_stage_entered = 0;
-            if (stage_idx != s_gem_stage) {
-                s_gem_stage = stage_idx;
-                s_gem_last_written = -1;
-                s_gem_stage_entered = GetTickCount();
-            }
-            // While a stage is loading the game restores the crystals collected on earlier visits into the
-            // counter (seen 73 ms after entry), which looked like a new pickup. Ignore the first 2 seconds.
-            if (GetTickCount() - s_gem_stage_entered < 2000) s_gem_last_written = -1;
-            if (stage_idx >= 0 && g_state.is_randomizer_active()) {
-                if (g_state.colored_crystals_mode == 1) {
-                    if (s_gem_last_written >= 0) {
-                        for (int n = in_stage_gems - s_gem_last_written; n > 0; --n) claim_next_gem();
-                    }
-                } else {
-                    for (int g = 0; g < in_stage_gems && g < 5; ++g) {
-                        claim_solo_check_locked(stage_idx, 3 + g,
-                            std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[g] + " Crystal");
-                    }
-                }
-            }
+            // Coloured crystal checks are sent by Hooked_GainCrystal (strat opcode 173), which knows the
+            // exact colour. This block only keeps the displayed counts at the crystals RECEIVED.
 
             if (g_state.colored_crystals_mode == 1 && g_state.is_randomizer_active()) {
                 std::string canonical_wad = (stage_idx >= 0)
@@ -3599,7 +3562,10 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 // Clamp HUD crystal display to the number of colored crystals ACTUALLY received for this stage!
                 // This prevents picking up an in-level check from falsely filling the player's HUD crystal inventory.
                 *reinterpret_cast<int32_t*>(crystal_ptr) = game_val;
-                s_gem_last_written = count;
+                // The HUD's coloured-crystal display reads its own per-stage count (0xBC4DAC), which the
+                // remaster also restores from its saved crystal state on entry. Seen in testing: the red crystal
+                // picked up as a check still showed in the HUD after reloading. Keep it at the received count.
+                *reinterpret_cast<int32_t*>(g_exe_base + RVA_STAGE_COLORED_COUNT) = count;
             }
         }
 
@@ -4121,6 +4087,50 @@ static void __fastcall Hooked_HurtOp2(void* s) { log_hurt_op(2, s); g_orig_hurt_
 static void __fastcall Hooked_HurtOp3(void* s) { log_hurt_op(3, s); g_orig_hurt_ops[3](s); }
 static void __fastcall Hooked_HurtOp4(void* s) { log_hurt_op(4, s); g_orig_hurt_ops[4](s); }
 
+// Strat opcode 173 (0x140066030): GainCrystal. Pops a value; value >> 12 of 1..5 is a coloured crystal of that
+// colour (AddColoredCrystal), anything else is a white crystal (top-right counter 0xBA9B3C += 1, plus the
+// 50/100 crystal bonuses). The opcode runs on the crystal's own strat.
+// - Coloured: send that colour's check. With crystals shuffled into the pool, skip adding it to Croc (the
+//   value is still popped); the remaster still records it as collected (opcode 330), so it won't respawn.
+// - White: debug_watch logs the crystal's identity (name, position, var 0) for crystal persistence work.
+static FnStratVmHandler g_orig_gain_crystal = nullptr;
+static void __fastcall Hooked_GainCrystal(void* strat) {
+    uint8_t* sp = static_cast<uint8_t*>(strat);
+    int32_t stack_count = *reinterpret_cast<int32_t*>(sp + 0x138);
+    int32_t value = stack_count > 0 ? *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4) : 0;
+    int colour = value >> 12;
+    bool coloured = colour >= 1 && colour <= 5;
+    bool suppress = false;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_state.debug_watch) {
+            const char* name = *reinterpret_cast<const char**>(sp + 0x30);
+            int32_t* vars = *reinterpret_cast<int32_t**>(sp + 0x118);
+            char buf[220];
+            std::snprintf(buf, sizeof(buf), "CRYSTAL %s value=%d strat=%p name=%.40s pos=%d,%d,%d var0=%d map=%s",
+                          coloured ? "coloured" : "white", value, strat, name ? name : "?",
+                          *reinterpret_cast<int32_t*>(sp + 0x4C), *reinterpret_cast<int32_t*>(sp + 0x50),
+                          *reinterpret_cast<int32_t*>(sp + 0x54), vars ? vars[0] : -1, g_state.current_wad.c_str());
+            debug_log_locked(buf);
+        }
+        if (coloured && g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+            static const char* kGemColors[5] = {"Red", "Blue", "Green", "Yellow", "Purple"};
+            int stage_idx = find_stage_index_by_wad(g_state.current_wad);
+            if (stage_idx >= 0) {
+                claim_solo_check_locked(stage_idx, 3 + (colour - 1),
+                    std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[colour - 1] + " Crystal");
+            }
+            suppress = g_state.colored_crystals_mode == 1;
+        }
+    }
+    if (suppress && stack_count > 0) {
+        using FnPop = int32_t(__fastcall*)(void*);
+        reinterpret_cast<FnPop>(g_exe_base + 0x0005DA70)(strat); // consume the value like the original would
+        return;
+    }
+    g_orig_gain_crystal(strat);
+}
+
 // SetActionState (0x14022E290): Core engine action state transition handler
 // action_id == 3 corresponds to Butt Stomp.
 static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
@@ -4403,6 +4413,7 @@ static void install_croc2_engine_hooks() {
                             kHurtHooks[i], g_orig_hurt_ops[i]);
         }
     }
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 173 * 8, 0x00066030, reinterpret_cast<uintptr_t>(&Hooked_GainCrystal), g_orig_gain_crystal);
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
 
