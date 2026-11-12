@@ -71,9 +71,13 @@ static MapCoords g_saved_orig_door{1, 2, 1, 0};
 static MapCoords g_saved_rand_stage{1, 4, 1, 0};
 static std::atomic<int> g_pending_heart_damage{0};
 static std::atomic<int> g_pending_fire_hurt{0}; // Fire Breakout hits, applied via the game's own hurt routine
-static std::atomic<int> g_debug_hurt_opcode{0};
-static std::atomic<DWORD> g_hit_log_until{0};
-static std::atomic<int> g_pending_lava_hurt{0}; // run Croc's own lava-hurt script routine (bounce, tail smoke, flash, -1 heart)  // debug_watch: log every action change until this tick // debug_watch only: run strat opcode 154/155/455/457 on Croc
+static std::atomic<int> g_debug_hurt_opcode{0};  // debug_watch only: run strat opcode 154/155/455/457 on Croc
+static std::atomic<DWORD> g_hit_log_until{0};    // debug_watch: log every action change until this tick
+static std::atomic<int> g_pending_lava_hurt{0};  // run Croc's own lava-hurt script routine (bounce, flash, -1 heart)
+// Where to enter the routine: 0x68 skips its first step (opcode 94 "spawn effect" = the tail smoke), which
+// crashed when started outside a real lava hit; 0 starts at the very beginning.
+static std::atomic<int> g_lava_entry_offset{0x68};
+static int g_script_trace_after = 0;             // debug_watch script tracer: steps still to log
 static std::atomic<int> g_pending_heart_pots{0};
 static std::atomic<int> g_pending_keys{0};
 static std::atomic<int> g_pending_clockwork{0};
@@ -1762,6 +1766,7 @@ static std::string handle_command_locked(const std::string& req) {
 
     if (cmd == "debug_lava_hurt") {
         if (!g_state.debug_watch) return "{\"status\":\"refused\"}";
+        g_lava_entry_offset.store(extract_json_int(req, "entry", 0x68));
         g_pending_lava_hurt.fetch_add(1);
         return "{\"status\":\"ok\"}";
     }
@@ -3833,7 +3838,8 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             }
             int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
             if (found) {
-                *reinterpret_cast<uintptr_t*>(player) = found;
+                *reinterpret_cast<uintptr_t*>(player) = found + g_lava_entry_offset.load();
+                g_script_trace_after = 80; // debug_watch tracer: log the steps Croc runs from here
             } else {
                 using FnHurt = void(__fastcall*)(void*);
                 reinterpret_cast<FnHurt>(g_exe_base + RVA_FN_HURT_CROC_HIT)(player);
@@ -4163,7 +4169,6 @@ static constexpr int kStratOpcodeCount = 468;
 struct ScriptTraceEntry { DWORD tick; int32_t op; uintptr_t pos; int32_t a0, a1, a2, a3; };
 static ScriptTraceEntry g_script_trace[128];
 static unsigned g_script_trace_head = 0;
-static int g_script_trace_after = 0;
 static int g_script_trace_dumps = 0;
 
 static void log_script_trace_entry(const char* tag, const ScriptTraceEntry& e) {
