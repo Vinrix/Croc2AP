@@ -60,15 +60,6 @@ constexpr uintptr_t RVA_CLIMB_ALLOWED_BYTE       = 0x00BD1361; // uint8_t 1 when
 constexpr uintptr_t RVA_CLIMB_TOUCH_SURFACE_FLAG = 0x00BD1930; // int32_t non-zero when touching climbable wall/vine
 constexpr uintptr_t RVA_CLIMB_ACTIVE_STATE_FLAG  = 0x00BD19A0; // int32_t 1 when climbing wall/vine
 
-constexpr uintptr_t RVA_FN_DRAW_ZMOD             = 0x00125320;
-constexpr uintptr_t RVA_FN_GET_ZMOD_FOR_PSX      = 0x001251A0;
-constexpr uintptr_t RVA_FN_DRAW_ZMOD_INTERNAL    = 0x0012DB90;
-constexpr uintptr_t RVA_FN_LOAD_ZMOD             = 0x002C2DD0;
-constexpr uintptr_t RVA_FN_INIT_ZMOD_GPU         = 0x00124800;
-constexpr uintptr_t RVA_RENDERER_PTR             = 0x00B90CF0;
-constexpr uintptr_t RVA_MATERIAL_TABLE           = 0x00BD0900;
-constexpr uintptr_t RVA_MODEL_MANAGER            = 0x00BD08D0;
-
 // Strat VM Collectable & Inventory Opcode Handlers & Dispatch Table Slots
 constexpr uintptr_t RVA_STRAT_VM_DISPATCH_TABLE  = 0x007F9420;
 constexpr uintptr_t RVA_STRAT_VM_HEART_POT_SLOT  = 0x007F9978; // Opcode 171 (0xAB) -> 0x140066120

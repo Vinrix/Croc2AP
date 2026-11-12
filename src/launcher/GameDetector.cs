@@ -153,6 +153,82 @@ namespace Croc2Launcher
             catch { }
         }
 
+        private static readonly string[] TargetCollectableSuffixes = new string[]
+        {
+            "_OBJ_006.zmod", "_OBJ_007.zmod", "_OBJ_008.zmod", "_OBJ_009.zmod",
+            "_OBJ_010.zmod", "_OBJ_012.zmod", "_OBJ_013.zmod", "_OBJ_014.zmod",
+            "_OBJ_020.zmod", "_OBJ_021.zmod", "_OBJ_025.zmod"
+        };
+
+        public static void ApplyArchipelagoLogoModels(string baseDir)
+        {
+            try
+            {
+                string modelsDir = Path.Combine(baseDir, "remaster", "models");
+                if (!Directory.Exists(modelsDir)) return;
+
+                string logoPath = Path.Combine(modelsDir, "original", "T0", "ap_logo.zmod");
+                if (!File.Exists(logoPath)) return;
+
+                byte[] logoData = File.ReadAllBytes(logoPath);
+                if (logoData == null || logoData.Length < 48) return;
+
+                foreach (string file in Directory.GetFiles(modelsDir, "*.zmod", SearchOption.AllDirectories))
+                {
+                    if (file.EndsWith(".vanilla", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (file.EndsWith("ap_logo.zmod", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    bool match = false;
+                    foreach (string sfx in TargetCollectableSuffixes)
+                    {
+                        if (file.EndsWith(sfx, StringComparison.OrdinalIgnoreCase))
+                        {
+                            match = true;
+                            break;
+                        }
+                    }
+                    if (!match) continue;
+
+                    string bak = file + ".vanilla";
+                    if (!File.Exists(bak))
+                    {
+                        File.Copy(file, bak, true);
+                    }
+
+                    byte[] origHeader = new byte[48];
+                    using (var fs = File.OpenRead(bak))
+                    {
+                        fs.Read(origHeader, 0, 48);
+                    }
+
+                    byte[] patchedData = (byte[])logoData.Clone();
+                    Array.Copy(origHeader, 16, patchedData, 16, 32); // Preserve native material name
+                    File.WriteAllBytes(file, patchedData);
+                }
+            }
+            catch { }
+        }
+
+        public static void RestoreVanillaModels(string baseDir)
+        {
+            try
+            {
+                string modelsDir = Path.Combine(baseDir, "remaster", "models");
+                if (!Directory.Exists(modelsDir)) return;
+
+                foreach (string bak in Directory.GetFiles(modelsDir, "*.zmod.vanilla", SearchOption.AllDirectories))
+                {
+                    string orig = bak.Substring(0, bak.Length - 8);
+                    try
+                    {
+                        File.Copy(bak, orig, true);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
         public static Process LaunchGame(GamePaths paths, bool vanillaMode)
         {
             if (!paths.HasExe)
@@ -162,6 +238,16 @@ namespace Croc2Launcher
 
             // Ensure mod ini matches requested mode
             SetModEnabledInIni(paths.IniPath, !vanillaMode);
+
+            // Swap models based on mode: Archipelago 3D logos for rando, vanilla original models for vanilla
+            if (vanillaMode)
+            {
+                RestoreVanillaModels(paths.BaseDir);
+            }
+            else
+            {
+                ApplyArchipelagoLogoModels(paths.BaseDir);
+            }
 
             var startInfo = new ProcessStartInfo
             {
