@@ -3408,6 +3408,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
 
     int dmg_to_apply = 0;
     int pots_to_apply = 0;
+    bool detach_climb_after_unlock = false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
@@ -3608,15 +3609,11 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 if (wall_climbing != 0 || bar_climbing != 0) {
                     *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
                     *reinterpret_cast<int32_t*>(g_exe_base + 0x00BD1B60) = 0;
-                    {
-                        std::lock_guard<std::mutex> lock(g_mutex);
-                        trigger_climb_blocked_toast_locked();
-                    }
-                    using FnDetachAllClimb = void(__fastcall*)();
-                    auto fn_detach = reinterpret_cast<FnDetachAllClimb>(g_exe_base + 0x0020E130);
-                    if (fn_detach) {
-                        fn_detach();
-                    }
+                    // g_mutex is already held here (this whole block runs under the lock taken at the top of
+                    // Hooked_ReadInput). Locking it again threw std::system_error ("resource deadlock would
+                    // occur") and crashed the game whenever Croc touched a climbable surface without claws.
+                    trigger_climb_blocked_toast_locked();
+                    detach_climb_after_unlock = true; // game call deferred until the lock is released
                 }
             }
 
@@ -3675,6 +3672,11 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_state.max_heart_pots = *p_max_pots;
         g_state.current_hearts = *p_curr_hearts;
+    }
+
+    if (detach_climb_after_unlock) {
+        using FnDetachAllClimb = void(__fastcall*)();
+        reinterpret_cast<FnDetachAllClimb>(g_exe_base + 0x0020E130)();
     }
 
     drain_pending_native_inventory_grants();
@@ -3892,8 +3894,10 @@ static std::string read_msvc_string(const void* str) {
     return chars ? std::string(chars, static_cast<size_t>(size)) : std::string();
 }
 
+// Deliberately lock-free: the game can award achievements from inside calls the mod makes while it
+// already holds g_mutex, and std::mutex is not re-entrant. Only a bool is read and the log file is
+// appended (the CRT serialises fprintf), so no lock is needed.
 static void log_achievement(const char* kind, void* id, int32_t value) {
-    std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_state.debug_watch) return;
     const MapCoords cur = *reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
     debug_log_locked(std::string("ACHIEVEMENT ") + kind + " " + read_msvc_string(id) + " value=" +
