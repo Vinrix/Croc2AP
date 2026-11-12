@@ -153,18 +153,8 @@ namespace Croc2Launcher
             catch { }
         }
 
-        // Specifically and ONLY:
-        // - Keys (shared library map T0L1M003 OBJ_009)
-        // - Hearts (shared library map T0L1M003 OBJ_022)
-        // - Eye Zoomers / Magic Binoculars (Sailor Village T1L1M001 OBJ_007)
-        // All other objects (butterflies, balloons, jellies, platforms, crates, clockwork gobbos, crystals)
-        // MUST remain 100% authentic vanilla!
-        private static readonly string[] LogoTargetNames =
-        {
-            "EU_T0L1M003_OBJ_009", // Key
-            "EU_T0L1M003_OBJ_022", // Heart
-            "EU_T1L1M001_OBJ_007", // Eye Zoomers / Magic Binoculars
-        };
+        // Temporarily disabled: All models are restored to 100% authentic vanilla
+        private static readonly string[] LogoTargetNames = new string[0];
         // Never swapped: OBJ_011 and OBJ_015..019 of T0L1M003 are the white and five coloured crystals.
 
         private static readonly System.Collections.Generic.HashSet<string> LogoTargets =
