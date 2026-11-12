@@ -69,6 +69,7 @@ class Croc2HookBridge:
         self.writer: Optional[asyncio.StreamWriter] = None
         self.connected: bool = False
         self.checked_locations: Set[int] = set()
+        self.pending_deaths: List[str] = []  # in-game deaths to forward as DeathLinks
         self.current_wad: str = "T1L1M001"
         self.last_state: Dict[str, Any] = {}
         # Serialises request/response pairs so concurrent callers never collide on reader.readline()
@@ -186,7 +187,23 @@ class Croc2HookBridge:
                 self.checked_locations.add(loc_id)
             elif ev.get("event") == "level_transition":
                 self.current_wad = str(ev.get("wad", self.current_wad))
+            elif ev.get("event") == "death":
+                self.pending_deaths.append(str(ev.get("map", "")))
         return events
+
+    async def fetch_claimed_locations(self) -> bool:
+        """Pull every check stored in the save, so checks made while no client was connected get sent."""
+        resp = await self.send_command({"command": "get_claimed_locations"})
+        if not resp:
+            return False
+        self.checked_locations.update(int(i) for i in resp.get("locations", []))
+        return True
+
+    async def set_death_link(self, enabled: bool) -> Optional[Dict[str, Any]]:
+        return await self.send_command({"command": "set_death_link", "enabled": int(enabled)})
+
+    async def deathlink_kill(self, source: str, cause: str) -> Optional[Dict[str, Any]]:
+        return await self.send_command({"command": "deathlink_kill", "source": source, "cause": cause})
 
 
 def run_client(*args: str) -> None:
@@ -223,6 +240,8 @@ def run_client(*args: str) -> None:
                 self.needs_slot_config = False
                 # Outgoing item notifications queued for the in-game feed (drained by croc2_sync_task)
                 self.pending_sent_feed: List[Dict[str, str]] = []
+                # DeathLinks received from other players, delivered to the DLL by croc2_sync_task
+                self.pending_kills: List[tuple] = []
 
             async def server_auth(self, password_requested: bool = False) -> None:
                 if password_requested and not self.password:
@@ -255,6 +274,10 @@ def run_client(*args: str) -> None:
                 except Exception:
                     return LOCATION_ID_TO_NAME.get(loc_id, f"Location {loc_id}")
 
+            def on_deathlink(self, data: Dict[str, Any]) -> None:
+                super().on_deathlink(data)
+                self.pending_kills.append((str(data.get("source", "")), str(data.get("cause", "") or "")))
+
             def on_package(self, cmd: str, args: dict) -> None:
                 super().on_package(cmd, args)
                 if cmd == "Connected":
@@ -262,6 +285,7 @@ def run_client(*args: str) -> None:
                     self.synced_item_index = 0
                     # Configured sequentially by croc2_sync_task (no unguarded concurrent socket use)
                     self.needs_slot_config = True
+                    asyncio.create_task(self.update_death_link(bool(self.slot_data.get("death_link", 0))))
                 elif cmd == "PrintJSON" and args.get("type") == "ItemSend":
                     item = args.get("item")
                     receiving = args.get("receiving")
@@ -304,6 +328,9 @@ def run_client(*args: str) -> None:
                     if ctx.needs_slot_config and ctx.slot_data:
                         if await ctx.hook.configure_slot(ctx.slot_data) is not None:
                             ctx.needs_slot_config = False
+                            await ctx.hook.set_death_link(bool(ctx.slot_data.get("death_link", 0)))
+                            # Resend checks the save already holds (made while this client was offline)
+                            await ctx.hook.fetch_claimed_locations()
                             # Sync other player names to the hook DLL
                             names = []
                             if hasattr(ctx, "player_names") and ctx.player_names:
@@ -357,6 +384,17 @@ def run_client(*args: str) -> None:
                     new_checks = ctx.hook.checked_locations - ctx.checked_locations
                     if new_checks and ctx.server and ctx.slot:
                         await ctx.send_msgs([{"cmd": "LocationChecks", "locations": sorted(new_checks)}])
+
+                    # DeathLink, both directions
+                    while ctx.hook.pending_deaths:
+                        where = ctx.hook.pending_deaths.pop(0)
+                        if "DeathLink" in ctx.tags:
+                            await ctx.send_death(f"{ctx.player_names.get(ctx.slot, 'Croc')} was squashed in Croc 2 ({where})")
+                    while ctx.hook.connected and ctx.pending_kills:
+                        source, cause = ctx.pending_kills[0]
+                        if await ctx.hook.deathlink_kill(source, cause) is None:
+                            break
+                        ctx.pending_kills.pop(0)
 
                     # Tell the server when the seed's goal is met (enables release/collect, marks the slot done)
                     if ctx.server and ctx.slot and not ctx.finished_game and goal_reached(

@@ -153,9 +153,15 @@ class Croc2World(World):
         while len(pool) < unfilled_count:
             pool.append(self.create_item(self.get_filler_item_name()))
 
-        # Trim if minimal location pool is smaller than base items (only filler/useful trimmed)
+        # With few locations enabled there can be more required items than locations. Drop surplus
+        # non-progression first; anything still left over goes to the starting inventory rather than
+        # being deleted (deleting progression made seeds unbeatable).
         if len(pool) > unfilled_count:
-            pool = pool[:unfilled_count]
+            pool.sort(key=lambda item: item.advancement)  # non-progression first
+            while len(pool) > unfilled_count and not pool[0].advancement:
+                pool.pop(0)
+            while len(pool) > unfilled_count:
+                self.multiworld.push_precollected(pool.pop())
 
         self.multiworld.itempool.extend(pool)
 

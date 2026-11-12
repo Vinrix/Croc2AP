@@ -40,6 +40,7 @@ constexpr uintptr_t RVA_FN_GIVE_GOBBO_NATIVE     = 0x00065FD0;
 constexpr uintptr_t RVA_FN_GIVE_BINOCULARS_NAT   = 0x00065FE0;
 constexpr uintptr_t RVA_FN_GIVE_CLOCKWORK_NAT    = 0x00066010;
 constexpr uintptr_t RVA_FN_GIVE_HEART_POT_NAT    = 0x00066120;
+constexpr uintptr_t RVA_FN_GIVE_INV_ITEM_NAT     = 0x00062CD0; // Opcode 172 handler: GiveInventoryItem(type)
 constexpr uintptr_t RVA_FN_LOAD_MAP              = 0x00070B60;
 constexpr uintptr_t RVA_FN_SAVE_GAME_SLOT        = 0x001DCE40;
 constexpr uintptr_t RVA_FN_SET_ACTION_STATE      = 0x0022E290; // SetActionState(void* strat, int32_t action_id)
@@ -165,6 +166,9 @@ struct Croc2RandoSaveFooter {
     uint8_t clockwork_gobbos = 0;
     uint8_t binoculars = 0;
     uint32_t ap_items_applied = 0;    // Number of Archipelago ReceivedItems (by index) already applied to this save
+    // Added later; zero on older saves. Bits: 0..19 Golden Gobbo per stage, 20..23 Jigsaw per village,
+    // 24..43 Pete's Store slot (village*5 + slot), 44..51 bosses. See EXTRA_CHECK_* in croc2_ap_hook.cpp.
+    uint8_t extra_checks[8] = {0};
 };
 #pragma pack(pop)
 
@@ -245,6 +249,10 @@ struct ModState {
     // Set once an Archipelago client (launcher / Croc2Client) configures a multiworld slot over the
     // localhost bridge. While set, checks are only reported to the server, never granted locally.
     bool multiworld_session = false;
+    bool death_link_enabled = false;
+    bool debug_watch = false;               // croc2_mod.ini debug_watch = 1: log detection signals for testing
+    bool death_link_kill_pending = false;   // set by a received DeathLink, applied on the game thread
+    uint32_t death_link_grace_until = 0;    // GetTickCount() before which a death is ours, not reported
     bool manual_override_disabled = false;
     bool in_active_save = false;
     bool save_locked_to_mod = false; // True when playing a save created with the mod enabled!
@@ -309,6 +317,7 @@ struct ModState {
     int solo_check_items[SOLO_CHECK_POOL_SIZE] = {0};
     int solo_white_crystal_items[2000] = {0};
     uint8_t checks_claimed[24] = {0};
+    uint8_t extra_checks[8] = {0};
     uint8_t white_crystals_claimed[20][13] = {{0}};
 
     // Player runtime state

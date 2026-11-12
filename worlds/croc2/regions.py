@@ -31,6 +31,10 @@ def create_croc2_regions(
             return options.colored_crystals_mode.value == ColoredCrystalsMode.option_shuffled_in_pool
         if cat == "Normal Gobbos":
             return False
+        if cat == "Trophies":
+            # Croc 2 has no trophy pickup or flag the hook can detect (no trophy code or strings in
+            # croc2.exe), so these would be unobtainable. Trophy *items* still exist for trophy_hunt.
+            return False
         if cat == "White Crystals":
             wc_mode = options.shuffle_white_crystals.value
             if wc_mode == ShuffleWhiteCrystals.option_none:

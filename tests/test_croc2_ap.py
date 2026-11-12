@@ -53,6 +53,10 @@ def _install_ap_shims_if_needed() -> None:
             self.player = player
             self.location = None
 
+        @property
+        def advancement(self) -> bool:
+            return bool(self.classification & 0b0001)
+
     class Location:
         game = "Generic"
 
@@ -139,6 +143,10 @@ def _install_ap_shims_if_needed() -> None:
             self.itempool = []
             self.early_items = {1: {}}
             self.completion_condition = {}
+            self.precollected_items = {1: []}
+
+        def push_precollected(self, item) -> None:
+            self.precollected_items.setdefault(item.player, []).append(item)
 
         def get_unfilled_locations(self, player: int):
             return [
@@ -400,8 +408,9 @@ class TestCroc2Archipelago(unittest.TestCase):
             f"All Croc Crystals in item pool must be sets of 1, 5, or 10, found: {set(crystal_items_in_pool)}",
         )
 
-        # Default location count: 187 base checks + 2000 White Crystal checks (100 per stage * 20 stages) = 2187
-        self.assertEqual(len(unfilled), 2187)
+        # Default location count: 187 base checks - 15 Trophy Challenges (not detectable in-game)
+        # + 2000 White Crystal checks (100 per stage * 20 stages) = 2172
+        self.assertEqual(len(unfilled), 2172)
 
         # Verify that Sailor Village Door 1 (T1_D1) is shuffled (not vanilla T1L2M001) when door_shuffle is enabled
         self.assertNotEqual(
@@ -949,6 +958,42 @@ class TestCroc2Archipelago(unittest.TestCase):
                     except Exception:
                         pass
 
+    def test_hook_dll_resync_and_deathlink_commands(self):
+        """get_claimed_locations returns stored checks (incl. offline ones); DeathLink commands are accepted."""
+        host_exe = os.path.join(ROOT_DIR, "build", "test_host.exe")
+        if not os.path.isfile(host_exe):
+            self.skipTest("build/test_host.exe not available")
+        test_ini = os.path.join(ROOT_DIR, "build", "test_mod_resync.ini")
+        with open(test_ini, "w", encoding="utf-8") as f:
+            f.write("[ArchipelagoMod]\nenabled = true\nport = 43831\n")
+        proc = subprocess.Popen([host_exe, test_ini], cwd=ROOT_DIR)
+        try:
+            async def run():
+                bridge = Croc2HookBridge(host="127.0.0.1", port=43831)
+                for _ in range(40):
+                    if await bridge.connect():
+                        break
+                    await asyncio.sleep(0.05)
+                self.assertTrue(bridge.connected)
+                # A Stage Clear (sub-check 8) and a Red Crystal (sub-check 3) found while "offline"
+                await bridge.send_command({"command": "claim_solo_check", "stage_idx": 0, "sub_check_idx": 8})
+                await bridge.send_command({"command": "claim_solo_check", "stage_idx": 0, "sub_check_idx": 3})
+                # A solo-only bonus slot must never be reported as an Archipelago location
+                await bridge.send_command({"command": "claim_solo_check", "stage_idx": 0, "sub_check_idx": 0})
+                bridge.checked_locations.clear()
+                self.assertTrue(await bridge.fetch_claimed_locations())
+                self.assertIn(7210006, bridge.checked_locations, "Stage Clear must be resent")
+                self.assertIn(7210007, bridge.checked_locations, "Red Crystal must be resent")
+                self.assertFalse(any(i >= 7300000 for i in bridge.checked_locations), "no non-existent IDs")
+                self.assertEqual((await bridge.set_death_link(True))["status"], "ok")
+                self.assertEqual((await bridge.deathlink_kill("Someone", "fell"))["status"], "ok")
+                await bridge.disconnect()
+
+            asyncio.run(run())
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+
     def test_installer_and_uninstaller_lifecycle(self):
         import shutil
         import tempfile
@@ -1125,6 +1170,26 @@ class TestCroc2Archipelago(unittest.TestCase):
         i_size = struct.unpack_from("<I", patched, offset)[0]
         self.assertEqual(i_size, 2016)
 
+
+    def test_small_location_pool_never_deletes_progression(self):
+        """Few locations enabled: surplus progression must go to start inventory, never be dropped."""
+        mw = MultiWorld()
+        world = Croc2World(mw, 1)
+        world.options = make_default_options(
+            colored_crystals_mode=ColoredCrystalsMode(ColoredCrystalsMode.option_vanilla),
+            shuffle_white_crystals=ShuffleWhiteCrystals(ShuffleWhiteCrystals.option_none),
+            shuffle_pete_store=ShufflePeteStore(ShufflePeteStore.option_vanilla),
+        )
+        world.generate_early()
+        world.create_regions()
+        world.create_items()
+        unfilled = mw.get_unfilled_locations(1)
+        self.assertEqual(len(mw.itempool), len(unfilled))
+        everything = mw.itempool + mw.precollected_items.get(1, [])
+        names = [i.name for i in everything]
+        self.assertEqual(names.count("Golden Gobbo"), 20)
+        self.assertEqual(names.count("Trophy"), 16)
+        self.assertEqual(names.count("Jigsaw Piece"), 4)
 
     def test_goal_completion_detection(self):
         """The client must report CLIENT_GOAL exactly when rules.py's completion_condition is met."""

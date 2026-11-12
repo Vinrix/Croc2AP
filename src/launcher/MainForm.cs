@@ -90,6 +90,8 @@ namespace Croc2Launcher
         private Dictionary<string, object> _cachedSlotData = null;
         private bool _slotDataConfigured = false;
         private bool _goalReported = false;
+        private bool _deathLinkActive = false;
+        private readonly List<KeyValuePair<string, string>> _pendingDeathLinkKills = new List<KeyValuePair<string, string>>();
 
         public MainForm() : this(new string[0])
         {
@@ -941,6 +943,16 @@ namespace Croc2Launcher
                 });
             };
 
+            _apClient.OnDeathLinkReceived += (source, cause) =>
+            {
+                SafeInvoke(() =>
+                {
+                    if (!_deathLinkActive) return;
+                    _pendingDeathLinkKills.Add(new KeyValuePair<string, string>(source, cause));
+                    LogFormatted("💀 [DeathLink] " + source + (string.IsNullOrEmpty(cause) ? "" : ": " + cause), Color.OrangeRed);
+                });
+            };
+
             _apClient.OnItemsReceived += (items, index) =>
             {
                 SafeInvoke(() =>
@@ -1397,13 +1409,32 @@ namespace Croc2Launcher
                 _slotDataConfigured = true;
                 await _hookClient.ConfigureSessionAsync(_cachedSlotData);
                 LogFormatted("[Hook] Configured session using Archipelago Slot Data.", Color.MediumSpringGreen);
+
+                object dl;
+                _deathLinkActive = _cachedSlotData.TryGetValue("death_link", out dl) && dl != null && Convert.ToInt32(dl) != 0;
+                await _hookClient.SetDeathLinkAsync(_deathLinkActive);
+                if (_apClient.IsConnected) await _apClient.SetDeathLinkTagAsync(_deathLinkActive);
+
+                // Resend checks the save already holds, including ones made while the launcher was closed
+                var stored = await _hookClient.GetClaimedLocationsAsync();
+                var resend = new List<long>();
+                foreach (long id in stored)
+                {
+                    if (_checkedLocations.Add(id)) resend.Add(id);
+                }
+                if (resend.Count > 0 && _apClient.IsConnected)
+                {
+                    await _apClient.SendLocationChecksAsync(resend);
+                    LogFormatted("[Hook] Re-sent " + resend.Count + " check(s) stored in the save.", Color.MediumSpringGreen);
+                }
             }
 
             if (_hookClient.IsConnected && _itemsAppliedCount < _receivedItemsQueue.Count)
             {
                 while (_itemsAppliedCount < _receivedItemsQueue.Count)
                 {
-                    var item = _receivedItemsQueue[_itemsAppliedCount];
+                    int itemIndex = _itemsAppliedCount; // 0-based position in the server's item list
+                    var item = _receivedItemsQueue[itemIndex];
                     _itemsAppliedCount++;
 
                     string itemName = Croc2Data.GetItemName(item.ItemId);
@@ -1413,7 +1444,7 @@ namespace Croc2Launcher
 
                     LogItemEvent(false, itemName, importance, senderName, _apClient.OurSlotName, locName);
 
-                    await _hookClient.GiveItemAsync((int)item.ItemId, senderName, locName, importance, _itemsAppliedCount);
+                    await _hookClient.GiveItemAsync((int)item.ItemId, senderName, locName, importance, itemIndex);
                 }
             }
 
@@ -1440,6 +1471,16 @@ namespace Croc2Launcher
                             }
                             LogFormatted("⭐ [CHECK] " + desc, Color.LimeGreen);
                             _lblChecksCount.Text = "Checks: " + _checkedLocations.Count;
+                        }
+                        else if (evType == "death")
+                        {
+                            if (_deathLinkActive && _apClient.IsConnected)
+                            {
+                                string where = ev.ContainsKey("map") && ev["map"] != null ? ev["map"].ToString() : "";
+                                await _apClient.SendDeathLinkAsync(_apClient.OurSlotName + " was squashed in Croc 2" +
+                                                                   (string.IsNullOrEmpty(where) ? "" : " (" + where + ")"));
+                                LogFormatted("💀 [DeathLink] Sent your death to the multiworld.", Color.OrangeRed);
+                            }
                         }
                         else if (evType == "item_received")
                         {
@@ -1502,6 +1543,13 @@ namespace Croc2Launcher
                     if (checksToSend.Count > 0 && _apClient.IsConnected)
                     {
                         await _apClient.SendLocationChecksAsync(checksToSend);
+                    }
+
+                    while (_pendingDeathLinkKills.Count > 0 && _hookClient.IsConnected)
+                    {
+                        var kill = _pendingDeathLinkKills[0];
+                        if (!await _hookClient.DeathLinkKillAsync(kill.Key, kill.Value)) break;
+                        _pendingDeathLinkKills.RemoveAt(0);
                     }
 
                     if (!_goalReported && _apClient.IsConnected && IsGoalReached())

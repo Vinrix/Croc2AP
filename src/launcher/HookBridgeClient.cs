@@ -143,6 +143,33 @@ namespace Croc2Launcher
             return resp != null;
         }
 
+        // Every check stored in the current save (sent again after (re)connecting)
+        public async Task<List<long>> GetClaimedLocationsAsync()
+        {
+            var result = new List<long>();
+            var resp = await SendCommandAsync(new Dictionary<string, object> { { "command", "get_claimed_locations" } });
+            object locs;
+            if (resp != null && resp.TryGetValue("locations", out locs) && locs is IEnumerable && !(locs is string))
+            {
+                foreach (object o in (IEnumerable)locs) result.Add(Convert.ToInt64(o));
+            }
+            return result;
+        }
+
+        public async Task SetDeathLinkAsync(bool enabled)
+        {
+            await SendCommandAsync(new Dictionary<string, object> { { "command", "set_death_link" }, { "enabled", enabled ? 1 : 0 } });
+        }
+
+        public async Task<bool> DeathLinkKillAsync(string source, string cause)
+        {
+            var resp = await SendCommandAsync(new Dictionary<string, object>
+            {
+                { "command", "deathlink_kill" }, { "source", source ?? "" }, { "cause", cause ?? "" }
+            });
+            return resp != null;
+        }
+
         public async Task<bool> GiveItemAsync(int itemId, string sender, string location, string classification, int itemIndex)
         {
             string itemName = Croc2Data.GetItemName(itemId);
