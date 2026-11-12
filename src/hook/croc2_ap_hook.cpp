@@ -71,6 +71,8 @@ static MapCoords g_saved_orig_door{1, 2, 1, 0};
 static MapCoords g_saved_rand_stage{1, 4, 1, 0};
 static std::atomic<int> g_pending_heart_damage{0};
 static std::atomic<int> g_pending_fire_hurt{0}; // Fire Breakout hits, applied via the game's own hurt routine
+static std::atomic<int> g_debug_hurt_opcode{0};
+static std::atomic<DWORD> g_hit_log_until{0};  // debug_watch: log every action change until this tick // debug_watch only: run strat opcode 154/155/455/457 on Croc
 static std::atomic<int> g_pending_heart_pots{0};
 static std::atomic<int> g_pending_keys{0};
 static std::atomic<int> g_pending_clockwork{0};
@@ -1755,6 +1757,16 @@ static std::string handle_command_locked(const std::string& req) {
         if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
         if (!g_state.shuffle_plane_guns) g_state.abilities.airplane_ammo_feed = true;
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
+    }
+
+    if (cmd == "debug_hurt_opcode") {
+        // Testing aid (debug_watch only): runs one of the game's hurt opcode handlers on Croc next frame.
+        int op = extract_json_int(req, "opcode", 0);
+        if (!g_state.debug_watch || (op != 154 && op != 155 && op != 455 && op != 457)) {
+            return "{\"status\":\"refused\"}";
+        }
+        g_debug_hurt_opcode.store(op);
+        return "{\"status\":\"ok\"}";
     }
 
     if (cmd == "get_claimed_locations") {
@@ -3539,10 +3551,15 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             // claimed by total count, which after the reset was always 1: only "Red" could ever be sent.)
             static int s_gem_stage = -2;
             static int s_gem_last_written = -1;
+            static DWORD s_gem_stage_entered = 0;
             if (stage_idx != s_gem_stage) {
                 s_gem_stage = stage_idx;
-                s_gem_last_written = -1; // first frame in a stage: just sync, don't claim
+                s_gem_last_written = -1;
+                s_gem_stage_entered = GetTickCount();
             }
+            // While a stage is loading the game restores the crystals collected on earlier visits into the
+            // counter (seen 73 ms after entry), which looked like a new pickup. Ignore the first 2 seconds.
+            if (GetTickCount() - s_gem_stage_entered < 2000) s_gem_last_written = -1;
             if (stage_idx >= 0 && g_state.is_randomizer_active()) {
                 if (g_state.colored_crystals_mode == 1) {
                     if (s_gem_last_written >= 0) {
@@ -3735,6 +3752,19 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         g_state.current_hearts = *p_curr_hearts;
     }
 
+    // debug_watch: log every heart drop, and open a 1.5 s window in which all action changes are logged
+    {
+        static int32_t s_prev_hearts = -1;
+        int32_t hearts = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+        if (s_prev_hearts >= 0 && hearts < s_prev_hearts && g_state.debug_watch) {
+            g_hit_log_until.store(GetTickCount() + 1500);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked("HEARTS " + std::to_string(s_prev_hearts) + " -> " + std::to_string(hearts) +
+                             " state=" + std::to_string(*reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE)));
+        }
+        s_prev_hearts = hearts;
+    }
+
     // Fire Breakout Trap: call croc2.exe's HurtCroc strat opcode handler (0x140065F20) on Croc's own strat.
     // It honours invincibility frames, removes a heart through TakeHeartDamage, sets the hurt state (5) for
     // the flinch/knockback, or kills Croc (state 1) when he has no hearts left, exactly like an enemy hit.
@@ -3752,6 +3782,21 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             reinterpret_cast<FnHurtCroc>(g_exe_base + RVA_FN_HURT_CROC)(player);
             std::lock_guard<std::mutex> lock(g_mutex);
             debug_log_locked("TRAP fire: HurtCroc, hearts " + std::to_string(before) + " -> " +
+                             std::to_string(*reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4)));
+        }
+    }
+
+    if (int op = g_debug_hurt_opcode.load()) {
+        void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+        int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+        if (player && state == 0) {
+            g_debug_hurt_opcode.store(0);
+            uintptr_t fn = op == 154 ? 0x00065BD0 : op == 155 ? 0x00065F20 : op == 455 ? 0x002044E0 : 0x00204720;
+            int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+            using FnStrat = void(__fastcall*)(void*);
+            reinterpret_cast<FnStrat>(g_exe_base + fn)(player);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked("DEBUG hurt opcode " + std::to_string(op) + ": hearts " + std::to_string(before) + " -> " +
                              std::to_string(*reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4)));
         }
     }
@@ -4003,6 +4048,20 @@ static uint64_t __fastcall Hooked_IncrementAchievement(void* id, int32_t value) 
 // SetActionState (0x14022E290): Core engine action state transition handler
 // action_id == 3 corresponds to Butt Stomp.
 static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
+    // debug_watch: log Croc's action changes (used to identify the "hurt" action for the fire trap).
+    // No lock taken: the game can call this from inside calls the mod makes while holding g_mutex.
+    if (g_state.debug_watch) {
+        void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+        bool in_hit_window = static_cast<int32_t>(g_hit_log_until.load() - GetTickCount()) > 0;
+        static int32_t s_last_action = -1;
+        if (in_hit_window || (strat == player && action_id != s_last_action)) {
+            if (strat == player) s_last_action = action_id;
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "ACTION %p -> %d (player ptr %p%s) hearts=%d", strat, action_id, player,
+                          strat == player ? ", MATCH" : "", *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4));
+            debug_log_locked(buf);
+        }
+    }
     if (action_id == 3) {
         if (g_state.is_mod_enabled_toggle() && !g_state.abilities.butt_stomp) {
             return; // Reject entering Butt Stomp action state!
