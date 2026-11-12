@@ -106,6 +106,8 @@ static FnOnDoorTransition g_orig_on_door_transition = nullptr;
 static FnLoadMap g_orig_load_map = nullptr;
 static FnReadInput g_orig_read_input = nullptr;
 static FnSaveGameSlot g_orig_save_game_slot = nullptr;
+using FnSetActionState = void(__fastcall*)(void* strat, int32_t action_id);
+static FnSetActionState g_orig_set_action_state = nullptr;
 
 static FnStratVmHandler g_orig_pickup_heart_pot = nullptr;
 static FnStratVmHandler g_orig_pickup_clockwork = nullptr;
@@ -2926,6 +2928,10 @@ static bool handle_map_transition_redirect() {
 static void fixup_spawn_trigger_after_map_load(void* map_header) {
     if (!g_exe_base || !map_header) return;
 
+    // Only perform spawn trigger fixups when entering a randomized stage or returning from a randomized stage back to hub.
+    // For authentic new game dock spawn (boat in Sailor Village), save game loading, and standard transitions, let engine handle it naturally.
+    if (!g_in_redirected_stage) return;
+
     std::lock_guard<std::mutex> lock(g_mutex);
 
     uintptr_t wad_buf = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_WAD_BUFFER_BASE);
@@ -3150,6 +3156,9 @@ static void drain_pending_native_inventory_grants() {
     // Note: fn_add_item(4, ...) zeroes 0x140BA9B5C, so we must NOT check RVA_INV_BINOCULARS == 0!
     if (g_state.binoculars && i32(RVA_HUD_BINOCULARS) == 0) {
         i32(RVA_HUD_BINOCULARS) = 1;
+    } else if (!g_state.binoculars && g_state.is_randomizer_active()) {
+        i32(RVA_HUD_BINOCULARS) = 0;
+        i32(RVA_INV_BINOCULARS) = 0;
     }
 
     // Keys -> Wheel item_type 12 (0x140BA9B54) + HUD key counter (0x140BA9B30)
@@ -3288,58 +3297,18 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
-            static bool s_airborne_butt_stomp_locked = false;
-            static bool s_jump_in_progress = false;
-
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
-                s_airborne_butt_stomp_locked = false;
-                s_jump_in_progress = false;
             } else if (!g_state.abilities.butt_stomp) {
-                // Read Croc's ground vs airborne physics state safely with strict pointer validation:
-                bool is_on_ground = false;
+                // Read Croc's physics state safely with strict pointer validation:
                 uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
                 if (player_strat > 0x10000 && player_strat < 0x7FFFFFFFFFFF) {
-                    if (!IsBadReadPtr(reinterpret_cast<const void*>(player_strat), 0xD0)) {
-                        uintptr_t floor_poly = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
-                        if (floor_poly > 0x10000 && floor_poly < 0x7FFFFFFFFFFF) {
-                            if (!IsBadReadPtr(reinterpret_cast<const void*>(floor_poly), sizeof(int32_t))) {
-                                int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
-                                int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
-                                // In Croc 2 (see 0x1401FC590 Opcode 381): croc_y <= floor_y indicates grounded
-                                if (croc_y <= floor_y || std::abs(croc_y - floor_y) < 0x1000) {
-                                    is_on_ground = true;
-                                }
-                            }
+                    if (!IsBadReadPtr(reinterpret_cast<const void*>(player_strat), 0x50)) {
+                        int32_t action_state = *reinterpret_cast<int32_t*>(player_strat + 0x44);
+                        if (action_state == 3) {
+                            *reinterpret_cast<int32_t*>(player_strat + 0x44) = 1; // Force reset out of Butt Stomp
                         }
                     }
-                }
-
-                if (is_on_ground) {
-                    s_airborne_butt_stomp_locked = false;
-                    s_jump_in_progress = false;
-                } else {
-                    // In mid-air: once the jump button is released (or not held), strictly lock out Butt Stomp
-                    if (!(buttons & 0x4000u)) {
-                        s_airborne_butt_stomp_locked = true;
-                    }
-                    // If a jump was already initiated, any rapid re-press before landing is a Butt Stomp attempt
-                    if (s_jump_in_progress && (newly_pressed & 0x4000u)) {
-                        s_airborne_butt_stomp_locked = true;
-                    }
-                    if (s_airborne_butt_stomp_locked) {
-                        buttons &= ~0x4000u;
-                        *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B54) &= ~0x4000u;
-                        *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B70) &= ~0x4000u;
-                        *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B74) &= ~0x4000u;
-                        *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B78) &= ~0x4000u;
-                        *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PRESSED_BUTTONS) &= ~0x4000u;
-                    }
-                }
-
-                // If on ground and jump is pressed, mark jump as in progress
-                if (is_on_ground && (buttons & 0x4000u)) {
-                    s_jump_in_progress = true;
                 }
 
                 // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
@@ -3347,12 +3316,15 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x0C00u;
             }
 
-            // Gating climbing claws: if Croc attaches to a climbing wall or monkey bars without claws,
-            // immediately detach him natively with zero disruption to doors or ground collision!
+            // Gating climbing claws: prevent grabbing climb surfaces by zeroing RVA_CLIMB_ALLOWED_BYTE
+            // and if Croc attaches to a climbing wall or monkey bars without claws, immediately detach him natively!
             if (!g_state.abilities.climbing_claws) {
+                *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
                 int32_t wall_climbing = *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG);
                 int32_t bar_climbing  = *reinterpret_cast<int32_t*>(g_exe_base + 0x00BD1B60);
                 if (wall_climbing != 0 || bar_climbing != 0) {
+                    *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
+                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00BD1B60) = 0;
                     {
                         std::lock_guard<std::mutex> lock(g_mutex);
                         trigger_climb_blocked_toast_locked();
@@ -3532,11 +3504,24 @@ static void __fastcall Hooked_PickupBinoculars(void* strat) {
     if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
         auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_BINOCULARS);
         if (fn_sfx) fn_sfx();
-        trigger_collectable_pickup_check("Binoculars Pickup");
+        trigger_collectable_pickup_check("Magic Eye-Zoomers (Binoculars) Pickup");
         return;
     }
     if (g_orig_pickup_binoculars) {
         g_orig_pickup_binoculars(strat);
+    }
+}
+
+// SetActionState (0x14022E290): Core engine action state transition handler
+// action_id == 3 corresponds to Butt Stomp.
+static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
+    if (action_id == 3) {
+        if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.butt_stomp) {
+            return; // Reject entering Butt Stomp action state!
+        }
+    }
+    if (g_orig_set_action_state) {
+        g_orig_set_action_state(strat, action_id);
     }
 }
 
@@ -3613,7 +3598,20 @@ static void install_croc2_engine_hooks() {
         VirtualProtect(fn_save_slot, 32, old_prot, &old_prot);
     }
 
-    // 5. Hook Strat VM Collectable & Inventory Pickup Slots (Opcodes 171, 248, 249, 250, 270)
+    // 5. Hook SetActionState (0x14022E290, 20-byte prologue: 55 56 57 48 83 ec 50 ...)
+    uint8_t* fn_set_action = reinterpret_cast<uint8_t*>(g_exe_base + RVA_FN_SET_ACTION_STATE);
+    if (fn_set_action[0] == 0x55 && fn_set_action[1] == 0x56 && fn_set_action[2] == 0x57) {
+        uint8_t* tramp_action = tramp_mem + 256;
+        std::memcpy(tramp_action, fn_set_action, 20);
+        write_abs_jmp64(tramp_action + 20, fn_set_action + 20, 14);
+        g_orig_set_action_state = reinterpret_cast<FnSetActionState>(tramp_action);
+
+        VirtualProtect(fn_set_action, 32, PAGE_EXECUTE_READWRITE, &old_prot);
+        write_abs_jmp64(fn_set_action, reinterpret_cast<const void*>(&Hooked_SetActionState), 20);
+        VirtualProtect(fn_set_action, 32, old_prot, &old_prot);
+    }
+
+    // 6. Hook Strat VM Collectable & Inventory Pickup Slots (Opcodes 171, 248, 249, 250, 270)
     auto hook_strat_slot = [](uintptr_t slot_rva, uintptr_t expected_target, uintptr_t hooked_fn, FnStratVmHandler& orig_fn) {
         uintptr_t* p_slot = reinterpret_cast<uintptr_t*>(g_exe_base + slot_rva);
         if (*p_slot == (g_exe_base + expected_target)) {
@@ -3635,7 +3633,7 @@ static void install_croc2_engine_hooks() {
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, Pickups).");
+    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ActionState, Pickups).");
 }
 
 } // namespace croc2_ap

@@ -42,6 +42,7 @@ constexpr uintptr_t RVA_FN_GIVE_CLOCKWORK_NAT    = 0x00066010;
 constexpr uintptr_t RVA_FN_GIVE_HEART_POT_NAT    = 0x00066120;
 constexpr uintptr_t RVA_FN_LOAD_MAP              = 0x00070B60;
 constexpr uintptr_t RVA_FN_SAVE_GAME_SLOT        = 0x001DCE40;
+constexpr uintptr_t RVA_FN_SET_ACTION_STATE      = 0x0022E290; // SetActionState(void* strat, int32_t action_id)
 constexpr uintptr_t RVA_FN_STRAT_VM_PUSH_INT     = 0x0005D8A0; // StratVM_PushInt(void* strat, int32_t val)
 constexpr uintptr_t RVA_FN_CLIMB_WALL_IDLE       = 0x001FAA90; // Opcode 370: Wall/Vine/Ladder can-climb check
 constexpr uintptr_t RVA_CLIMB_WALL_IDLE_SLOT     = 0x007F9FB0;
