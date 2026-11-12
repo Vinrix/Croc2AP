@@ -153,20 +153,17 @@ namespace Croc2Launcher
             catch { }
         }
 
-        // Remaster model files are named EU_<map>_OBJ_<n>, where <n> is an index into THAT map's own
-        // object list, so the same number is a different object in every map. Collectables are not
-        // stored per level: every level preloads them from shared "library" maps (mostly T0L1M003, see
-        // remaster/data_store/generated/T*/preload.json). So only those exact shared files are swapped.
+        // Specifically and ONLY:
+        // - Keys (shared library map T0L1M003 OBJ_009)
+        // - Hearts (shared library map T0L1M003 OBJ_022)
+        // - Eye Zoomers / Magic Binoculars (Sailor Village T1L1M001 OBJ_007)
+        // All other objects (butterflies, balloons, jellies, platforms, crates, clockwork gobbos, crystals)
+        // MUST remain 100% authentic vanilla!
         private static readonly string[] LogoTargetNames =
         {
             "EU_T0L1M003_OBJ_009", // Key
             "EU_T0L1M003_OBJ_022", // Heart
-            "EU_T0L1M003_OBJ_012", // collectable-sized shared object (pair with 013) - verify in game
-            "EU_T0L1M003_OBJ_013",
-            "EU_T0L1M003_OBJ_021", // collectable-sized shared object - verify in game
-            "EU_T0L1M003_OBJ_025", // collectable-sized shared object (pair with 026) - verify in game
-            "EU_T0L1M003_OBJ_026",
-            "EU_T0L1M007_OBJ_004", // kept from the original list
+            "EU_T1L1M001_OBJ_007", // Eye Zoomers / Magic Binoculars
         };
         // Never swapped: OBJ_011 and OBJ_015..019 of T0L1M003 are the white and five coloured crystals.
 
@@ -242,6 +239,21 @@ namespace Croc2Launcher
                 string modelsDir = Path.Combine(baseDir, "remaster", "models");
                 if (!Directory.Exists(modelsDir)) return;
 
+                // First, ensure all non-target models are restored from .vanilla backups
+                foreach (string bak in Directory.GetFiles(modelsDir, "*.zmod.vanilla", SearchOption.AllDirectories))
+                {
+                    string orig = bak.Substring(0, bak.Length - 8);
+                    if (!IsTargetCollectable(orig))
+                    {
+                        try
+                        {
+                            File.Copy(bak, orig, true);
+                            File.Delete(bak);
+                        }
+                        catch { }
+                    }
+                }
+
                 byte[] vdata = Convert.FromBase64String(LogoData.VertexDataBase64);
                 byte[] idata = Convert.FromBase64String(LogoData.IndexDataBase64);
 
@@ -252,7 +264,6 @@ namespace Croc2Launcher
                     {
                         if (!IsTargetCollectable(file))
                         {
-                            // Undo swaps made by older launcher versions, which matched the wrong files
                             if (File.Exists(bak))
                             {
                                 File.Copy(bak, file, true);
