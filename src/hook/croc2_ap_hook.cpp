@@ -3765,9 +3765,10 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         s_prev_hearts = hearts;
     }
 
-    // Fire Breakout Trap: call croc2.exe's HurtCroc strat opcode handler (0x140065F20) on Croc's own strat.
-    // It honours invincibility frames, removes a heart through TakeHeartDamage, sets the hurt state (5) for
-    // the flinch/knockback, or kills Croc (state 1) when he has no hearts left, exactly like an enemy hit.
+    // Fire Breakout Trap: run strat opcode 154 (0x140065BD0) on Croc's own strat. In-game testing showed an
+    // enemy hit is Croc's script executing exactly this opcode (heart loss, heart HUD popup, death at zero
+    // hearts). Opcode 155 (0x140065F20, "stReset_to_checkpoint") was used before and teleported Croc back to
+    // the stage entrance. The flinch/knockback around it lives in Croc's script and is not reproduced yet.
     if (g_pending_fire_hurt.load() > 0) {
         void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
         int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
@@ -3779,7 +3780,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             g_pending_fire_hurt.fetch_sub(1);
             int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
             using FnHurtCroc = void(__fastcall*)(void* strat);
-            reinterpret_cast<FnHurtCroc>(g_exe_base + RVA_FN_HURT_CROC)(player);
+            reinterpret_cast<FnHurtCroc>(g_exe_base + RVA_FN_HURT_CROC_HIT)(player);
             std::lock_guard<std::mutex> lock(g_mutex);
             debug_log_locked("TRAP fire: HurtCroc, hearts " + std::to_string(before) + " -> " +
                              std::to_string(*reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4)));

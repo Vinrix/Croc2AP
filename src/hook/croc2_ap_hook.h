@@ -23,7 +23,8 @@ constexpr uintptr_t RVA_ACTION_PROMPT_ENUMS   = 0x0081B9A0;
 // Exact croc2.exe Function RVAs (disassembled from x64 Steam binary)
 constexpr uintptr_t RVA_FN_ADD_HEART_POT         = 0x00028A60;
 constexpr uintptr_t RVA_FN_TAKE_HEART_DAMAGE     = 0x00028AA0;
-constexpr uintptr_t RVA_FN_HURT_CROC             = 0x00065F20; // strat opcode handler: hurt Croc like an enemy hit (state 5, or 1 on death)
+constexpr uintptr_t RVA_FN_HURT_CROC             = 0x00065F20; // strat opcode 155 "stReset_to_checkpoint": heart loss + teleport to checkpoint
+constexpr uintptr_t RVA_FN_HURT_CROC_HIT         = 0x00065BD0; // strat opcode 154: the heart loss an enemy hit runs on Croc's own strat
 constexpr uintptr_t RVA_FN_CALC_SAVE_INDEX       = 0x0002B9C0;
 constexpr uintptr_t RVA_FN_ON_DOOR_TRANSITION    = 0x0002BA00;
 constexpr uintptr_t RVA_FN_READ_INPUT            = 0x00040990;
