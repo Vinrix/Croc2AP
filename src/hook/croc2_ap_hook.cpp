@@ -3105,6 +3105,35 @@ static MapCoords resolve_map_load_locked(const MapCoords& req) {
         return dest;
     }
 
+    // Loading a save from the title screen: the game spawns Croc at the hub door of the LAST STAGE played
+    // (kept in the previous-map coordinates). With door shuffle that is the stage's own vanilla door, not
+    // the door that leads to it in this seed, and after a restart nothing in memory remembers which door
+    // that was. Work it out from the seed's door table instead and spawn Croc at that door.
+    if (!g_in_redirected_stage && is_hub_coords(req) && g_last_loaded.tribe == 0 && g_last_loaded.level == 0) {
+        const MapCoords prev = *reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
+        const std::string last_stage = coords_to_wad(prev);
+        int stage_i = find_stage_index_by_wad(last_stage);
+        debug_log_locked("LOAD SAVE into " + coords_to_wad(req) + ", last stage " + last_stage);
+        if (stage_i >= 0) {
+            const std::string stage_entrance = kStageDoors[stage_i].vanilla_wad;
+            for (int d = 0; d < 20; ++d) {
+                auto it = g_state.door_overrides.find(kStageDoors[d].vanilla_wad);
+                if (it == g_state.door_overrides.end() || it->second != stage_entrance) continue;
+                if (d == stage_i) break; // not shuffled: the game's spawn is already right
+                MapCoords door{};
+                if (!wad_to_coords(kStageDoors[d].vanilla_wad, door) || door.tribe != req.tribe) break;
+                g_saved_orig_door = door;   // the hub spawn fixup looks for this door's trigger
+                g_saved_hub = req;          // used by the hub-return branch below
+                wad_to_coords(stage_entrance, g_saved_rand_stage);
+                g_in_redirected_stage = true;
+                g_fix_spawn_this_load = true;
+                debug_log_locked(std::string("LOAD SAVE: spawn at ") + kStageDoors[d].door_id +
+                                 " (leads to " + stage_entrance + ") instead of that stage's own door");
+                break;
+            }
+        }
+    }
+
     if (g_in_redirected_stage && is_hub_coords(req)) {
         // Leaving a shuffled stage. The game sends Croc to the hub of the stage's own tribe, which is
         // wrong for cross-village shuffles (e.g. an Inca stage behind a Sailor door would exit into a
