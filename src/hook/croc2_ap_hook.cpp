@@ -3847,14 +3847,17 @@ static void __fastcall Hooked_PickupBinoculars(void* strat) {
 }
 
 // Opcode 172 (0xAC): GiveInventoryItem(type) -> AddInventoryItem(type, 1, 1, 0) at 0x140041600.
-// The item type is the next int32 in the strat script stream (*(int32_t**)strat). Types match the
-// inventory wheel: 2 Golden Gobbo, 5 Red Jelly, 7 Blue Jelly, 8 Clockwork Gobbo, 10 Jigsaw Piece.
+// The item type is the next int32 in the strat script stream (*(int32_t**)strat). AddInventoryItem's
+// switch maps type -> counter: 2 -> 0xBA9B40 (labelled "golden gobbos", but observed giving binoculars),
+// 4 -> 0xBA9B5C, 5 red jelly, 6 green jelly, 7 blue jelly, 8 clockwork, 9/12/13/14 keys, 10 jigsaw.
 static FnStratVmHandler g_orig_give_inv_item = nullptr;
 static void __fastcall Hooked_GiveInventoryItem(void* strat) {
     int32_t type = **reinterpret_cast<int32_t**>(strat);
     Pickup kind = Pickup::Other;
     switch (type) {
-        case 2: kind = Pickup::GoldenGobbo; break;
+        // Type 2 is NOT a Golden Gobbo: in testing, the Sailor Village crate gave the Magic Eye-Zoomers
+        // (binoculars) through GiveInventoryItem(2). Left unclaimed until a debug log from a real Golden
+        // Gobbo rescue shows the right signal (see docs/achievements.md / PR notes).
         case 5: kind = Pickup::RedJelly; break;
         case 7: kind = Pickup::BlueJelly; break;
         case 8: kind = Pickup::Clockwork; break;
