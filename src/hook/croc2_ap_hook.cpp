@@ -3041,11 +3041,10 @@ static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t sub
         g_pending_door_redirect = false;
         MapCoords target_coords{};
         if (wad_to_coords(g_pending_target_wad, target_coords)) {
-            int32_t load_type = (map_type == 3) ? 3 : target_coords.map_type;
             tribe = target_coords.tribe;
             level = target_coords.level;
             submap = target_coords.submap;
-            map_type = load_type;
+            map_type = target_coords.map_type;
 
             auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
             curr->tribe = tribe;
@@ -3055,7 +3054,6 @@ static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t sub
 
             g_in_redirected_stage = true;
             g_saved_rand_stage = target_coords;
-            g_saved_rand_stage.map_type = map_type;
             g_state.current_wad = g_pending_target_wad;
         }
     }
@@ -3291,31 +3289,42 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             }
 
             static bool s_airborne_butt_stomp_locked = false;
+            static bool s_jump_in_progress = false;
 
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
                 s_airborne_butt_stomp_locked = false;
+                s_jump_in_progress = false;
             } else if (!g_state.abilities.butt_stomp) {
-                // Read Croc's ground vs airborne physics state:
-                // When grounded, Croc's Y matches floor_poly's Y within ground tolerance.
+                // Read Croc's ground vs airborne physics state safely with strict pointer validation:
                 bool is_on_ground = false;
                 uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
-                if (player_strat != 0) {
-                    uintptr_t floor_poly = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
-                    if (floor_poly != 0) {
-                        int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
-                        int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
-                        if (std::abs(croc_y - floor_y) <= 16) {
-                            is_on_ground = true;
+                if (player_strat > 0x10000 && player_strat < 0x7FFFFFFFFFFF) {
+                    if (!IsBadReadPtr(reinterpret_cast<const void*>(player_strat), 0xD0)) {
+                        uintptr_t floor_poly = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
+                        if (floor_poly > 0x10000 && floor_poly < 0x7FFFFFFFFFFF) {
+                            if (!IsBadReadPtr(reinterpret_cast<const void*>(floor_poly), sizeof(int32_t))) {
+                                int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
+                                int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
+                                // In Croc 2 (see 0x1401FC590 Opcode 381): croc_y <= floor_y indicates grounded
+                                if (croc_y <= floor_y || std::abs(croc_y - floor_y) < 0x1000) {
+                                    is_on_ground = true;
+                                }
+                            }
                         }
                     }
                 }
 
                 if (is_on_ground) {
                     s_airborne_butt_stomp_locked = false;
+                    s_jump_in_progress = false;
                 } else {
                     // In mid-air: once the jump button is released (or not held), strictly lock out Butt Stomp
                     if (!(buttons & 0x4000u)) {
+                        s_airborne_butt_stomp_locked = true;
+                    }
+                    // If a jump was already initiated, any rapid re-press before landing is a Butt Stomp attempt
+                    if (s_jump_in_progress && (newly_pressed & 0x4000u)) {
                         s_airborne_butt_stomp_locked = true;
                     }
                     if (s_airborne_butt_stomp_locked) {
@@ -3326,6 +3335,11 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                         *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B78) &= ~0x4000u;
                         *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PRESSED_BUTTONS) &= ~0x4000u;
                     }
+                }
+
+                // If on ground and jump is pressed, mark jump as in progress
+                if (is_on_ground && (buttons & 0x4000u)) {
+                    s_jump_in_progress = true;
                 }
 
                 // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
