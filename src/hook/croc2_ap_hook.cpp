@@ -72,7 +72,8 @@ static MapCoords g_saved_rand_stage{1, 4, 1, 0};
 static std::atomic<int> g_pending_heart_damage{0};
 static std::atomic<int> g_pending_fire_hurt{0}; // Fire Breakout hits, applied via the game's own hurt routine
 static std::atomic<int> g_debug_hurt_opcode{0};
-static std::atomic<DWORD> g_hit_log_until{0};  // debug_watch: log every action change until this tick // debug_watch only: run strat opcode 154/155/455/457 on Croc
+static std::atomic<DWORD> g_hit_log_until{0};
+static std::atomic<int> g_pending_lava_hurt{0}; // run Croc's own lava-hurt script routine (bounce, tail smoke, flash, -1 heart)  // debug_watch: log every action change until this tick // debug_watch only: run strat opcode 154/155/455/457 on Croc
 static std::atomic<int> g_pending_heart_pots{0};
 static std::atomic<int> g_pending_keys{0};
 static std::atomic<int> g_pending_clockwork{0};
@@ -1757,6 +1758,12 @@ static std::string handle_command_locked(const std::string& req) {
         if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
         if (!g_state.shuffle_plane_guns) g_state.abilities.airplane_ammo_feed = true;
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
+    }
+
+    if (cmd == "debug_lava_hurt") {
+        if (!g_state.debug_watch) return "{\"status\":\"refused\"}";
+        g_pending_lava_hurt.fetch_add(1);
+        return "{\"status\":\"ok\"}";
     }
 
     if (cmd == "debug_hurt_opcode") {
@@ -3787,6 +3794,59 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         }
     }
 
+    // Croc's lava-hurt routine. Traced in-game (debug_watch script tracer): when Croc touches lava his own
+    // strat script jumps to a routine that starts with "124 652720 / 94 0 2 8 0" and, 0x68 bytes later,
+    // "181 0 / 7 16 / 10 4096". It plays the bounce, the tail smoke and the flash, removes a heart through
+    // opcode 154, then jumps back into the main script. Script addresses move on every load, so the routine
+    // is found by these contents inside the memory region that holds Croc's script, then Croc's script
+    // pointer is set to it between frames. Falls back to plain opcode 154 if the routine can't be found.
+    if (g_pending_lava_hurt.load() > 0) {
+        void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+        int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+        int32_t paused = *reinterpret_cast<int32_t*>(g_exe_base + RVA_PAUSE_MENU_ACTIVE);
+        if (player && state == 0 && paused == 0 && *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT) > 0) {
+            g_pending_lava_hurt.fetch_sub(1);
+            uintptr_t script_pos = *reinterpret_cast<uintptr_t*>(player);
+            static const int32_t kHead[7] = {124, 652720, 94, 0, 2, 8, 0};
+            static const int32_t kBody[6] = {181, 0, 7, 16, 10, 4096};
+            uintptr_t found = 0;
+            // Search every committed region of the allocation that holds Croc's script (the routine sat in an
+            // earlier region of the same allocation than the current script position in testing).
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (script_pos && VirtualQuery(reinterpret_cast<void*>(script_pos), &mbi, sizeof(mbi))) {
+                void* alloc = mbi.AllocationBase;
+                uintptr_t region = reinterpret_cast<uintptr_t>(alloc);
+                MEMORY_BASIC_INFORMATION r{};
+                while (!found && VirtualQuery(reinterpret_cast<void*>(region), &r, sizeof(r)) && r.AllocationBase == alloc) {
+                    if (r.State == MEM_COMMIT && r.RegionSize > 0x68 + sizeof(kBody)) {
+                        const uint8_t* lo = static_cast<const uint8_t*>(r.BaseAddress);
+                        const uint8_t* hi = lo + r.RegionSize - (0x68 + sizeof(kBody));
+                        for (const uint8_t* q = lo; q < hi; q += 4) {
+                            if (std::memcmp(q, kHead, sizeof(kHead)) == 0 && std::memcmp(q + 0x68, kBody, sizeof(kBody)) == 0) {
+                                found = reinterpret_cast<uintptr_t>(q);
+                                break;
+                            }
+                        }
+                    }
+                    region = reinterpret_cast<uintptr_t>(r.BaseAddress) + r.RegionSize;
+                }
+            }
+            int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+            if (found) {
+                *reinterpret_cast<uintptr_t*>(player) = found;
+            } else {
+                using FnHurt = void(__fastcall*)(void*);
+                reinterpret_cast<FnHurt>(g_exe_base + RVA_FN_HURT_CROC_HIT)(player);
+            }
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "LAVA HURT: routine %s (script %p -> %p), hearts before %d",
+                          found ? "found" : "NOT found, used opcode 154", reinterpret_cast<void*>(script_pos),
+                          reinterpret_cast<void*>(found), before);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked(buf);
+        }
+    }
+
     if (int op = g_debug_hurt_opcode.load()) {
         void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
         int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
@@ -4092,6 +4152,74 @@ static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
     }
 }
 
+// ============================================================================
+// debug_watch script tracer: records every strat opcode Croc's own script runs. When Croc runs opcode 154
+// (the heart loss of an enemy hit) the previous 128 steps and the next 160 are written to the debug log,
+// so the full hit sequence (flinch, knockback, flash) can be read and reproduced for the Fire Breakout trap.
+// Every one of the 468 opcode table slots gets a small generated stub: mov edx, opcode; mov r8, original;
+// mov rax, TraceOpcode; jmp rax. Only installed when debug_watch = 1.
+// ============================================================================
+static constexpr int kStratOpcodeCount = 468;
+struct ScriptTraceEntry { DWORD tick; int32_t op; uintptr_t pos; int32_t a0, a1, a2, a3; };
+static ScriptTraceEntry g_script_trace[128];
+static unsigned g_script_trace_head = 0;
+static int g_script_trace_after = 0;
+static int g_script_trace_dumps = 0;
+
+static void log_script_trace_entry(const char* tag, const ScriptTraceEntry& e) {
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), "%s t=%lu op=%d pos=%p args=%d,%d,%d,%d", tag, static_cast<unsigned long>(e.tick),
+                  e.op, reinterpret_cast<void*>(e.pos), e.a0, e.a1, e.a2, e.a3);
+    debug_log_locked(buf);
+}
+
+static void __fastcall TraceOpcode(void* strat, int32_t op, uintptr_t original) {
+    if (strat && strat == *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR)) {
+        const int32_t* args = *reinterpret_cast<int32_t**>(strat); // stream already points past the opcode
+        ScriptTraceEntry e{GetTickCount(), op, reinterpret_cast<uintptr_t>(args) - 4, args[0], args[1], args[2], args[3]};
+        if (g_script_trace_after > 0) {
+            log_script_trace_entry("TRACE after ", e);
+            --g_script_trace_after;
+        } else {
+            g_script_trace[g_script_trace_head++ & 127] = e;
+            if (op == 154 && g_script_trace_dumps < 5) {
+                ++g_script_trace_dumps;
+                debug_log_locked("==== Croc script trace: 128 steps before the hit (oldest first) ====");
+                for (unsigned i = 0; i < 128; ++i) {
+                    const ScriptTraceEntry& old = g_script_trace[(g_script_trace_head + i) & 127];
+                    if (old.tick) log_script_trace_entry("TRACE before", old);
+                }
+                debug_log_locked("==== hit (opcode 154); next 160 steps ====");
+                g_script_trace_after = 160;
+            }
+        }
+    }
+    reinterpret_cast<FnStratVmHandler>(original)(strat);
+}
+
+static void install_script_tracer() {
+    uintptr_t* table = reinterpret_cast<uintptr_t*>(g_exe_base + RVA_STRAT_VM_DISPATCH_TABLE);
+    const size_t stub_size = 32;
+    uint8_t* stubs = static_cast<uint8_t*>(VirtualAlloc(nullptr, kStratOpcodeCount * stub_size,
+                                                        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!stubs) return;
+    DWORD old_prot = 0;
+    VirtualProtect(table, kStratOpcodeCount * sizeof(uintptr_t), PAGE_READWRITE, &old_prot);
+    for (int op = 0; op < kStratOpcodeCount; ++op) {
+        uint8_t* st = stubs + op * stub_size;
+        uint64_t original = table[op];
+        uint64_t target = reinterpret_cast<uint64_t>(&TraceOpcode);
+        st[0] = 0xBA; std::memcpy(st + 1, &op, 4);              // mov edx, op
+        st[5] = 0x49; st[6] = 0xB8; std::memcpy(st + 7, &original, 8); // mov r8, original
+        st[15] = 0x48; st[16] = 0xB8; std::memcpy(st + 17, &target, 8); // mov rax, TraceOpcode
+        st[25] = 0xFF; st[26] = 0xE0;                           // jmp rax
+        table[op] = reinterpret_cast<uintptr_t>(st);
+    }
+    VirtualProtect(table, kStratOpcodeCount * sizeof(uintptr_t), old_prot, &old_prot);
+    FlushInstructionCache(GetCurrentProcess(), stubs, kStratOpcodeCount * stub_size);
+    debug_log_locked("Script tracer installed on all 468 strat opcodes");
+}
+
 static void install_croc2_engine_hooks() {
     if (g_hooks_installed) return;
     g_exe_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
@@ -4229,6 +4357,7 @@ static void install_croc2_engine_hooks() {
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+    if (g_state.debug_watch) install_script_tracer(); // after every other opcode-slot hook, so it wraps them
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -4393,6 +4522,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             HANDLE hThread = CreateThread(nullptr, 0, SafeBootstrapThread, nullptr, 0, nullptr);
             if (hThread) CloseHandle(hThread);
         }
+    } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
+        // croc2.exe never calls Croc2AP_Shutdown, so the worker threads are still joinable when the process
+        // exits. Destroying a joinable std::thread calls std::terminate, which aborted the game with
+        // 0xC0000409 on EVERY exit. At process exit the threads are already gone, so just release them.
+        if (croc2_ap::g_server_thread.joinable()) croc2_ap::g_server_thread.detach();
+        if (croc2_ap::g_ui_thread.joinable()) croc2_ap::g_ui_thread.detach();
+        if (croc2_ap::g_ws_thread.joinable()) croc2_ap::g_ws_thread.detach();
     }
     return TRUE;
 }
