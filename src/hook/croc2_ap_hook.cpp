@@ -2884,9 +2884,12 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
         g_exe_base + RVA_SAVE_DATA_TABLE + RVA_RANDO_SAVE_FOOTER_OFF
     );
 
-    // Title Screen / Main Menu or initial boot frames. Tribe 0 alone is not enough: T0L1M003 is a real
-    // stage (Inca Door 5, "Burning Down the Forest") and must not wipe the randomizer save state.
-    const bool is_title_screen = (curr.tribe < 0 || curr.tribe > 5) || (curr.tribe == 0 && curr.level == 0);
+    // Title Screen / Main Menu or initial boot frames. Seen in testing: boot = T0L0M000, title menu =
+    // T0I0M000, Continue screen after a game over = T0I0M002. Only sub-area 0 is the front end: the
+    // Continue screen is mid-game and must keep the randomizer state, and T0L1M003 is a real stage
+    // (Inca Door 5, "Burning Down the Forest").
+    const bool is_title_screen = (curr.tribe < 0 || curr.tribe > 5) ||
+                                 (curr.tribe == 0 && curr.level == 0 && curr.submap == 0);
     if (is_title_screen) {
         if (g_state.in_active_save || g_state.save_locked_to_mod) {
             g_state.in_active_save = false;
