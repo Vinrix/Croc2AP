@@ -47,6 +47,7 @@ static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std:
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
 static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
+static void trigger_climb_blocked_toast_locked();
 static void send_ws_location_check_locked(int location_id);
 static void reset_pending_native_grants();
 static std::string json_escape(const std::string& s);
@@ -81,8 +82,6 @@ static std::atomic<int> g_pending_golden_gobbos{0};
 static std::atomic<int> g_pending_wallet_crystals{0};
 static std::atomic<int> g_pending_colored_gems{0};
 static std::atomic<bool> g_need_full_inventory_sync{false};
-static bool g_ground_jump_in_progress = false;
-static DWORD g_last_jump_press_tick = 0;
 static uint32_t g_prev_raw_buttons = 0;
 
 using FnOnDoorTransition = void(__fastcall*)();
@@ -106,10 +105,6 @@ static FnOnDoorTransition g_orig_on_door_transition = nullptr;
 static FnLoadMap g_orig_load_map = nullptr;
 static FnReadInput g_orig_read_input = nullptr;
 static FnSaveGameSlot g_orig_save_game_slot = nullptr;
-static FnClimbAction g_orig_climb_wall_idle = nullptr;
-static FnClimbAction g_orig_climb_wall_attach = nullptr;
-static FnClimbAction g_orig_climb_surface_check = nullptr;
-static FnClimbAction g_orig_climb_state_init = nullptr;
 
 static FnStratVmHandler g_orig_pickup_heart_pot = nullptr;
 static FnStratVmHandler g_orig_pickup_clockwork = nullptr;
@@ -3255,18 +3250,14 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
-            static bool s_jump_started_on_ground = false;
+            static bool s_airborne_butt_stomp_locked = false;
 
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
-                s_jump_started_on_ground = false;
+                s_airborne_butt_stomp_locked = false;
             } else if (!g_state.abilities.butt_stomp) {
-                bool jump_pressed_edge = (newly_pressed & 0x4000u) != 0;
-                bool jump_button_down = (buttons & 0x4000u) != 0;
-
-                // Read Croc's real ground vs airborne physics state:
-                // PlayerStrat->floor_poly (+0xC8) holds floor height at +0x0.
-                // In croc2.exe (see 0x1401FC590), croc_y <= floor_y means ON GROUND, and croc_y > floor_y means AIRBORNE.
+                // Read Croc's ground vs airborne physics state:
+                // When grounded, Croc's Y matches floor_poly's Y within ground tolerance.
                 bool is_on_ground = false;
                 uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
                 if (player_strat != 0) {
@@ -3274,25 +3265,26 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                     if (floor_poly != 0) {
                         int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
                         int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
-                        if (croc_y <= floor_y) {
+                        if (std::abs(croc_y - floor_y) <= 16) {
                             is_on_ground = true;
                         }
                     }
                 }
 
                 if (is_on_ground) {
-                    if (jump_pressed_edge) {
-                        s_jump_started_on_ground = true;
-                    }
+                    s_airborne_butt_stomp_locked = false;
                 } else {
-                    if (!jump_button_down) {
-                        s_jump_started_on_ground = false;
+                    // In mid-air: once the jump button is released (or not held), strictly lock out Butt Stomp
+                    if (!(buttons & 0x4000u)) {
+                        s_airborne_butt_stomp_locked = true;
                     }
-                    // Croc is airborne: any press of Jump that did not originate as a continuous ground jump is a Butt Stomp!
-                    if (!s_jump_started_on_ground) {
+                    if (s_airborne_butt_stomp_locked) {
                         buttons &= ~0x4000u;
+                        *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B54) &= ~0x4000u;
+                        *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B70) &= ~0x4000u;
+                        *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B74) &= ~0x4000u;
+                        *reinterpret_cast<uint32_t*>(g_exe_base + 0x00BC4B78) &= ~0x4000u;
                         *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PRESSED_BUTTONS) &= ~0x4000u;
-                        *reinterpret_cast<uint32_t*>(g_exe_base + RVA_HELD_BUTTONS) &= ~0x4000u;
                     }
                 }
 
@@ -3301,10 +3293,48 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x0C00u;
             }
 
+            // Gating climbing claws: if Croc attaches to a climbing wall or monkey bars without claws,
+            // immediately detach him natively with zero disruption to doors or ground collision!
             if (!g_state.abilities.climbing_claws) {
-                *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
-                *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
-                *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_WALL_STATE_2) = 0;
+                int32_t wall_climbing = *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG);
+                int32_t bar_climbing  = *reinterpret_cast<int32_t*>(g_exe_base + 0x00BD1B60);
+                if (wall_climbing != 0 || bar_climbing != 0) {
+                    {
+                        std::lock_guard<std::mutex> lock(g_mutex);
+                        trigger_climb_blocked_toast_locked();
+                    }
+                    using FnDetachAllClimb = void(__fastcall*)();
+                    auto fn_detach = reinterpret_cast<FnDetachAllClimb>(g_exe_base + 0x0020E130);
+                    if (fn_detach) {
+                        fn_detach();
+                    }
+                }
+            }
+
+            // Live Inventory Wheel Cycling with L2 (0x0100) and R2 (0x0200) during normal gameplay
+            int32_t slot_count = *reinterpret_cast<int32_t*>(g_exe_base + RVA_INV_WHEEL_SLOT_COUNT);
+            if (slot_count >= 2) {
+                bool l2_pressed = (newly_pressed & 0x0100u) != 0;
+                bool r2_pressed = (newly_pressed & 0x0200u) != 0;
+                if (l2_pressed || r2_pressed) {
+                    int32_t sel_idx = *reinterpret_cast<int32_t*>(g_exe_base + RVA_INV_WHEEL_SEL_INDEX);
+                    if (l2_pressed) {
+                        sel_idx = (sel_idx - 1 + slot_count) % slot_count;
+                    } else {
+                        sel_idx = (sel_idx + 1) % slot_count;
+                    }
+                    *reinterpret_cast<int32_t*>(g_exe_base + RVA_INV_WHEEL_SEL_INDEX) = sel_idx;
+                    uintptr_t slot_addr = g_exe_base + RVA_INV_WHEEL_SLOTS_ARRAY + (sel_idx * 0x1C);
+                    int32_t new_item_id = *reinterpret_cast<int32_t*>(slot_addr);
+                    *reinterpret_cast<int32_t*>(g_exe_base + RVA_INV_WHEEL_CUR_ITEM_ID) = new_item_id;
+                    *reinterpret_cast<uint8_t*>(g_exe_base + 0x00BC4E0B) = 0;
+                    void* p_hud = *reinterpret_cast<void**>(g_exe_base + 0x00B90CF8);
+                    if (p_hud) {
+                        using FnHudPlaySfx = void(__fastcall*)(void*);
+                        auto fn_sfx = reinterpret_cast<FnHudPlaySfx>(g_exe_base + 0x0019C180);
+                        if (fn_sfx) fn_sfx(p_hud);
+                    }
+                }
             }
 
             if (has_reverse_controls) {
@@ -3359,96 +3389,6 @@ static void trigger_climb_blocked_toast_locked() {
     }
 }
 
-// Hooked Opcode 370: Wall/Vine/Ladder Can-Climb Check (0x1401FAA90)
-// In croc2.exe, 0x1401FAA90 pushes 0x1000 (can climb) or 0 (cannot climb) onto player_strat's VM stack via 0x14005D8A0.
-static void __fastcall Hooked_ClimbWallIdle(void* player_strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
-        if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_TOUCH_SURFACE_FLAG) != 0) {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            trigger_climb_blocked_toast_locked();
-        }
-        *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
-        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_WALL_STATE_2) = 0;
-        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
-        if (player_strat) {
-            uintptr_t vars = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(player_strat) + 0x118);
-            if (vars != 0) {
-                *reinterpret_cast<int32_t*>(vars + 0x54) = 0;
-            }
-            auto fn_vm_push = reinterpret_cast<FnStratVmPushInt>(g_exe_base + RVA_FN_STRAT_VM_PUSH_INT);
-            fn_vm_push(player_strat, 0);
-        }
-        return;
-    }
-    if (g_orig_climb_wall_idle) {
-        g_orig_climb_wall_idle(player_strat);
-    }
-}
-
-// Hooked Opcode 375: Climbable Surface / Monkey Bars Attachment Check (0x1401FACE0)
-// In croc2.exe, 0x1401FACE0 checks 0x140BC8310 and pushes the surface value (or 0) onto player_strat's VM stack via 0x14005D8A0.
-static void __fastcall Hooked_ClimbSurfaceCheck(void* player_strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
-        if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_SURFACE_TYPE) != 0) {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            trigger_climb_blocked_toast_locked();
-        }
-        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
-        if (player_strat) {
-            auto fn_vm_push = reinterpret_cast<FnStratVmPushInt>(g_exe_base + RVA_FN_STRAT_VM_PUSH_INT);
-            fn_vm_push(player_strat, 0);
-        }
-        return;
-    }
-    if (g_orig_climb_surface_check) {
-        g_orig_climb_surface_check(player_strat);
-    }
-}
-
-// Hooked Opcode 371: Wall/Vine/Ladder Attach (0x1401FAC30)
-static void __fastcall Hooked_ClimbWallAttach(void* player_strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        trigger_climb_blocked_toast_locked();
-        *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
-        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_WALL_STATE_2) = 0;
-        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
-        if (player_strat) {
-            uintptr_t vars = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(player_strat) + 0x118);
-            if (vars != 0) {
-                *reinterpret_cast<int32_t*>(vars + 0x54) = 0;
-                *reinterpret_cast<int32_t*>(vars + 0x20) = 0;
-            }
-        }
-        return;
-    }
-    if (g_orig_climb_wall_attach) {
-        g_orig_climb_wall_attach(player_strat);
-    }
-}
-
-// Hooked Opcode 376: Wall/Vine Climb State Init (0x1401FAD10)
-static void __fastcall Hooked_ClimbStateInit(void* player_strat) {
-    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        trigger_climb_blocked_toast_locked();
-        *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
-        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_WALL_STATE_2) = 0;
-        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
-        if (player_strat) {
-            uintptr_t vars = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(player_strat) + 0x118);
-            if (vars != 0) {
-                *reinterpret_cast<int32_t*>(vars + 0x54) = 0;
-                *reinterpret_cast<int32_t*>(vars + 0x20) = 0;
-            }
-        }
-        return;
-    }
-    if (g_orig_climb_state_init) {
-        g_orig_climb_state_init(player_strat);
-    }
-}
-
 // Helper: Trigger a randomized check for collectable pickups intercepted in the world
 static void trigger_collectable_pickup_check(const std::string& fallback_desc) {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -3477,7 +3417,8 @@ static void trigger_collectable_pickup_check(const std::string& fallback_desc) {
         int idx = s_pickup_counter % SOLO_CHECK_POOL_SIZE;
         item_id = g_state.solo_check_items[idx];
     }
-    apply_ap_item_by_id_locked(item_id, "Croc", fallback_desc, false, true);
+    std::string check_name = (stage_idx < 0) ? ("Sailor Village - Pete's Store / " + fallback_desc) : fallback_desc;
+    apply_ap_item_by_id_locked(item_id, "Croc", check_name, false, true);
 }
 
 // Opcode 171 (0xAB): PickupHeartPot
@@ -3618,24 +3559,7 @@ static void install_croc2_engine_hooks() {
         VirtualProtect(fn_save_slot, 32, old_prot, &old_prot);
     }
 
-    // 5. Hook Strat VM Climbing Check Slots (0x1401FAA90 & 0x1401FACE0)
-    auto hook_dispatch_slot = [](uintptr_t slot_rva, uintptr_t expected_target, uintptr_t hooked_fn, FnClimbAction& orig_fn) {
-        uintptr_t* p_slot = reinterpret_cast<uintptr_t*>(g_exe_base + slot_rva);
-        if (*p_slot == (g_exe_base + expected_target)) {
-            orig_fn = reinterpret_cast<FnClimbAction>(*p_slot);
-            DWORD old_prot_slot = 0;
-            VirtualProtect(p_slot, sizeof(uintptr_t), PAGE_READWRITE, &old_prot_slot);
-            *p_slot = hooked_fn;
-            VirtualProtect(p_slot, sizeof(uintptr_t), old_prot_slot, &old_prot_slot);
-        }
-    };
-
-    hook_dispatch_slot(RVA_CLIMB_WALL_IDLE_SLOT, RVA_FN_CLIMB_WALL_IDLE, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallIdle), g_orig_climb_wall_idle);
-    hook_dispatch_slot(RVA_CLIMB_WALL_ATTACH_SLOT, RVA_FN_CLIMB_WALL_ATTACH, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallAttach), g_orig_climb_wall_attach);
-    hook_dispatch_slot(RVA_CLIMB_SURFACE_CHECK_SLOT, RVA_FN_CLIMB_SURFACE_CHECK, reinterpret_cast<uintptr_t>(&Hooked_ClimbSurfaceCheck), g_orig_climb_surface_check);
-    hook_dispatch_slot(RVA_CLIMB_STATE_INIT_SLOT, RVA_FN_CLIMB_STATE_INIT, reinterpret_cast<uintptr_t>(&Hooked_ClimbStateInit), g_orig_climb_state_init);
-
-    // 6. Hook Strat VM Collectable & Inventory Pickup Slots (Opcodes 171, 248, 249, 250, 270)
+    // 5. Hook Strat VM Collectable & Inventory Pickup Slots (Opcodes 171, 248, 249, 250, 270)
     auto hook_strat_slot = [](uintptr_t slot_rva, uintptr_t expected_target, uintptr_t hooked_fn, FnStratVmHandler& orig_fn) {
         uintptr_t* p_slot = reinterpret_cast<uintptr_t*>(g_exe_base + slot_rva);
         if (*p_slot == (g_exe_base + expected_target)) {
@@ -3657,7 +3581,7 @@ static void install_croc2_engine_hooks() {
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, ClimbWall, ClimbSurface, Pickups).");
+    g_state.add_log("Installed live croc2.exe engine hooks (LoadMap, DoorTransition, Input, SaveSlot, Pickups).");
 }
 
 } // namespace croc2_ap
