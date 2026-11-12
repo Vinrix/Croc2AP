@@ -3666,7 +3666,11 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
     int32_t* p_curr_hearts = reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
     if (*p_max_pots > 0) {
         if (dmg_to_apply > 0) {
+            int before = *p_curr_hearts;
             *p_curr_hearts = std::max(0, *p_curr_hearts - dmg_to_apply);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked("TRAP damage " + std::to_string(dmg_to_apply) + ": hearts " + std::to_string(before) +
+                             " -> " + std::to_string(*p_curr_hearts) + " (max " + std::to_string(*p_max_pots) + ")");
         }
         if (pots_to_apply > 0) {
             *p_max_pots += pots_to_apply;
