@@ -4045,6 +4045,25 @@ static uint64_t __fastcall Hooked_IncrementAchievement(void* id, int32_t value) 
     return g_orig_increment_achievement(id, value);
 }
 
+// debug_watch: log the hurt-related strat opcodes (154 hurt, 155 reset to checkpoint, 291 checkpoint state,
+// 455/457 hurt with coloured effect) with the strat that ran them. Used to find what an enemy hit and a
+// fire hazard actually execute. Lock-free (see log_achievement).
+static FnStratVmHandler g_orig_hurt_ops[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+static const int kHurtOps[5] = {154, 155, 291, 455, 457};
+static void log_hurt_op(int idx, void* strat) {
+    if (!g_state.debug_watch) return;
+    char buf[160];
+    void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+    std::snprintf(buf, sizeof(buf), "OPCODE %d by strat %p (player ptr %p%s) hearts=%d", kHurtOps[idx], strat, player,
+                  strat == player ? ", MATCH" : "", *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4));
+    debug_log_locked(buf);
+}
+static void __fastcall Hooked_HurtOp0(void* s) { log_hurt_op(0, s); g_orig_hurt_ops[0](s); }
+static void __fastcall Hooked_HurtOp1(void* s) { log_hurt_op(1, s); g_orig_hurt_ops[1](s); }
+static void __fastcall Hooked_HurtOp2(void* s) { log_hurt_op(2, s); g_orig_hurt_ops[2](s); }
+static void __fastcall Hooked_HurtOp3(void* s) { log_hurt_op(3, s); g_orig_hurt_ops[3](s); }
+static void __fastcall Hooked_HurtOp4(void* s) { log_hurt_op(4, s); g_orig_hurt_ops[4](s); }
+
 // SetActionState (0x14022E290): Core engine action state transition handler
 // action_id == 3 corresponds to Butt Stomp.
 static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
@@ -4193,6 +4212,18 @@ static void install_croc2_engine_hooks() {
     hook_strat_slot(RVA_STRAT_VM_CLOCKWORK_SLOT, RVA_FN_GIVE_CLOCKWORK_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupClockwork), g_orig_pickup_clockwork);
     hook_strat_slot(RVA_STRAT_VM_KEY_SLOT, RVA_FN_GIVE_KEY_NATIVE, reinterpret_cast<uintptr_t>(&Hooked_PickupKey), g_orig_pickup_key);
     hook_strat_slot(RVA_STRAT_VM_GOBBO_SLOT, RVA_FN_GIVE_GOBBO_NATIVE, reinterpret_cast<uintptr_t>(&Hooked_PickupGobbo), g_orig_pickup_gobbo);
+    {
+        // Opcode table at RVA_STRAT_VM_DISPATCH_TABLE; only hooked if each slot still holds the expected handler.
+        static const uintptr_t kHurtTargets[5] = {0x00065BD0, 0x00065F20, 0x00065F00, 0x002044E0, 0x00204720};
+        static const uintptr_t kHurtHooks[5] = {
+            reinterpret_cast<uintptr_t>(&Hooked_HurtOp0), reinterpret_cast<uintptr_t>(&Hooked_HurtOp1),
+            reinterpret_cast<uintptr_t>(&Hooked_HurtOp2), reinterpret_cast<uintptr_t>(&Hooked_HurtOp3),
+            reinterpret_cast<uintptr_t>(&Hooked_HurtOp4)};
+        for (int i = 0; i < 5; ++i) {
+            hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + static_cast<uintptr_t>(kHurtOps[i]) * 8, kHurtTargets[i],
+                            kHurtHooks[i], g_orig_hurt_ops[i]);
+        }
+    }
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
 
