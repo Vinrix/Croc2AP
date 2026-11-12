@@ -65,8 +65,6 @@ struct MapCoords {
 static uintptr_t g_exe_base = 0;
 static bool g_hooks_installed = false;
 static bool g_in_redirected_stage = false;
-static bool g_pending_door_redirect = false;
-static std::string g_pending_target_wad;
 static MapCoords g_saved_hub{1, 1, 1, 0};
 static MapCoords g_saved_orig_door{1, 2, 1, 0};
 static MapCoords g_saved_rand_stage{1, 4, 1, 0};
@@ -2794,120 +2792,114 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
     }
 }
 
-static bool handle_map_transition_redirect() {
-    if (!g_exe_base) return true;
+// Map we most recently handed to croc2.exe's LoadMap. Used to tell "hub -> stage door" loads
+// apart from death reloads and sub-area moves. Note: croc2.exe calls OnDoorTransition (0x2BA00)
+// AFTER LoadMap (e.g. 0x2EF51 LoadMap -> 0x2EF9C -> 0x62E8E OnDoorTransition), so all redirect
+// decisions must be made here, at LoadMap time, before anything is loaded.
+static MapCoords g_last_loaded{0, 0, 0, 0};
+// True only for the single load that enters a shuffled stage or returns from one to its hub door.
+static bool g_fix_spawn_this_load = false;
 
-    auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
-    auto* prev = reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
+static bool is_hub_coords(const MapCoords& m) {
+    return m.tribe >= 1 && m.tribe <= 4 && m.level == 1 && m.map_type == 0;
+}
 
-    std::lock_guard<std::mutex> lock(g_mutex);
+// Exact stage-entrance WAD only (e.g. T1L4M001, T0L1M003), not a stage's sub-areas.
+static int find_stage_entrance_index(const std::string& wad) {
+    for (int i = 0; i < 20; ++i) {
+        if (wad == kStageDoors[i].vanilla_wad) return i;
+    }
+    return -1;
+}
 
-    inspect_and_sync_save_lifecycle_locked(*curr);
+// Refuses a hub -> stage load by sending Croc back to the hub, placed at the door he walked into.
+static MapCoords block_stage_load_locked(const MapCoords& door) {
+    g_saved_orig_door = door;
+    g_in_redirected_stage = true;   // lets the spawn fixup find this door in the hub
+    g_fix_spawn_this_load = true;
+    return g_last_loaded;
+}
 
-    const bool mod_on = g_state.is_mod_enabled_toggle();
+// Decides which map actually gets loaded. Called from Hooked_LoadMap with g_mutex held.
+static MapCoords resolve_map_load_locked(const MapCoords& req) {
+    g_fix_spawn_this_load = false;
+    inspect_and_sync_save_lifecycle_locked(req);
 
-    // Check if leaving a Village Hub (level == 1, map_type == 0, submap 1..3) into a Stage
-    const bool from_hub = (prev->tribe >= 1 && prev->tribe <= 4 && prev->level == 1);
-    const bool to_stage = (curr->tribe >= 1 && curr->tribe <= 4 && curr->level >= 2);
-    const bool to_hub   = (curr->tribe >= 1 && curr->tribe <= 4 && curr->level == 1);
-
-    if (!mod_on) {
+    if (!g_state.is_mod_enabled_toggle()) {
         g_in_redirected_stage = false;
-        g_pending_door_redirect = false;
-        g_pending_target_wad.clear();
-        g_state.current_wad = coords_to_wad(*curr);
-        return true;
+        g_state.current_wad = coords_to_wad(req);
+        return req;
     }
 
-    if (from_hub && to_stage) {
-        std::string orig_wad = coords_to_wad(*curr);
-        int orig_idx = find_stage_index_by_wad(orig_wad);
+    const std::string req_wad = coords_to_wad(req);
+    const int door_idx = find_stage_entrance_index(req_wad);
 
-        // Check if level access is locked and Croc does not have the key (Sailor Village Door 1 is open from start)
-        if (g_state.lock_level_access && orig_idx > 0 && g_state.is_randomizer_active()) {
-            bool has_key = (g_state.unlocked_doors.count(orig_wad) > 0) ||
-                           (g_state.unlocked_doors.count(kStageDoors[orig_idx].door_id) > 0);
+    if (is_hub_coords(g_last_loaded) && door_idx >= 0) {
+        // Locked door (Sailor Village Door 1 is open from the start)
+        if (g_state.lock_level_access && door_idx > 0 && g_state.is_randomizer_active()) {
+            bool has_key = g_state.unlocked_doors.count(req_wad) > 0 ||
+                           g_state.unlocked_doors.count(kStageDoors[door_idx].door_id) > 0;
             if (!has_key) {
-                *curr = *prev; // Block transition
-                static DWORD s_last_door_locked_toast = 0;
-                DWORD now = GetTickCount();
-                if (now - s_last_door_locked_toast > 2500) {
-                    s_last_door_locked_toast = now;
-                    std::string level_disp = (orig_idx >= 0) ? kStageDoors[orig_idx].level_name : orig_wad;
-                    trigger_bottom_toast_locked(false, level_disp + " Key Required!", ItemImportance::TRAP, "Padlock", "Croc", "Stage door is locked!");
-                    g_state.add_log("Door Locked: " + level_disp + " (Requires " + level_disp + " Key from checks!)");
-                    g_state.pending_events_json.push_back(
-                        "{\"event\":\"door_locked\",\"level_name\":\"" + json_escape(level_disp) +
-                        "\",\"stage_idx\":" + std::to_string(orig_idx) + "}"
-                    );
-                }
-                return false;
+                std::string level_disp = kStageDoors[door_idx].level_name;
+                trigger_bottom_toast_locked(false, level_disp + " Key Required!", ItemImportance::TRAP, "Padlock", "Croc", "Stage door is locked!");
+                g_state.add_log("Door Locked: " + level_disp + " (Requires " + level_disp + " Key from checks!)");
+                g_state.pending_events_json.push_back(
+                    "{\"event\":\"door_locked\",\"level_name\":\"" + json_escape(level_disp) +
+                    "\",\"stage_idx\":" + std::to_string(door_idx) + "}"
+                );
+                return block_stage_load_locked(req);
             }
         }
 
-        std::string dest_wad = orig_wad;
-        auto it = g_state.door_overrides.find(orig_wad);
-        if (it != g_state.door_overrides.end() && !it->second.empty()) {
-            dest_wad = it->second;
-        }
+        std::string dest_wad = req_wad;
+        auto it = g_state.door_overrides.find(req_wad);
+        if (it != g_state.door_overrides.end() && !it->second.empty()) dest_wad = it->second;
 
         int dest_idx = find_stage_index_by_wad(dest_wad);
         std::string dest_name = (dest_idx >= 0) ? kStageDoors[dest_idx].level_name : dest_wad;
 
-        // Block entering vehicle stages without Vehicle License!
         if (g_state.is_randomizer_active() && is_vehicle_stage_wad(dest_wad) && !g_state.abilities.vehicle_license) {
-            *curr = *prev; // Block transition
-            static DWORD s_last_vehicle_toast = 0;
-            DWORD now = GetTickCount();
-            if (now - s_last_vehicle_toast > 2500) {
-                s_last_vehicle_toast = now;
-                trigger_bottom_toast_locked(false, "Vehicle License Required!", ItemImportance::TRAP, "License", "Croc", dest_name + " requires Vehicle License!");
-                g_state.add_log("Vehicle Stage Locked: " + dest_name + " requires Vehicle License!");
-                g_state.pending_events_json.push_back(
-                    "{\"event\":\"vehicle_required\",\"level_name\":\"" + json_escape(dest_name) +
-                    "\",\"stage_idx\":" + std::to_string(dest_idx) + "}"
-                );
-            }
-            return false;
-        }
-
-        if (it != g_state.door_overrides.end() && !it->second.empty()) {
-            // Queue pending redirect for Hooked_LoadMap without prematurely mutating *curr
-            // so croc2.exe's native OnDoorTransition (0x14002BA00) authentic door logic executes cleanly.
-            g_pending_door_redirect = true;
-            g_pending_target_wad = dest_wad;
-            g_saved_hub = *prev;
-            g_saved_orig_door = *curr;
-
-            std::string orig_name = (orig_idx >= 0) ? kStageDoors[orig_idx].level_name : orig_wad;
-            std::string target_name = (dest_idx >= 0) ? kStageDoors[dest_idx].level_name : it->second;
-            g_state.last_door_redirect_desc =
-                orig_name + " -> " + target_name + " (Seed #" + g_state.current_seed_hex + ")";
-            g_state.add_log("Door Shuffle: " + orig_name + " -> " + target_name);
+            trigger_bottom_toast_locked(false, "Vehicle License Required!", ItemImportance::TRAP, "License", "Croc", dest_name + " requires Vehicle License!");
+            g_state.add_log("Vehicle Stage Locked: " + dest_name + " requires Vehicle License!");
             g_state.pending_events_json.push_back(
-                "{\"event\":\"door_entered\",\"orig_name\":\"" + json_escape(orig_name) +
-                "\",\"target_name\":\"" + json_escape(target_name) +
-                "\",\"target_wad\":\"" + json_escape(dest_wad) + "\"}"
+                "{\"event\":\"vehicle_required\",\"level_name\":\"" + json_escape(dest_name) +
+                "\",\"stage_idx\":" + std::to_string(dest_idx) + "}"
             );
-            return true;
+            return block_stage_load_locked(req);
         }
 
-        g_pending_door_redirect = false;
-        g_pending_target_wad.clear();
-        g_in_redirected_stage = false;
-        g_state.current_wad = orig_wad;
-        return true;
-    } else if (g_in_redirected_stage && to_hub) {
-        // Sync completion flag from the randomized stage to the original Hub door slot
+        MapCoords dest{};
+        if (dest_wad == req_wad || !wad_to_coords(dest_wad, dest)) {
+            g_in_redirected_stage = false;
+            g_state.current_wad = req_wad;
+            return req;
+        }
+
+        g_saved_hub = g_last_loaded;
+        g_saved_orig_door = req;
+        g_saved_rand_stage = dest;
+        g_in_redirected_stage = true;
+        g_fix_spawn_this_load = true;
+        g_state.current_wad = dest_wad;
+
+        std::string orig_name = kStageDoors[door_idx].level_name;
+        g_state.last_door_redirect_desc = orig_name + " -> " + dest_name + " (Seed #" + g_state.current_seed_hex + ")";
+        g_state.add_log("Door Shuffle: " + orig_name + " -> " + dest_name);
+        g_state.pending_events_json.push_back(
+            "{\"event\":\"door_entered\",\"orig_name\":\"" + json_escape(orig_name) +
+            "\",\"target_name\":\"" + json_escape(dest_name) +
+            "\",\"target_wad\":\"" + json_escape(dest_wad) + "\"}"
+        );
+        return dest;
+    }
+
+    if (g_in_redirected_stage && is_hub_coords(req)) {
+        // Leaving a shuffled stage: copy its completion flag onto the door Croc entered from
         auto fn_get_save_idx = reinterpret_cast<FnGetStageSaveIndex>(g_exe_base + RVA_FN_CALC_SAVE_INDEX);
-        int32_t rand_idx = fn_get_save_idx(
-            g_saved_rand_stage.tribe, g_saved_rand_stage.level,
-            g_saved_rand_stage.submap, g_saved_rand_stage.map_type
-        );
-        int32_t orig_idx = fn_get_save_idx(
-            g_saved_orig_door.tribe, g_saved_orig_door.level,
-            g_saved_orig_door.submap, g_saved_orig_door.map_type
-        );
+        int32_t rand_idx = fn_get_save_idx(g_saved_rand_stage.tribe, g_saved_rand_stage.level,
+                                           g_saved_rand_stage.submap, g_saved_rand_stage.map_type);
+        int32_t orig_idx = fn_get_save_idx(g_saved_orig_door.tribe, g_saved_orig_door.level,
+                                           g_saved_orig_door.submap, g_saved_orig_door.map_type);
         if (rand_idx >= 0 && orig_idx >= 0) {
             uint8_t* save_base = reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE);
             if ((save_base[rand_idx + 0x304] & 1) != 0) {
@@ -2918,13 +2910,11 @@ static bool handle_map_transition_redirect() {
                 }
             }
         }
-        return true;
-    } else {
-        g_pending_door_redirect = false;
-        g_pending_target_wad.clear();
-        g_state.current_wad = coords_to_wad(*curr);
-        return true;
+        g_fix_spawn_this_load = true; // place Croc at the hub door he originally entered
     }
+
+    g_state.current_wad = req_wad;
+    return req;
 }
 
 static void fixup_spawn_trigger_after_map_load(void* map_header) {
@@ -2944,6 +2934,11 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
     uintptr_t trig_base = wad_buf + trig_offset;
     if (trig_base < wad_buf || trig_base >= wad_limit) return;
 
+    // Only touch level data on the one load that enters a shuffled stage or returns from one
+    // to its hub door. Vanilla loads, death reloads and sub-area moves are left alone.
+    if (!g_fix_spawn_this_load) return;
+    g_fix_spawn_this_load = false;
+
     // Prevent fatal assertion at 0x14005c9e4 ("Offset is outside of the memory range.")
     // and 0x140002166 / 0x140002401 ("Pointer is outside of the memory range."):
     // In croc2.exe, immediately after LoadMap returns at 0x14005c9a1, 0x14005c9d8 reads
@@ -2952,7 +2947,7 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
     // Because heap arena memory is outside wad_buf, any call to 0x1400020e0 fatally aborts.
     // When [trigger + 0x24] is 0, 0x14005c9db immediately branches to 0x14005cad3, skipping
     // the fatal routine entirely and cleanly completing level load.
-    // Zero +0x24 unconditionally across all triggers in the loaded map.
+    // Zero +0x24 across all triggers in the loaded map (redirected loads only, see gate above).
     for (uint16_t i = 0; i < trig_count; ++i) {
         uintptr_t t = trig_base + static_cast<uintptr_t>(i) * 0x54;
         if (t + 0x54 > wad_limit) break;
@@ -2967,11 +2962,6 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
         *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_ACTIVE_SPAWN_TRIGGER) = trig_base;
     }
 
-    // Only perform custom spawn trigger redirection when entering a randomized stage
-    // or returning from a randomized stage back to hub.
-    // For authentic new game dock spawn (boat in Sailor Village), save game loading, and standard transitions,
-    // let engine handle it naturally now that the triggers are safely sanitized.
-    if (!g_in_redirected_stage) return;
 
     auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
     auto* prev = reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
@@ -3065,33 +3055,24 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
 }
 
 static void __fastcall Hooked_OnDoorTransition() {
-    if (!handle_map_transition_redirect()) {
-        return; // Locked door! Do not initiate transition
-    }
+    // Runs after LoadMap; door redirects are decided in Hooked_LoadMap. Pure pass-through.
     g_orig_on_door_transition();
 }
 
 static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t submap, int32_t map_type) {
-    if (g_exe_base && g_pending_door_redirect && !g_pending_target_wad.empty()) {
+    if (g_exe_base) {
         std::lock_guard<std::mutex> lock(g_mutex);
-        g_pending_door_redirect = false;
-        MapCoords target_coords{};
-        if (wad_to_coords(g_pending_target_wad, target_coords)) {
-            tribe = target_coords.tribe;
-            level = target_coords.level;
-            submap = target_coords.submap;
-            map_type = target_coords.map_type;
-
-            auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
-            curr->tribe = tribe;
-            curr->level = level;
-            curr->submap = submap;
-            curr->map_type = map_type;
-
-            g_in_redirected_stage = true;
-            g_saved_rand_stage = target_coords;
-            g_state.current_wad = g_pending_target_wad;
+        MapCoords req{tribe, level, submap, map_type};
+        MapCoords dest = resolve_map_load_locked(req);
+        if (dest.tribe != req.tribe || dest.level != req.level ||
+            dest.submap != req.submap || dest.map_type != req.map_type) {
+            tribe = dest.tribe;
+            level = dest.level;
+            submap = dest.submap;
+            map_type = dest.map_type;
+            *reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE) = dest;
         }
+        g_last_loaded = dest;
     }
 
     void* map_header = g_orig_load_map(tribe, level, submap, map_type);

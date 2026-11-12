@@ -125,6 +125,23 @@ def create_croc2_regions(
             boss_ent.connect(boss_reg)
 
 
+# Must match is_vehicle_stage_wad() in src/hook/croc2_ap_hook.cpp. The hook refuses entry to these
+# without a Vehicle License, so none of them may sit behind Sailor Village Door 1 (open from the start).
+VEHICLE_STAGE_WADS = {"T1L3M001", "T1L5M001", "T2L3M001", "T2L6M001", "T3L4M001", "T3L5M001", "T4L3M001"}
+
+
+def _fix_first_door(world_random, targets: list, vanilla_wad: str) -> None:
+    """Swap a non-vanilla, non-vehicle stage into slot 0 if slot 0 is vanilla or a vehicle stage."""
+    first = targets[0]["wad"]
+    if first != vanilla_wad and first not in VEHICLE_STAGE_WADS:
+        return
+    ok = [i for i in range(1, len(targets))
+          if targets[i]["wad"] != vanilla_wad and targets[i]["wad"] not in VEHICLE_STAGE_WADS]
+    if ok:
+        j = world_random.choice(ok)
+        targets[0], targets[j] = targets[j], targets[0]
+
+
 def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str, dict], Dict[str, str]]:
     """
     Computes the mapping of physical village doors (`T1_D1`..`T4_D5`) to level descriptors and WAD codes.
@@ -156,9 +173,8 @@ def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str,
             shuffled = list(targets)
             world_random.shuffle(shuffled)
             # Ensure Door 1 in Sailor Village is visibly shuffled to a non-vanilla stage
-            if hub_id == "sailor_village" and len(shuffled) > 1 and shuffled[0]["wad"] == targets[0]["wad"]:
-                swap_idx = world_random.randint(1, len(shuffled) - 1)
-                shuffled[0], shuffled[swap_idx] = shuffled[swap_idx], shuffled[0]
+            if hub_id == "sailor_village" and len(shuffled) > 1:
+                _fix_first_door(world_random, shuffled, targets[0]["wad"])
             for (door_id, _), target in zip(hub_doors, shuffled):
                 door_pairing[door_id] = target
                 slot_door_map[door_id] = target["wad"]
@@ -168,12 +184,8 @@ def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str,
         all_targets = [lvl_copy for _, lvl_copy in all_doors]
         shuffled_targets = list(all_targets)
         world_random.shuffle(shuffled_targets)
-        if len(shuffled_targets) > 1 and shuffled_targets[0]["wad"] == all_targets[0]["wad"]:
-            swap_idx = world_random.randint(1, len(shuffled_targets) - 1)
-            shuffled_targets[0], shuffled_targets[swap_idx] = (
-                shuffled_targets[swap_idx],
-                shuffled_targets[0],
-            )
+        if len(shuffled_targets) > 1:
+            _fix_first_door(world_random, shuffled_targets, all_targets[0]["wad"])
         for door_id, target in zip(all_door_ids, shuffled_targets):
             door_pairing[door_id] = target
             slot_door_map[door_id] = target["wad"]
