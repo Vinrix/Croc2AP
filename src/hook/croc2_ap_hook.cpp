@@ -2776,14 +2776,16 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
             g_state.add_log("Loaded Vanilla Save (Slot " + std::to_string(g_state.active_save_slot + 1) + ") — Mod Disabled.");
         }
     } else {
-        // Freshly initialized save slot (footer->magic == 0 because croc2.exe copied RVA_CLEAN_SAVE_TEMPLATE)!
+        // Freshly initialized or unformatted save slot:
         g_state.in_active_save = true;
         if (g_state.is_mod_enabled_toggle()) {
             g_state.save_locked_to_mod = true;
-            uint64_t fresh_seed = generate_fresh_entropy_seed();
-            generate_new_save_seed_locked(fresh_seed);
-            g_state.add_log("NEW RANDOMIZER SAVE (Slot " + std::to_string(g_state.active_save_slot + 1) +
-                            ", Seed #" + g_state.current_seed_hex + ")! Mod Locked ON for this save!");
+            if (g_state.current_save_seed == 0) {
+                uint64_t fresh_seed = generate_fresh_entropy_seed();
+                generate_new_save_seed_locked(fresh_seed);
+                g_state.add_log("NEW RANDOMIZER SAVE (Slot " + std::to_string(g_state.active_save_slot + 1) +
+                                ", Seed #" + g_state.current_seed_hex + ")! Mod Locked ON for this save!");
+            }
         } else {
             g_state.save_locked_to_mod = false;
             sync_state_to_save_footer_locked();
@@ -2928,10 +2930,6 @@ static bool handle_map_transition_redirect() {
 static void fixup_spawn_trigger_after_map_load(void* map_header) {
     if (!g_exe_base || !map_header) return;
 
-    // Only perform spawn trigger fixups when entering a randomized stage or returning from a randomized stage back to hub.
-    // For authentic new game dock spawn (boat in Sailor Village), save game loading, and standard transitions, let engine handle it naturally.
-    if (!g_in_redirected_stage) return;
-
     std::lock_guard<std::mutex> lock(g_mutex);
 
     uintptr_t wad_buf = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_WAD_BUFFER_BASE);
@@ -2945,6 +2943,35 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
 
     uintptr_t trig_base = wad_buf + trig_offset;
     if (trig_base < wad_buf || trig_base >= wad_limit) return;
+
+    // Prevent fatal assertion at 0x14005c9e4 ("Offset is outside of the memory range.")
+    // and 0x140002166 / 0x140002401 ("Pointer is outside of the memory range."):
+    // In croc2.exe, immediately after LoadMap returns at 0x14005c9a1, 0x14005c9d8 reads
+    // [RVA_ACTIVE_SPAWN_TRIGGER + 0x24]. If non-zero, it invokes 0x1400020e0 which calls the
+    // arena allocator 0x140073c30 and asserts that the returned pointer is within wad_buf..wad_limit.
+    // Because heap arena memory is outside wad_buf, any call to 0x1400020e0 fatally aborts.
+    // When [trigger + 0x24] is 0, 0x14005c9db immediately branches to 0x14005cad3, skipping
+    // the fatal routine entirely and cleanly completing level load.
+    // Zero +0x24 unconditionally across all triggers in the loaded map.
+    for (uint16_t i = 0; i < trig_count; ++i) {
+        uintptr_t t = trig_base + static_cast<uintptr_t>(i) * 0x54;
+        if (t + 0x54 > wad_limit) break;
+        *reinterpret_cast<uint32_t*>(t + 0x24) = 0;
+    }
+
+    // Ensure RVA_ACTIVE_SPAWN_TRIGGER points to valid memory and has +0x24 zeroed
+    uintptr_t current_active = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_ACTIVE_SPAWN_TRIGGER);
+    if (current_active >= wad_buf && current_active + 0x54 <= wad_limit) {
+        *reinterpret_cast<uint32_t*>(current_active + 0x24) = 0;
+    } else {
+        *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_ACTIVE_SPAWN_TRIGGER) = trig_base;
+    }
+
+    // Only perform custom spawn trigger redirection when entering a randomized stage
+    // or returning from a randomized stage back to hub.
+    // For authentic new game dock spawn (boat in Sailor Village), save game loading, and standard transitions,
+    // let engine handle it naturally now that the triggers are safely sanitized.
+    if (!g_in_redirected_stage) return;
 
     auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
     auto* prev = reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
@@ -3015,23 +3042,26 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
                           (flag8_trig ? flag8_trig :
                           (any_door ? any_door : trig_base)));
 
-    // Prevent fatal assertion at 0x14005c9e4 ("Offset is outside of the memory range.")
-    uint32_t link_off = *reinterpret_cast<uint32_t*>(best_trig + 0x24);
-    if (link_off != 0) {
-        uintptr_t target_addr = wad_buf + link_off;
-        if (target_addr >= wad_limit) {
-            *reinterpret_cast<uint32_t*>(best_trig + 0x24) = 0;
-        }
-    }
+    // Unconditionally zero +0x24 on the selected spawn trigger
+    *reinterpret_cast<uint32_t*>(best_trig + 0x24) = 0;
 
     // Explicitly set active entrance/spawn trigger in engine memory
     *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_ACTIVE_SPAWN_TRIGGER) = best_trig;
 
-    // Align *prev to best_trig's destination coordinates so 0x1400628cd matches Croc perfectly
-    prev->tribe    = *reinterpret_cast<int32_t*>(best_trig + 0x0C) & 0xFFF;
-    prev->level    = *reinterpret_cast<int32_t*>(best_trig + 0x10) & 0xFFF;
-    prev->submap   = *reinterpret_cast<int32_t*>(best_trig + 0x14) & 0xFFF;
-    prev->map_type = *reinterpret_cast<int32_t*>(best_trig + 0x18);
+    uint8_t best_flags = *reinterpret_cast<uint8_t*>(best_trig + 0x1E);
+    if ((best_flags & 4) != 0) {
+        // Door trigger: align *prev so 0x1400628cd matches Croc to this door
+        prev->tribe    = *reinterpret_cast<int32_t*>(best_trig + 0x0C) & 0xFFF;
+        prev->level    = *reinterpret_cast<int32_t*>(best_trig + 0x10) & 0xFFF;
+        prev->submap   = *reinterpret_cast<int32_t*>(best_trig + 0x14) & 0xFFF;
+        prev->map_type = *reinterpret_cast<int32_t*>(best_trig + 0x18);
+    } else {
+        // Non-door spawn trigger: clear prev->tribe so 0x1400628d5 branches to 0x140062aaa (default spawn at RVA_ACTIVE_SPAWN_TRIGGER)
+        prev->tribe    = 0;
+        prev->level    = 0;
+        prev->submap   = 0;
+        prev->map_type = 0;
+    }
 }
 
 static void __fastcall Hooked_OnDoorTransition() {
@@ -3297,23 +3327,55 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
+            static bool s_airborne_butt_stomp_locked = false;
+
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
+                s_airborne_butt_stomp_locked = false;
             } else if (!g_state.abilities.butt_stomp) {
                 // Read Croc's physics state safely with strict pointer validation:
+                bool is_on_ground = false;
                 uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
                 if (player_strat > 0x10000 && player_strat < 0x7FFFFFFFFFFF) {
-                    if (!IsBadReadPtr(reinterpret_cast<const void*>(player_strat), 0x50)) {
+                    if (!IsBadReadPtr(reinterpret_cast<const void*>(player_strat), 0xD0)) {
                         int32_t action_state = *reinterpret_cast<int32_t*>(player_strat + 0x44);
                         if (action_state == 3) {
-                            *reinterpret_cast<int32_t*>(player_strat + 0x44) = 1; // Force reset out of Butt Stomp
+                            *reinterpret_cast<int32_t*>(player_strat + 0x44) = 2; // Force reset out of Butt Stomp
                         }
+                        if (action_state == 0) {
+                            is_on_ground = true;
+                        } else {
+                            uintptr_t floor_poly = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
+                            if (floor_poly > 0x10000 && floor_poly < 0x7FFFFFFFFFFF) {
+                                if (!IsBadReadPtr(reinterpret_cast<const void*>(floor_poly), sizeof(int32_t))) {
+                                    int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
+                                    int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
+                                    if (croc_y <= floor_y || std::abs(croc_y - floor_y) < 0x1000) {
+                                        is_on_ground = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (is_on_ground) {
+                    s_airborne_butt_stomp_locked = false;
+                } else {
+                    // While airborne: any newly pressed jump or released jump strictly locks out Butt Stomp
+                    if ((newly_pressed & 0x4000u) || !(buttons & 0x4000u)) {
+                        s_airborne_butt_stomp_locked = true;
+                    }
+                    if (s_airborne_butt_stomp_locked) {
+                        buttons &= ~0x4000u; // Suppress mid-air Jump button so Butt Stomp cannot trigger
                     }
                 }
 
                 // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
                 // Note: Keep L2 (0x0100) and R2 (0x0200) enabled so the player can cycle through the inventory wheel
                 buttons &= ~0x0C00u;
+            } else {
+                s_airborne_butt_stomp_locked = false;
             }
 
             // Gating climbing claws: prevent grabbing climb surfaces by zeroing RVA_CLIMB_ALLOWED_BYTE
@@ -3516,7 +3578,7 @@ static void __fastcall Hooked_PickupBinoculars(void* strat) {
 // action_id == 3 corresponds to Butt Stomp.
 static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
     if (action_id == 3) {
-        if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.butt_stomp) {
+        if (g_state.is_mod_enabled_toggle() && !g_state.abilities.butt_stomp) {
             return; // Reject entering Butt Stomp action state!
         }
     }

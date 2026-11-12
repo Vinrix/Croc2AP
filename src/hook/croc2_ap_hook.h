@@ -343,12 +343,9 @@ struct ModState {
         return config_enabled && !manual_override_disabled;
     }
 
-    // Returns true whenever a Randomizer Save is active OR connected to an Archipelago server/client
+    // Returns true whenever the mod is enabled and active in gameplay
     bool is_randomizer_active() const {
-        if (!is_mod_enabled_toggle()) {
-            return false;
-        }
-        return save_locked_to_mod || client_connected || conn.ap_server_connected;
+        return is_mod_enabled_toggle();
     }
 
     std::string get_hud_banner() const {

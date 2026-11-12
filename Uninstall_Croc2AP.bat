@@ -41,6 +41,9 @@ if exist "%GAME_DIR%\version.dll.vanilla_backup" (
     echo [+] Restored original "%GAME_DIR%\version.dll" from backup
 )
 
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$dir = '%GAME_DIR%\remaster\models'; if (Test-Path $dir) { Get-ChildItem -Path $dir -Recurse -Filter '*.zmod.vanilla' -ErrorAction SilentlyContinue | ForEach-Object { $orig = $_.FullName.Substring(0, $_.FullName.Length - 8); Copy-Item -Path $_.FullName -Destination $orig -Force; Remove-Item $_.FullName -Force; Write-Host ('[+] Restored vanilla model ' + $orig) } }"
+
 if exist "%AP_DIR%\custom_worlds\croc2.apworld" (
     del /F /Q "%AP_DIR%\custom_worlds\croc2.apworld"
     echo [-] Removed "%AP_DIR%\custom_worlds\croc2.apworld"

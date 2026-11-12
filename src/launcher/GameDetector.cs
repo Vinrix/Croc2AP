@@ -153,6 +153,168 @@ namespace Croc2Launcher
             catch { }
         }
 
+        public static bool IsTargetCollectable(string filePath)
+        {
+            string fname = Path.GetFileNameWithoutExtension(filePath);
+            if (!fname.Contains("_OBJ_")) return false;
+
+            // Never touch gems (white crystals and 5 colored crystals)
+            // OBJ_011: White Crystal
+            // OBJ_015: Red Crystal
+            // OBJ_016: Blue Crystal
+            // OBJ_017: Green Crystal
+            // OBJ_018: Yellow Crystal
+            // OBJ_019: Pink/Purple Crystal
+            if (fname.EndsWith("_OBJ_011", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_015", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_016", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_017", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_018", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_019", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // Exclude Croc and major scenery/infrastructure
+            // OBJ_000: Croc
+            // OBJ_001..OBJ_006, OBJ_008, OBJ_009, OBJ_014
+            if (fname.EndsWith("_OBJ_000", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_001", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_002", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_003", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_004", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_005", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_006", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_008", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_009", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_014", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!fname.Equals("EU_T0L1M007_OBJ_004", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            // Exclude large scenery meshes (scenery/terrain/village buildings are > 700KB)
+            try
+            {
+                var fi = new FileInfo(filePath);
+                if (fi.Length > 700 * 1024) return false;
+            }
+            catch { return false; }
+
+            // Target collectables & crates:
+            // OBJ_007: Quest pickups / binoculars / items
+            // OBJ_010: Heart pots
+            // OBJ_012: Small smashables / crates (e.g. EU_T0L1M003_OBJ_012)
+            // OBJ_013: Pete's store crate & smashables (e.g. EU_T0L1M005_OBJ_013)
+            // OBJ_020: Clockwork Gobbos
+            // OBJ_021: Keys
+            // OBJ_025: Gobbos / Jellies
+            // OBJ_027: Crates (e.g. EU_T0L1M003_OBJ_027)
+            if (fname.EndsWith("_OBJ_007", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_010", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_012", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_013", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_020", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_021", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_025", StringComparison.OrdinalIgnoreCase) ||
+                fname.EndsWith("_OBJ_027", StringComparison.OrdinalIgnoreCase) ||
+                fname.Equals("EU_T0L1M007_OBJ_004", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        public static byte[] BuildArchipelagoLogoZmod(byte[] origBytes, byte[] vdata, byte[] idata)
+        {
+            if (origBytes == null || origBytes.Length < 16) return null;
+            if (origBytes[0] != 'Z' || origBytes[1] != 'M' || origBytes[2] != 'O' || origBytes[3] != 'D') return null;
+
+            int numSub = BitConverter.ToInt32(origBytes, 12);
+            if (numSub <= 0) return null;
+
+            int headerSize = 16 + numSub * 84;
+            if (origBytes.Length < headerSize) return null;
+
+            byte[] newBytes = new byte[headerSize + 4 + vdata.Length + 4 + idata.Length];
+            Array.Copy(origBytes, 0, newBytes, 0, headerSize);
+
+            // Submesh 0: index_count = 504, index_offset = 0, bounding box: [-0.1, -0.1, -0.05] to [0.1, 0.1, 0.05]
+            int sub0 = 16;
+            BitConverter.GetBytes(504).CopyTo(newBytes, sub0 + 32);
+            BitConverter.GetBytes(0).CopyTo(newBytes, sub0 + 36);
+            BitConverter.GetBytes(-0.1f).CopyTo(newBytes, sub0 + 40);
+            BitConverter.GetBytes(-0.1f).CopyTo(newBytes, sub0 + 44);
+            BitConverter.GetBytes(-0.05f).CopyTo(newBytes, sub0 + 48);
+            BitConverter.GetBytes(0.1f).CopyTo(newBytes, sub0 + 52);
+            BitConverter.GetBytes(0.1f).CopyTo(newBytes, sub0 + 56);
+            BitConverter.GetBytes(0.05f).CopyTo(newBytes, sub0 + 60);
+
+            // Submeshes 1..numSub-1: index_count = 0, index_offset = 0 (draw 0 triangles, avoiding material errors)
+            for (int i = 1; i < numSub; i++)
+            {
+                int subI = 16 + i * 84;
+                BitConverter.GetBytes(0).CopyTo(newBytes, subI + 32);
+                BitConverter.GetBytes(0).CopyTo(newBytes, subI + 36);
+                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 40);
+                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 44);
+                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 48);
+                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 52);
+                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 56);
+                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 60);
+            }
+
+            int offset = headerSize;
+            BitConverter.GetBytes(vdata.Length).CopyTo(newBytes, offset);
+            offset += 4;
+            Array.Copy(vdata, 0, newBytes, offset, vdata.Length);
+            offset += vdata.Length;
+
+            BitConverter.GetBytes(idata.Length).CopyTo(newBytes, offset);
+            offset += 4;
+            Array.Copy(idata, 0, newBytes, offset, idata.Length);
+
+            return newBytes;
+        }
+
+        public static void ApplyArchipelagoLogoModels(string baseDir)
+        {
+            try
+            {
+                string modelsDir = Path.Combine(baseDir, "remaster", "models");
+                if (!Directory.Exists(modelsDir)) return;
+
+                byte[] vdata = Convert.FromBase64String(LogoData.VertexDataBase64);
+                byte[] idata = Convert.FromBase64String(LogoData.IndexDataBase64);
+
+                foreach (string file in Directory.GetFiles(modelsDir, "*.zmod", SearchOption.AllDirectories))
+                {
+                    if (file.EndsWith(".vanilla", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (file.EndsWith("ap_logo.zmod", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    if (IsTargetCollectable(file))
+                    {
+                        string bak = file + ".vanilla";
+                        if (!File.Exists(bak))
+                        {
+                            File.Copy(file, bak, true);
+                        }
+
+                        byte[] origBytes = File.ReadAllBytes(bak);
+                        byte[] patched = BuildArchipelagoLogoZmod(origBytes, vdata, idata);
+                        if (patched != null)
+                        {
+                            File.WriteAllBytes(file, patched);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
         public static void RestoreVanillaModels(string baseDir)
         {
             try
@@ -184,8 +346,15 @@ namespace Croc2Launcher
             // Ensure mod ini matches requested mode
             SetModEnabledInIni(paths.IniPath, !vanillaMode);
 
-            // Ensure clean vanilla models are always in place to prevent engine material errors
-            RestoreVanillaModels(paths.BaseDir);
+            // Apply custom Archipelago logo models in mod mode, or restore clean vanilla models in vanilla mode
+            if (vanillaMode)
+            {
+                RestoreVanillaModels(paths.BaseDir);
+            }
+            else
+            {
+                ApplyArchipelagoLogoModels(paths.BaseDir);
+            }
 
             var startInfo = new ProcessStartInfo
             {

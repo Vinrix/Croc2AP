@@ -213,6 +213,21 @@ def uninstall_mod(game_dir: str, ap_dir: str, skip_ap: bool = False) -> List[str
         shutil.move(backup_dll, dst_dll)
         removed.append(f"Restored {dst_dll} from backup")
 
+    # Restore any backed-up .zmod.vanilla models
+    models_dir = os.path.join(game_dir, "remaster", "models")
+    if os.path.isdir(models_dir):
+        for root, _, files in os.walk(models_dir):
+            for file in files:
+                if file.endswith(".zmod.vanilla"):
+                    bak_path = os.path.join(root, file)
+                    orig_path = bak_path[:-8]
+                    try:
+                        shutil.copy2(bak_path, orig_path)
+                        os.remove(bak_path)
+                        removed.append(f"Restored {orig_path} from vanilla backup")
+                    except Exception:
+                        pass
+
     if not skip_ap:
         dst_apworld = os.path.join(ap_dir, "custom_worlds", "croc2.apworld")
         dst_yaml = os.path.join(ap_dir, "Players", "Templates", "Croc 2.yaml")

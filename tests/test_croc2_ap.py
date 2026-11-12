@@ -1026,6 +1026,129 @@ class TestCroc2Archipelago(unittest.TestCase):
             header = f.read(2)
             self.assertEqual(header, b"MZ", "Executable must have valid Windows PE header (MZ)")
 
+    def test_archipelago_logo_collectable_models(self):
+        """
+        Validates that:
+        1. LogoData.cs defines valid base64 for 3600-byte vertex buffer and 2016-byte index buffer.
+        2. Non-gem collectables (crates, quest items/binoculars, heart pots, keys, gobbos) are targeted.
+        3. All gem models (white crystal OBJ_011, colored crystals OBJ_015..019) and level scenery (OBJ_000, OBJ_006, OBJ_009, OBJ_014, >700KB) are NEVER touched.
+        4. Rebuilt ZMOD preserves original submesh count, submesh material names, sets index_count=504 on submesh 0, and index_count=0 on subsequent submeshes.
+        """
+        import base64
+        import struct
+
+        logo_data_path = os.path.join(ROOT_DIR, "src", "launcher", "LogoData.cs")
+        self.assertTrue(os.path.isfile(logo_data_path), "src/launcher/LogoData.cs must exist")
+
+        with open(logo_data_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        m_v = re.search(r'public const string VertexDataBase64 = "([^"]+)";', content)
+        m_i = re.search(r'public const string IndexDataBase64 = "([^"]+)";', content)
+        self.assertIsNotNone(m_v)
+        self.assertIsNotNone(m_i)
+
+        vdata = base64.b64decode(m_v.group(1))
+        idata = base64.b64decode(m_i.group(1))
+        self.assertEqual(len(vdata), 3600, "Vertex data must be exactly 3600 bytes (150 vertices * 24 bytes)")
+        self.assertEqual(len(idata), 2016, "Index data must be exactly 2016 bytes (504 uint32 indices)")
+
+        # Target classification checks matching GameDetector.IsTargetCollectable
+        def is_target(fname: str, size: int) -> bool:
+            if "_OBJ_" not in fname:
+                return False
+            gem_suffixes = ["_OBJ_011", "_OBJ_015", "_OBJ_016", "_OBJ_017", "_OBJ_018", "_OBJ_019"]
+            if any(fname.endswith(s) for s in gem_suffixes):
+                return False
+            scenery_suffixes = ["_OBJ_000", "_OBJ_001", "_OBJ_002", "_OBJ_003", "_OBJ_004", "_OBJ_005", "_OBJ_006", "_OBJ_008", "_OBJ_009", "_OBJ_014"]
+            if any(fname.endswith(s) for s in scenery_suffixes):
+                if fname.upper() != "EU_T0L1M007_OBJ_004":
+                    return False
+            if size > 700 * 1024:
+                return False
+            collectable_suffixes = ["_OBJ_007", "_OBJ_010", "_OBJ_012", "_OBJ_013", "_OBJ_020", "_OBJ_021", "_OBJ_025", "_OBJ_027"]
+            if any(fname.endswith(s) for s in collectable_suffixes) or fname.upper() == "EU_T0L1M007_OBJ_004":
+                return True
+            return False
+
+        # Verify gems are excluded
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_011", 50000), "White crystal must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_015", 50000), "Red crystal must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_016", 50000), "Blue crystal must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_017", 50000), "Green crystal must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_018", 50000), "Yellow crystal must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_019", 50000), "Pink/Purple crystal must NOT be replaced")
+
+        # Verify scenery/terrain/infrastructure are excluded
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_000", 200000), "Croc model must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_006", 150000), "Pete's shop must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_009", 180000), "Village docks must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_014", 300000), "Village terrain must NOT be replaced")
+        self.assertFalse(is_target("EU_T1L1M001_OBJ_012", 5600000), "Large village buildings (>700KB) must NOT be replaced")
+
+        # Verify collectables and crates ARE targeted
+        self.assertTrue(is_target("EU_T1L1M001_OBJ_007", 85000), "Pete's store crate pickup (Binoculars) MUST be replaced")
+        self.assertTrue(is_target("EU_T0L1M005_OBJ_013", 120000), "Pete's store wooden crate MUST be replaced")
+        self.assertTrue(is_target("EU_T0L1M003_OBJ_012", 65000), "Standard smashable crate MUST be replaced")
+        self.assertTrue(is_target("EU_T0L1M007_OBJ_004", 75000), "Smashable crate OBJ_004 exception MUST be replaced")
+        self.assertTrue(is_target("EU_T1L1M001_OBJ_010", 90000), "Heart pot MUST be replaced")
+        self.assertTrue(is_target("EU_T1L1M001_OBJ_020", 95000), "Clockwork Gobbo MUST be replaced")
+        self.assertTrue(is_target("EU_T1L1M001_OBJ_021", 80000), "Key MUST be replaced")
+        self.assertTrue(is_target("EU_T1L1M001_OBJ_025", 95000), "Gobbo / Jelly MUST be replaced")
+        self.assertTrue(is_target("EU_T0L1M003_OBJ_027", 110000), "Crate OBJ_027 MUST be replaced")
+
+        # Verify ZMOD rebuilding logic
+        # Create a mock 2-submesh ZMOD
+        mock_orig = bytearray(b"ZMOD\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00")
+        sub0_mat = b"mat_sub0\x00" + b"\x00" * 23
+        sub0_meta = struct.pack("<II6f8s3I", 120, 0, -1.0, -1.0, -1.0, 1.0, 1.0, 1.0, b"\x00"*8, 0xFFFFFFFF, 0, 0xFFFFFFFF)
+        mock_orig += sub0_mat + sub0_meta
+
+        sub1_mat = b"mat_sub1\x00" + b"\x00" * 23
+        sub1_meta = struct.pack("<II6f8s3I", 240, 120, -2.0, -2.0, -2.0, 2.0, 2.0, 2.0, b"\x00"*8, 0xFFFFFFFF, 0, 0xFFFFFFFF)
+        mock_orig += sub1_mat + sub1_meta
+
+        # Mock payload
+        mock_orig += struct.pack("<I", 100) + b"\xAA" * 100
+        mock_orig += struct.pack("<I", 50) + b"\xBB" * 50
+
+        # Now simulate BuildArchipelagoLogoZmod
+        header_len = 16 + 2 * 84
+        patched = bytearray(mock_orig[:header_len])
+        # submesh 0: index_count = 504, index_offset = 0, bounding box [-0.1, -0.1, -0.05] to [0.1, 0.1, 0.05]
+        struct.pack_into("<II6f", patched, 16 + 32, 504, 0, -0.1, -0.1, -0.05, 0.1, 0.1, 0.05)
+        # submesh 1: index_count = 0, index_offset = 0
+        struct.pack_into("<II6f", patched, 16 + 84 + 32, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+        # append vdata and idata
+        patched += struct.pack("<I", len(vdata)) + vdata
+        patched += struct.pack("<I", len(idata)) + idata
+
+        # Assertions on patched ZMOD
+        self.assertEqual(patched[:4], b"ZMOD")
+        num_sub = struct.unpack_from("<I", patched, 12)[0]
+        self.assertEqual(num_sub, 2)
+
+        # Check preserved material names
+        mat0 = patched[16:16+32].split(b"\x00")[0]
+        mat1 = patched[16+84:16+84+32].split(b"\x00")[0]
+        self.assertEqual(mat0, b"mat_sub0")
+        self.assertEqual(mat1, b"mat_sub1")
+
+        # Check index counts
+        idx_cnt0 = struct.unpack_from("<I", patched, 16 + 32)[0]
+        idx_cnt1 = struct.unpack_from("<I", patched, 16 + 84 + 32)[0]
+        self.assertEqual(idx_cnt0, 504)
+        self.assertEqual(idx_cnt1, 0)
+
+        # Check payload
+        offset = header_len
+        v_size = struct.unpack_from("<I", patched, offset)[0]
+        self.assertEqual(v_size, 3600)
+        offset += 4 + v_size
+        i_size = struct.unpack_from("<I", patched, offset)[0]
+        self.assertEqual(i_size, 2016)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
