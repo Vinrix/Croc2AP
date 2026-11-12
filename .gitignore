@@ -30,3 +30,5 @@ __pycache__/
 # Antigravity & Agent workspace artifacts
 .superpowers/
 .gemini/
+
+build/test_mod_resync.ini
