@@ -23,6 +23,7 @@ constexpr uintptr_t RVA_ACTION_PROMPT_ENUMS   = 0x0081B9A0;
 // Exact croc2.exe Function RVAs (disassembled from x64 Steam binary)
 constexpr uintptr_t RVA_FN_ADD_HEART_POT         = 0x00028A60;
 constexpr uintptr_t RVA_FN_TAKE_HEART_DAMAGE     = 0x00028AA0;
+constexpr uintptr_t RVA_FN_HURT_CROC             = 0x00065F20; // strat opcode handler: hurt Croc like an enemy hit (state 5, or 1 on death)
 constexpr uintptr_t RVA_FN_CALC_SAVE_INDEX       = 0x0002B9C0;
 constexpr uintptr_t RVA_FN_ON_DOOR_TRANSITION    = 0x0002BA00;
 constexpr uintptr_t RVA_FN_READ_INPUT            = 0x00040990;
@@ -106,7 +107,7 @@ constexpr uintptr_t RVA_HUD_KEYS                 = 0x00BA9B30; // int32_t in-sta
 constexpr uintptr_t RVA_HUD_GOBBOS               = 0x00BA9B34; // int32_t HUD gobbo count
 constexpr uintptr_t RVA_HUD_CLOCKWORK_GOBBOS     = 0x00BA9B38; // int32_t HUD clockwork gobbo count (max 9)
 constexpr uintptr_t RVA_LEVEL_CRYSTALS           = 0x00BA9B3C; // Current in-level white crystals
-constexpr uintptr_t RVA_INV_GOLDEN_GOBBOS        = 0x00BA9B40; // Wheel item_type 2
+constexpr uintptr_t RVA_INV_GOLDEN_GOBBOS        = 0x00BA9B40; // Wheel item_type 2. Observed in-game as the BINOCULARS, not Golden Gobbos
 constexpr uintptr_t RVA_INV_STAGE_ITEM           = 0x00BA9B44; // Wheel item_type 3
 constexpr uintptr_t RVA_INV_RED_JELLIES          = 0x00BA9B48; // Wheel item_type 5 (Gummi Jump Red Jelly, max 9)
 constexpr uintptr_t RVA_INV_BLUE_JELLIES         = 0x00BA9B4C; // Wheel item_type 7 (Jelly Jump Blue Jelly, max 9)

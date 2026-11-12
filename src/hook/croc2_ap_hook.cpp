@@ -70,6 +70,7 @@ static MapCoords g_saved_hub{1, 1, 1, 0};
 static MapCoords g_saved_orig_door{1, 2, 1, 0};
 static MapCoords g_saved_rand_stage{1, 4, 1, 0};
 static std::atomic<int> g_pending_heart_damage{0};
+static std::atomic<int> g_pending_fire_hurt{0}; // Fire Breakout hits, applied via the game's own hurt routine
 static std::atomic<int> g_pending_heart_pots{0};
 static std::atomic<int> g_pending_keys{0};
 static std::atomic<int> g_pending_clockwork{0};
@@ -1435,9 +1436,8 @@ static void apply_ap_item_by_id_locked(int item_id,
             g_pending_wallet_crystals.fetch_add(10);
             g_state.add_log("Received Croc Crystals (+10)!");
             break;
-        case 7200151: // Fire Breakout Trap: INSTANT heart down + flame animation & knockback
-            if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
-            g_pending_heart_damage.fetch_add(1);
+        case 7200151: // Fire Breakout Trap: the game's own "Croc gets hurt" (heart loss, flinch and knockback)
+            g_pending_fire_hurt.fetch_add(1);
             g_state.fire_trap.active = true;
             g_state.fire_trap.timer = 2.0f;
             g_state.add_log("🔥 TRAP! Fire Breakout: Instant Heart Lost with Fire Knockback!");
@@ -2027,8 +2027,8 @@ static std::string handle_command_locked(const std::string& req) {
 
         if (trap_type == "fire_breakout") {
             display_name = "Fire Breakout Trap";
-            if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
-            g_pending_heart_damage.fetch_add(1);
+            if (g_state.current_hearts > 0) g_state.current_hearts -= 1; // bookkeeping; resynced from the game
+            g_pending_fire_hurt.fetch_add(1);                             // real effect: game's hurt routine
             g_state.fire_trap.active = true;
             g_state.fire_trap.timer = 2.0f;
             g_state.add_log("🔥 FIRE BREAKOUT TRAP! Instant Heart Lost with Fire Knockback!");
@@ -3368,8 +3368,9 @@ static void drain_pending_native_inventory_grants() {
         i32(RVA_HUD_CLOCKWORK_GOBBOS) = std::min(9, g_state.clockwork_gobbos);
     }
 
-    // Golden Gobbos / Trophies -> Wheel item_type 2 (0x140BA9B40)
-    sync_item(i32(RVA_INV_GOLDEN_GOBBOS), g_state.golden_gobbos, 2);
+    // Golden Gobbos used to be synced as wheel item_type 2 (0x140BA9B40), but in-game testing showed type 2
+    // is the binoculars, so received Golden Gobbos showed up as binoculars. Disabled until the real Golden
+    // Gobbo counter is found; the count is still tracked in g_state.golden_gobbos and the save footer.
 
     // Jigsaw Pieces -> Wheel item_type 10 (0x140BA9B60)
     sync_item(i32(RVA_INV_JIGSAW_PIECES), g_state.jigsaw_pieces, 10);
@@ -3493,13 +3494,36 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         if (crystal_ptr != 0) {
             int32_t in_stage_val = *reinterpret_cast<int32_t*>(crystal_ptr);
             int in_stage_gems = in_stage_val / 0x1000;
+            static const char* kGemColors[5] = {"Red", "Blue", "Green", "Yellow", "Purple"};
+            auto claim_next_gem = [&]() {
+                for (int g = 0; g < 5; ++g) {
+                    int check_id = stage_idx * 9 + 3 + g;
+                    if ((g_state.checks_claimed[check_id / 8] & (1u << (check_id % 8))) == 0) {
+                        claim_solo_check_locked(stage_idx, 3 + g,
+                            std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[g] + " Crystal");
+                        return;
+                    }
+                }
+            };
+            // When crystals are shuffled, the counter below is reset every frame to the crystals RECEIVED,
+            // so a pickup shows up as the counter rising above the value written last frame. (The old code
+            // claimed by total count, which after the reset was always 1: only "Red" could ever be sent.)
+            static int s_gem_stage = -2;
+            static int s_gem_last_written = -1;
+            if (stage_idx != s_gem_stage) {
+                s_gem_stage = stage_idx;
+                s_gem_last_written = -1; // first frame in a stage: just sync, don't claim
+            }
             if (stage_idx >= 0 && g_state.is_randomizer_active()) {
-                static const char* kGemColors[5] = {"Red", "Blue", "Green", "Yellow", "Purple"};
-                for (int g = 0; g < in_stage_gems && g < 5; ++g) {
-                    claim_solo_check_locked(
-                        stage_idx, 3 + g,
-                        std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[g] + " Crystal"
-                    );
+                if (g_state.colored_crystals_mode == 1) {
+                    if (s_gem_last_written >= 0) {
+                        for (int n = in_stage_gems - s_gem_last_written; n > 0; --n) claim_next_gem();
+                    }
+                } else {
+                    for (int g = 0; g < in_stage_gems && g < 5; ++g) {
+                        claim_solo_check_locked(stage_idx, 3 + g,
+                            std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[g] + " Crystal");
+                    }
                 }
             }
 
@@ -3519,6 +3543,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 // Clamp HUD crystal display to the number of colored crystals ACTUALLY received for this stage!
                 // This prevents picking up an in-level check from falsely filling the player's HUD crystal inventory.
                 *reinterpret_cast<int32_t*>(crystal_ptr) = game_val;
+                s_gem_last_written = count;
             }
         }
 
@@ -3679,6 +3704,27 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_state.max_heart_pots = *p_max_pots;
         g_state.current_hearts = *p_curr_hearts;
+    }
+
+    // Fire Breakout Trap: call croc2.exe's HurtCroc strat opcode handler (0x140065F20) on Croc's own strat.
+    // It honours invincibility frames, removes a heart through TakeHeartDamage, sets the hurt state (5) for
+    // the flinch/knockback, or kills Croc (state 1) when he has no hearts left, exactly like an enemy hit.
+    if (g_pending_fire_hurt.load() > 0) {
+        void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+        int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+        int32_t paused = *reinterpret_cast<int32_t*>(g_exe_base + RVA_PAUSE_MENU_ACTIVE);
+        auto* cur = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+        bool in_level = cur->tribe >= 1 && cur->tribe <= 5 && cur->map_type != 3;
+        if (player && state == 0 && paused == 0 && in_level &&
+            *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT) > 0) {
+            g_pending_fire_hurt.fetch_sub(1);
+            int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+            using FnHurtCroc = void(__fastcall*)(void* strat);
+            reinterpret_cast<FnHurtCroc>(g_exe_base + RVA_FN_HURT_CROC)(player);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked("TRAP fire: HurtCroc, hearts " + std::to_string(before) + " -> " +
+                             std::to_string(*reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4)));
+        }
     }
 
     if (detach_climb_after_unlock) {
@@ -3862,9 +3908,10 @@ static void __fastcall Hooked_GiveInventoryItem(void* strat) {
     int32_t type = **reinterpret_cast<int32_t**>(strat);
     Pickup kind = Pickup::Other;
     switch (type) {
-        // Type 2 is NOT a Golden Gobbo: in testing, the Sailor Village crate gave the Magic Eye-Zoomers
-        // (binoculars) through GiveInventoryItem(2). Left unclaimed until a debug log from a real Golden
-        // Gobbo rescue shows the right signal (see docs/achievements.md / PR notes).
+        // Type 2 is the Magic Eye-Zoomers (binoculars), not a Golden Gobbo: in testing, the Sailor Village
+        // crate gave the binoculars through GiveInventoryItem(2). Treated like the binoculars opcode
+        // (randomized in solo, vanilla in a multiworld).
+        case 2: kind = Pickup::Binoculars; break;
         case 5: kind = Pickup::RedJelly; break;
         case 7: kind = Pickup::BlueJelly; break;
         case 8: kind = Pickup::Clockwork; break;
