@@ -295,9 +295,13 @@ namespace Croc2Launcher
         private void RefreshGameStatusCard()
         {
             if (_gameStatusCard == null || _lblDetectedStatus == null) return;
-            Color c = _lblDetectedStatus.ForeColor;
+            // Driven by the detection result itself, not the label colour (which may still be the previous
+            // theme's colour while a theme switch is being applied).
+            bool ok = _paths != null && _paths.HasExe && _paths.HasHookDll;
+            bool warn = _paths != null && _paths.HasExe && !_paths.HasHookDll;
+            _lblDetectedStatus.ForeColor = ok ? StatusOk : warn ? StatusWarn : StatusBad;
             var rp = (RoundedPanel)_gameStatusCard;
-            rp.FillColor = c == StatusOk ? CAccentSoft : c == StatusWarn ? CWarnSoft : CBadSoft;
+            rp.FillColor = ok ? CAccentSoft : warn ? CWarnSoft : CBadSoft;
             rp.BorderColor = rp.FillColor;
             rp.Invalidate();
         }
