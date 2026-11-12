@@ -22,6 +22,32 @@ AP_FLAG_USEFUL = 0b010
 AP_FLAG_TRAP = 0b100
 
 
+# Goal bookkeeping (IDs from data/items.json and data/locations.json)
+JIGSAW_PIECE_IDS = frozenset(range(7200012, 7200017))  # generic + 4 per-village pieces
+TROPHY_ID = 7200017
+DANTE_FINAL_FIGHT_LOC = 7210287
+CLIENT_GOAL = 30  # Archipelago ClientStatus.CLIENT_GOAL
+
+
+def goal_reached(slot_data: Dict[str, Any], received_item_ids: List[int], checked_locations: Set[int]) -> bool:
+    """Mirror of the completion_condition in rules.py, evaluated from what the client actually has."""
+    if not slot_data:
+        return False
+    goal = int(slot_data.get("goal", 0))
+    dante = DANTE_FINAL_FIGHT_LOC in checked_locations
+    jigsaws = sum(1 for i in received_item_ids if i in JIGSAW_PIECE_IDS) >= int(slot_data.get("jigsaw_pieces_required", 4))
+    trophies = sum(1 for i in received_item_ids if i == TROPHY_ID) >= int(slot_data.get("trophies_required", 16))
+    if goal == 0:
+        return dante
+    if goal == 1:
+        return jigsaws
+    if goal == 2:
+        return trophies
+    if goal == 3:
+        return dante and jigsaws and trophies
+    return False
+
+
 def classification_from_flags(flags: int) -> str:
     """Map Archipelago NetworkItem flags to the Text Client importance colour class."""
     if flags & AP_FLAG_TRAP:
@@ -99,6 +125,7 @@ class Croc2HookBridge:
         return await self.send_command({
             "command": "configure_session",
             "colored_crystals_mode": slot_data.get("colored_crystals_mode", 1),
+            "lock_level_access": slot_data.get("lock_level_access", 1),
             "shuffle_white_crystals": slot_data.get("shuffle_white_crystals", 1),
             "shuffle_abilities": slot_data.get("shuffle_abilities", 1),
             "shuffle_levers": slot_data.get("shuffle_levers", 1),
@@ -330,6 +357,16 @@ def run_client(*args: str) -> None:
                     new_checks = ctx.hook.checked_locations - ctx.checked_locations
                     if new_checks and ctx.server and ctx.slot:
                         await ctx.send_msgs([{"cmd": "LocationChecks", "locations": sorted(new_checks)}])
+
+                    # Tell the server when the seed's goal is met (enables release/collect, marks the slot done)
+                    if ctx.server and ctx.slot and not ctx.finished_game and goal_reached(
+                        ctx.slot_data,
+                        [int(n.item) for n in ctx.items_received],
+                        set(ctx.checked_locations) | set(ctx.hook.checked_locations),
+                    ):
+                        await ctx.send_msgs([{"cmd": "StatusUpdate", "status": CLIENT_GOAL}])
+                        ctx.finished_game = True
+                        logger.info("Goal complete! Reported victory to the Archipelago server.")
 
                 await asyncio.sleep(0.25)
 

@@ -130,6 +130,7 @@ namespace Croc2Launcher
             {
                 { "command", "configure_session" },
                 { "colored_crystals_mode", slotData.ContainsKey("colored_crystals_mode") ? Convert.ToInt32(slotData["colored_crystals_mode"]) : 1 },
+                { "lock_level_access", slotData.ContainsKey("lock_level_access") ? Convert.ToInt32(slotData["lock_level_access"]) : 1 },
                 { "shuffle_white_crystals", slotData.ContainsKey("shuffle_white_crystals") ? Convert.ToInt32(slotData["shuffle_white_crystals"]) : 1 },
                 { "shuffle_abilities", slotData.ContainsKey("shuffle_abilities") ? Convert.ToInt32(slotData["shuffle_abilities"]) : 1 },
                 { "shuffle_levers", slotData.ContainsKey("shuffle_levers") ? Convert.ToInt32(slotData["shuffle_levers"]) : 1 },

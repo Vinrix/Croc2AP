@@ -153,98 +153,59 @@ namespace Croc2Launcher
             catch { }
         }
 
+        // Remaster model files are named EU_<map>_OBJ_<n>, where <n> is an index into THAT map's own
+        // object list, so the same number is a different object in every map. Collectables are not
+        // stored per level: every level preloads them from shared "library" maps (mostly T0L1M003, see
+        // remaster/data_store/generated/T*/preload.json). So only those exact shared files are swapped.
+        private static readonly string[] LogoTargetNames =
+        {
+            "EU_T0L1M003_OBJ_009", // Key
+            "EU_T0L1M003_OBJ_022", // Heart
+            "EU_T0L1M003_OBJ_012", // collectable-sized shared object (pair with 013) - verify in game
+            "EU_T0L1M003_OBJ_013",
+            "EU_T0L1M003_OBJ_021", // collectable-sized shared object - verify in game
+            "EU_T0L1M003_OBJ_025", // collectable-sized shared object (pair with 026) - verify in game
+            "EU_T0L1M003_OBJ_026",
+            "EU_T0L1M007_OBJ_004", // kept from the original list
+        };
+        // Never swapped: OBJ_011 and OBJ_015..019 of T0L1M003 are the white and five coloured crystals.
+
+        private static readonly System.Collections.Generic.HashSet<string> LogoTargets =
+            new System.Collections.Generic.HashSet<string>(LogoTargetNames, StringComparer.OrdinalIgnoreCase);
+
         public static bool IsTargetCollectable(string filePath)
         {
-            string fname = Path.GetFileNameWithoutExtension(filePath);
-            if (!fname.Contains("_OBJ_")) return false;
-
-            // Never touch gems (white crystals and 5 colored crystals)
-            // OBJ_011: White Crystal
-            // OBJ_015: Red Crystal
-            // OBJ_016: Blue Crystal
-            // OBJ_017: Green Crystal
-            // OBJ_018: Yellow Crystal
-            // OBJ_019: Pink/Purple Crystal
-            if (fname.EndsWith("_OBJ_011", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_015", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_016", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_017", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_018", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_019", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            // Exclude Croc and major scenery/infrastructure
-            // OBJ_000: Croc
-            // OBJ_001..OBJ_006, OBJ_008, OBJ_009, OBJ_014
-            if (fname.EndsWith("_OBJ_000", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_001", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_002", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_003", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_004", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_005", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_006", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_008", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_009", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_014", StringComparison.OrdinalIgnoreCase))
-            {
-                if (!fname.Equals("EU_T0L1M007_OBJ_004", StringComparison.OrdinalIgnoreCase))
-                {
-                    return false;
-                }
-            }
-
-            // Exclude large scenery meshes (scenery/terrain/village buildings are > 700KB)
-            try
-            {
-                var fi = new FileInfo(filePath);
-                if (fi.Length > 700 * 1024) return false;
-            }
-            catch { return false; }
-
-            // Target collectables & crates:
-            // OBJ_007: Quest pickups / binoculars / items
-            // OBJ_010: Heart pots
-            // OBJ_012: Small smashables / crates (e.g. EU_T0L1M003_OBJ_012)
-            // OBJ_013: Pete's store crate & smashables (e.g. EU_T0L1M005_OBJ_013)
-            // OBJ_020: Clockwork Gobbos
-            // OBJ_021: Keys
-            // OBJ_025: Gobbos / Jellies
-            // OBJ_027: Crates (e.g. EU_T0L1M003_OBJ_027)
-            if (fname.EndsWith("_OBJ_007", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_010", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_012", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_013", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_020", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_021", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_025", StringComparison.OrdinalIgnoreCase) ||
-                fname.EndsWith("_OBJ_027", StringComparison.OrdinalIgnoreCase) ||
-                fname.Equals("EU_T0L1M007_OBJ_004", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            return false;
+            return LogoTargets.Contains(Path.GetFileNameWithoutExtension(filePath));
         }
 
+        // ZMOD layout: "ZMOD", version, ?, submesh count; 84-byte submesh table; int32 vertex-byte count +
+        // vertices (24 bytes each); int32 index-byte count + uint32 indices; then a trailer (20 bytes for
+        // static models). The trailer must be preserved or the engine reads past the end of the file.
         public static byte[] BuildArchipelagoLogoZmod(byte[] origBytes, byte[] vdata, byte[] idata)
         {
             if (origBytes == null || origBytes.Length < 16) return null;
             if (origBytes[0] != 'Z' || origBytes[1] != 'M' || origBytes[2] != 'O' || origBytes[3] != 'D') return null;
 
             int numSub = BitConverter.ToInt32(origBytes, 12);
-            if (numSub <= 0) return null;
+            if (numSub <= 0 || numSub > 64) return null;
 
             int headerSize = 16 + numSub * 84;
-            if (origBytes.Length < headerSize) return null;
+            if (origBytes.Length < headerSize + 4) return null;
+            int origVBytes = BitConverter.ToInt32(origBytes, headerSize);
+            int idxPos = headerSize + 4 + origVBytes;
+            if (origVBytes < 0 || idxPos + 4 > origBytes.Length) return null;
+            int origIBytes = BitConverter.ToInt32(origBytes, idxPos);
+            int trailerPos = idxPos + 4 + origIBytes;
+            if (origIBytes < 0 || trailerPos > origBytes.Length) return null;
+            int trailerLen = origBytes.Length - trailerPos;
+            if (trailerLen != 20) return null; // skinned/animated or unknown layout: leave it alone
 
-            byte[] newBytes = new byte[headerSize + 4 + vdata.Length + 4 + idata.Length];
+            byte[] newBytes = new byte[headerSize + 4 + vdata.Length + 4 + idata.Length + trailerLen];
             Array.Copy(origBytes, 0, newBytes, 0, headerSize);
 
-            // Submesh 0: index_count = 504, index_offset = 0, bounding box: [-0.1, -0.1, -0.05] to [0.1, 0.1, 0.05]
+            // Submesh 0 draws the logo: index_count = all logo indices, bounding box +-0.1 x +-0.1 x +-0.05
             int sub0 = 16;
-            BitConverter.GetBytes(504).CopyTo(newBytes, sub0 + 32);
+            BitConverter.GetBytes(idata.Length / 4).CopyTo(newBytes, sub0 + 32);
             BitConverter.GetBytes(0).CopyTo(newBytes, sub0 + 36);
             BitConverter.GetBytes(-0.1f).CopyTo(newBytes, sub0 + 40);
             BitConverter.GetBytes(-0.1f).CopyTo(newBytes, sub0 + 44);
@@ -253,18 +214,11 @@ namespace Croc2Launcher
             BitConverter.GetBytes(0.1f).CopyTo(newBytes, sub0 + 56);
             BitConverter.GetBytes(0.05f).CopyTo(newBytes, sub0 + 60);
 
-            // Submeshes 1..numSub-1: index_count = 0, index_offset = 0 (draw 0 triangles, avoiding material errors)
+            // Other submeshes draw nothing
             for (int i = 1; i < numSub; i++)
             {
                 int subI = 16 + i * 84;
-                BitConverter.GetBytes(0).CopyTo(newBytes, subI + 32);
-                BitConverter.GetBytes(0).CopyTo(newBytes, subI + 36);
-                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 40);
-                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 44);
-                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 48);
-                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 52);
-                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 56);
-                BitConverter.GetBytes(0.0f).CopyTo(newBytes, subI + 60);
+                for (int b = 32; b < 64; b++) newBytes[subI + b] = 0;
             }
 
             int offset = headerSize;
@@ -272,10 +226,11 @@ namespace Croc2Launcher
             offset += 4;
             Array.Copy(vdata, 0, newBytes, offset, vdata.Length);
             offset += vdata.Length;
-
             BitConverter.GetBytes(idata.Length).CopyTo(newBytes, offset);
             offset += 4;
             Array.Copy(idata, 0, newBytes, offset, idata.Length);
+            offset += idata.Length;
+            Array.Copy(origBytes, trailerPos, newBytes, offset, trailerLen);
 
             return newBytes;
         }
@@ -292,24 +247,32 @@ namespace Croc2Launcher
 
                 foreach (string file in Directory.GetFiles(modelsDir, "*.zmod", SearchOption.AllDirectories))
                 {
-                    if (file.EndsWith(".vanilla", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (file.EndsWith("ap_logo.zmod", StringComparison.OrdinalIgnoreCase)) continue;
-
-                    if (IsTargetCollectable(file))
+                    string bak = file + ".vanilla";
+                    try
                     {
-                        string bak = file + ".vanilla";
+                        if (!IsTargetCollectable(file))
+                        {
+                            // Undo swaps made by older launcher versions, which matched the wrong files
+                            if (File.Exists(bak))
+                            {
+                                File.Copy(bak, file, true);
+                                File.Delete(bak);
+                            }
+                            continue;
+                        }
+
                         if (!File.Exists(bak))
                         {
                             File.Copy(file, bak, true);
                         }
 
-                        byte[] origBytes = File.ReadAllBytes(bak);
-                        byte[] patched = BuildArchipelagoLogoZmod(origBytes, vdata, idata);
+                        byte[] patched = BuildArchipelagoLogoZmod(File.ReadAllBytes(bak), vdata, idata);
                         if (patched != null)
                         {
                             File.WriteAllBytes(file, patched);
                         }
                     }
+                    catch { }
                 }
             }
             catch { }

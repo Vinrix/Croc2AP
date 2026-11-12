@@ -1053,49 +1053,25 @@ class TestCroc2Archipelago(unittest.TestCase):
         self.assertEqual(len(vdata), 3600, "Vertex data must be exactly 3600 bytes (150 vertices * 24 bytes)")
         self.assertEqual(len(idata), 2016, "Index data must be exactly 2016 bytes (504 uint32 indices)")
 
-        # Target classification checks matching GameDetector.IsTargetCollectable
-        def is_target(fname: str, size: int) -> bool:
-            if "_OBJ_" not in fname:
-                return False
-            gem_suffixes = ["_OBJ_011", "_OBJ_015", "_OBJ_016", "_OBJ_017", "_OBJ_018", "_OBJ_019"]
-            if any(fname.endswith(s) for s in gem_suffixes):
-                return False
-            scenery_suffixes = ["_OBJ_000", "_OBJ_001", "_OBJ_002", "_OBJ_003", "_OBJ_004", "_OBJ_005", "_OBJ_006", "_OBJ_008", "_OBJ_009", "_OBJ_014"]
-            if any(fname.endswith(s) for s in scenery_suffixes):
-                if fname.upper() != "EU_T0L1M007_OBJ_004":
-                    return False
-            if size > 700 * 1024:
-                return False
-            collectable_suffixes = ["_OBJ_007", "_OBJ_010", "_OBJ_012", "_OBJ_013", "_OBJ_020", "_OBJ_021", "_OBJ_025", "_OBJ_027"]
-            if any(fname.endswith(s) for s in collectable_suffixes) or fname.upper() == "EU_T0L1M007_OBJ_004":
-                return True
-            return False
+        # Target list comes straight from GameDetector.cs (an explicit allowlist of shared-library models).
+        # Model numbers are per-map indices, so per-map rules like "every *_OBJ_021" hit random scenery.
+        with open(os.path.join(ROOT_DIR, "src", "launcher", "GameDetector.cs"), "r", encoding="utf-8-sig") as f:
+            detector = f.read()
+        block = re.search(r"LogoTargetNames\s*=\s*\{(.*?)\};", detector, re.S)
+        self.assertIsNotNone(block, "GameDetector.cs must define the LogoTargetNames allowlist")
+        targets = set(re.findall(r'"(EU_[A-Z0-9_]+)"', block.group(1)))
 
-        # Verify gems are excluded
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_011", 50000), "White crystal must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_015", 50000), "Red crystal must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_016", 50000), "Blue crystal must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_017", 50000), "Green crystal must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_018", 50000), "Yellow crystal must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_019", 50000), "Pink/Purple crystal must NOT be replaced")
+        def is_target(fname: str) -> bool:
+            return fname.upper() in targets
 
-        # Verify scenery/terrain/infrastructure are excluded
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_000", 200000), "Croc model must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_006", 150000), "Pete's shop must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_009", 180000), "Village docks must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_014", 300000), "Village terrain must NOT be replaced")
-        self.assertFalse(is_target("EU_T1L1M001_OBJ_012", 5600000), "Large village buildings (>700KB) must NOT be replaced")
-
-        # Verify collectables and crates ARE targeted
-        self.assertTrue(is_target("EU_T1L1M001_OBJ_007", 85000), "Pete's store crate pickup (Binoculars) MUST be replaced")
-        self.assertTrue(is_target("EU_T0L1M005_OBJ_013", 120000), "Pete's store wooden crate MUST be replaced")
-        self.assertTrue(is_target("EU_T0L1M003_OBJ_012", 65000), "Standard smashable crate MUST be replaced")
-        self.assertTrue(is_target("EU_T0L1M007_OBJ_004", 75000), "Smashable crate OBJ_004 exception MUST be replaced")
-        self.assertTrue(is_target("EU_T1L1M001_OBJ_010", 90000), "Heart pot MUST be replaced")
-        self.assertTrue(is_target("EU_T1L1M001_OBJ_020", 95000), "Clockwork Gobbo MUST be replaced")
-        self.assertTrue(is_target("EU_T1L1M001_OBJ_021", 80000), "Key MUST be replaced")
-        self.assertTrue(is_target("EU_T1L1M001_OBJ_025", 95000), "Gobbo / Jelly MUST be replaced")
-        self.assertTrue(is_target("EU_T0L1M003_OBJ_027", 110000), "Crate OBJ_027 MUST be replaced")
+        self.assertTrue(is_target("EU_T0L1M003_OBJ_009"), "Shared Key model MUST be replaced")
+        self.assertTrue(is_target("EU_T0L1M003_OBJ_022"), "Shared Heart model MUST be replaced")
+        for gem in ("011", "015", "016", "017", "018", "019"):
+            self.assertFalse(is_target("EU_T0L1M003_OBJ_" + gem), "Crystal OBJ_%s must NOT be replaced" % gem)
+        # Same numbers in ordinary level maps are unrelated level props and must never be touched
+        for prop in ("EU_T1L2M001_OBJ_021", "EU_T1L1M001_OBJ_007", "EU_T1L1M004_OBJ_010", "EU_T2L7M001_OBJ_012"):
+            self.assertFalse(is_target(prop), prop + " is a per-map prop, not a collectable")
+        self.assertIn("trailerLen", detector, "Rebuilt ZMOD must keep the original 20-byte trailer")
 
         # Verify ZMOD rebuilding logic
         # Create a mock 2-submesh ZMOD
@@ -1148,6 +1124,43 @@ class TestCroc2Archipelago(unittest.TestCase):
         offset += 4 + v_size
         i_size = struct.unpack_from("<I", patched, offset)[0]
         self.assertEqual(i_size, 2016)
+
+
+    def test_goal_completion_detection(self):
+        """The client must report CLIENT_GOAL exactly when rules.py's completion_condition is met."""
+        from worlds.croc2.client_bridge import DANTE_FINAL_FIGHT_LOC, goal_reached
+
+        sd = {"goal": 0, "jigsaw_pieces_required": 4, "trophies_required": 12}
+        self.assertFalse(goal_reached(sd, [], set()))
+        self.assertTrue(goal_reached(sd, [], {DANTE_FINAL_FIGHT_LOC}))
+        self.assertFalse(goal_reached({}, [], {DANTE_FINAL_FIGHT_LOC}), "No slot data yet -> never report")
+
+        sd = {"goal": 1, "jigsaw_pieces_required": 3}
+        self.assertFalse(goal_reached(sd, [7200012, 7200013], set()))
+        self.assertTrue(goal_reached(sd, [7200012, 7200013, 7200016], set()))
+
+        sd = {"goal": 2, "trophies_required": 2}
+        self.assertFalse(goal_reached(sd, [7200017], set()))
+        self.assertTrue(goal_reached(sd, [7200017, 7200017], set()))
+
+        sd = {"goal": 3, "jigsaw_pieces_required": 1, "trophies_required": 1}
+        self.assertFalse(goal_reached(sd, [7200012, 7200017], set()))
+        self.assertTrue(goal_reached(sd, [7200012, 7200017], {DANTE_FINAL_FIGHT_LOC}))
+
+    def test_sailor_door_1_never_vehicle_or_vanilla(self):
+        """Sailor Village Door 1 is open from the start; a vehicle stage there softlocks without the license."""
+        import random
+        import types
+        from worlds.croc2.options import DoorShuffle
+        from worlds.croc2.regions import VEHICLE_STAGE_WADS, compute_door_pairing
+
+        for mode in (DoorShuffle.option_within_village, DoorShuffle.option_any_village):
+            opts = types.SimpleNamespace(door_shuffle=types.SimpleNamespace(value=mode))
+            for seed in range(300):
+                _, door_map = compute_door_pairing(random.Random(seed), opts)
+                self.assertNotIn(door_map["T1_D1"], VEHICLE_STAGE_WADS, "mode %d seed %d" % (mode, seed))
+                self.assertNotEqual(door_map["T1_D1"], "T1L2M001", "mode %d seed %d" % (mode, seed))
+                self.assertEqual(len(set(door_map.values())), 20, "door shuffle must stay a permutation")
 
 
 if __name__ == "__main__":

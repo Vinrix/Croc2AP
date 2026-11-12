@@ -242,6 +242,9 @@ struct ModState {
     bool config_enabled = true;
     bool forced_vanilla_cmdline = false;
     bool client_connected = false;
+    // Set once an Archipelago client (launcher / Croc2Client) configures a multiworld slot over the
+    // localhost bridge. While set, checks are only reported to the server, never granted locally.
+    bool multiworld_session = false;
     bool manual_override_disabled = false;
     bool in_active_save = false;
     bool save_locked_to_mod = false; // True when playing a save created with the mod enabled!

@@ -370,6 +370,16 @@ namespace Croc2Launcher
             await SendRawAsync(json);
         }
 
+        public const int ClientGoal = 30; // Archipelago ClientStatus.CLIENT_GOAL
+
+        public async Task SendStatusUpdateAsync(int status)
+        {
+            var dict = new Dictionary<string, object>();
+            dict["cmd"] = "StatusUpdate";
+            dict["status"] = status;
+            await SendRawAsync(MiniJson.Serialize(new List<object> { dict }));
+        }
+
         public async Task SendRawAsync(string json)
         {
             if (_ws != null && _ws.State == WebSocketState.Open)

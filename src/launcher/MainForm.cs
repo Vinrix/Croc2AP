@@ -89,6 +89,7 @@ namespace Croc2Launcher
         private readonly HashSet<long> _checkedLocations = new HashSet<long>();
         private Dictionary<string, object> _cachedSlotData = null;
         private bool _slotDataConfigured = false;
+        private bool _goalReported = false;
 
         public MainForm() : this(new string[0])
         {
@@ -928,6 +929,7 @@ namespace Croc2Launcher
             {
                 _cachedSlotData = slotData;
                 _slotDataConfigured = false;
+                _goalReported = false;
                 SafeInvoke(() =>
                 {
                     LogFormatted("[Archipelago] Room Joined successfully!", Color.LimeGreen);
@@ -943,9 +945,17 @@ namespace Croc2Launcher
             {
                 SafeInvoke(() =>
                 {
+                    // "index" is where this batch starts in the full received-items list. On every
+                    // (re)connect the server resends everything from index 0, so only append items we
+                    // don't already have; otherwise the queue doubles and every item is applied twice.
+                    int position = index;
                     foreach (var item in items)
                     {
-                        _receivedItemsQueue.Add(item);
+                        if (position >= _receivedItemsQueue.Count)
+                        {
+                            _receivedItemsQueue.Add(item);
+                        }
+                        position++;
                     }
                     _lblItemsCount.Text = "Items Received: " + _receivedItemsQueue.Count;
                 });
@@ -1493,7 +1503,43 @@ namespace Croc2Launcher
                     {
                         await _apClient.SendLocationChecksAsync(checksToSend);
                     }
+
+                    if (!_goalReported && _apClient.IsConnected && IsGoalReached())
+                    {
+                        _goalReported = true;
+                        await _apClient.SendStatusUpdateAsync(ApClient.ClientGoal);
+                        LogFormatted("🏁 Goal complete! Victory reported to the Archipelago server.", Color.Gold);
+                    }
                 }
+            }
+        }
+
+        // Mirrors the completion_condition in worlds/croc2/rules.py (IDs from data/items.json / locations.json).
+        private bool IsGoalReached()
+        {
+            if (_cachedSlotData == null) return false;
+            Func<string, int, int> slotInt = (key, fallback) =>
+            {
+                object v;
+                return _cachedSlotData.TryGetValue(key, out v) && v != null ? Convert.ToInt32(v) : fallback;
+            };
+            int goal = slotInt("goal", 0);
+            int jigsaws = 0, trophies = 0;
+            foreach (var item in _receivedItemsQueue)
+            {
+                if (item.ItemId >= 7200012 && item.ItemId <= 7200016) jigsaws++;
+                else if (item.ItemId == 7200017) trophies++;
+            }
+            bool dante = _checkedLocations.Contains(7210287);
+            bool hasJigsaws = jigsaws >= slotInt("jigsaw_pieces_required", 4);
+            bool hasTrophies = trophies >= slotInt("trophies_required", 16);
+            switch (goal)
+            {
+                case 0: return dante;
+                case 1: return hasJigsaws;
+                case 2: return hasTrophies;
+                case 3: return dante && hasJigsaws && hasTrophies;
+                default: return false;
             }
         }
 

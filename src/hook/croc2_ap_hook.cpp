@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <set>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -772,7 +773,7 @@ static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std:
         ",\"description\":\"" + json_escape(check_desc) + "\"}"
     );
 
-    const bool is_multiworld = g_state.conn.ap_server_connected;
+    const bool is_multiworld = g_state.conn.ap_server_connected || g_state.multiworld_session;
     if (g_state.conn.ap_server_connected) {
         send_ws_location_check_locked(location_id);
         g_state.add_log("Sent Check: " + check_desc + " (#" + std::to_string(location_id) + ")");
@@ -837,7 +838,7 @@ static bool claim_white_crystal_check_locked(int stage_idx, int crystal_num_1_to
         ",\"description\":\"" + json_escape(desc) + "\"}"
     );
 
-    const bool is_multiworld = g_state.conn.ap_server_connected;
+    const bool is_multiworld = g_state.conn.ap_server_connected || g_state.multiworld_session;
     if (g_state.conn.ap_server_connected) {
         send_ws_location_check_locked(location_id);
         g_state.add_log("Sent Check: " + desc + " (#" + std::to_string(location_id) + ")");
@@ -1239,7 +1240,7 @@ static void apply_ap_item_by_id_locked(int item_id,
         );
     }
 
-    // ID range mapped from worlds/croc2/data/items.json (7200001..7200156)
+    // ID range mapped from worlds/croc2/data/items.json (7200001..7200160)
     switch (item_id) {
         case 7200001: g_state.abilities.tail_whack = true; g_state.add_log("Unlocked Ability: Tail Whack!"); break;
         case 7200002: g_state.abilities.butt_stomp = true; g_state.add_log("Unlocked Ability: Butt Stomp!"); break;
@@ -1632,6 +1633,7 @@ static std::string handle_command_locked(const std::string& req) {
 
     if (cmd == "configure_session") {
         g_state.client_connected = true;
+        g_state.multiworld_session = true;
         g_state.colored_crystals_mode = extract_json_int(req, "colored_crystals_mode", 1);
         g_state.shuffle_white_crystals = extract_json_int(req, "shuffle_white_crystals", 3);
         g_state.lock_level_access = extract_json_int(req, "lock_level_access", 1) != 0;
@@ -1729,7 +1731,7 @@ static std::string handle_command_locked(const std::string& req) {
 
         // Known Croc 2 item IDs go through the single canonical ID table so the item is guaranteed to
         // reach both the mod state AND the live croc2.exe inventory wheel / HUD.
-        if (item_id >= 7200001 && item_id <= 7200156) {
+        if (item_id >= 7200001 && item_id <= 7200160) {
             int item_index = extract_json_int(req, "item_index", -1);
             if (item_index >= 0 && item_index < g_state.ap_items_applied) {
                 // Already applied to this save (bridge reconnect / re-sync) - don't grant twice!
@@ -2739,8 +2741,9 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
         g_exe_base + RVA_SAVE_DATA_TABLE + RVA_RANDO_SAVE_FOOTER_OFF
     );
 
-    // Title Screen / Main Menu (curr.tribe < 1 || curr.tribe > 5) or initial boot frames
-    const bool is_title_screen = (curr.tribe < 1 || curr.tribe > 5);
+    // Title Screen / Main Menu or initial boot frames. Tribe 0 alone is not enough: T0L1M003 is a real
+    // stage (Inca Door 5, "Burning Down the Forest") and must not wipe the randomizer save state.
+    const bool is_title_screen = (curr.tribe < 0 || curr.tribe > 5) || (curr.tribe == 0 && curr.level == 0);
     if (is_title_screen) {
         if (g_state.in_active_save || g_state.save_locked_to_mod) {
             g_state.in_active_save = false;
@@ -2820,10 +2823,62 @@ static MapCoords block_stage_load_locked(const MapCoords& door) {
     return g_last_loaded;
 }
 
+struct BossLocation { const char* wad; int location_id; const char* name; };
+static constexpr BossLocation kBossLocations[8] = {
+    {"T1B1M001", 7210070, "Defeat Soveena The Squid"},
+    {"T1B2M001", 7210071, "Defeat Cannon Boat Keith"},
+    {"T2B1M001", 7210142, "Defeat Flavio the Thermal Fish"},
+    {"T2B2M001", 7210143, "Defeat Lava Lamp Larry"},
+    {"T3B1M001", 7210214, "Defeat Venus Fly Von-Trappe"},
+    {"T3B2M001", 7210215, "Defeat The Village Masher"},
+    {"T4B1M001", 7210286, "Defeat Dante's Peak"},
+    {"T4B2M001", 7210287, "Defeat Dante's Final Fight"},
+};
+static std::set<int> g_reported_boss_locations; // per game session; the server ignores repeats anyway
+
+// The engine's per-map "completed" bit (same flag the hub doors use), keyed by the map's first sub-area.
+static bool map_clear_flag_set(const MapCoords& m) {
+    auto fn_get_save_idx = reinterpret_cast<FnGetStageSaveIndex>(g_exe_base + RVA_FN_CALC_SAVE_INDEX);
+    int32_t idx = fn_get_save_idx(m.tribe, m.level, m.submap, m.map_type);
+    if (idx < 0) return false;
+    return (reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE)[idx + 0x304] & 1) != 0;
+}
+
+// Called whenever Croc leaves a map. Reports Stage Clear for non-shuffled stages (shuffled ones are
+// reported by the hub-return path below) and boss defeats, which were previously never sent.
+static void report_completion_on_exit_locked(const MapCoords& left, const MapCoords& next) {
+    if (!g_state.is_randomizer_active() || left.tribe < 0) return;
+    const std::string wad = coords_to_wad(left);
+    if (wad.size() < 8 || coords_to_wad(next).compare(0, 4, wad, 0, 4) == 0) return; // still inside the same stage
+
+    if (!g_in_redirected_stage) {
+        int stage_i = find_stage_index_by_wad(wad);
+        MapCoords entry{};
+        if (stage_i >= 0 && wad_to_coords(kStageDoors[stage_i].vanilla_wad, entry) &&
+            wad.compare(0, 4, kStageDoors[stage_i].vanilla_wad, 0, 4) == 0 && map_clear_flag_set(entry)) {
+            claim_solo_check_locked(stage_i, 8, std::string(kStageDoors[stage_i].level_name) + " - Stage Clear");
+        }
+    }
+
+    for (const auto& boss : kBossLocations) {
+        MapCoords boss_coords{};
+        if (wad.compare(0, 4, boss.wad, 0, 4) != 0 || !wad_to_coords(boss.wad, boss_coords)) continue;
+        if (!map_clear_flag_set(boss_coords) || !g_reported_boss_locations.insert(boss.location_id).second) break;
+        g_state.pending_events_json.push_back(
+            "{\"event\":\"location_checked\",\"location_id\":" + std::to_string(boss.location_id) +
+            ",\"description\":\"" + json_escape(boss.name) + "\"}"
+        );
+        send_ws_location_check_locked(boss.location_id);
+        g_state.add_log(std::string("Boss Defeated: ") + boss.name);
+        break;
+    }
+}
+
 // Decides which map actually gets loaded. Called from Hooked_LoadMap with g_mutex held.
 static MapCoords resolve_map_load_locked(const MapCoords& req) {
     g_fix_spawn_this_load = false;
     inspect_and_sync_save_lifecycle_locked(req);
+    report_completion_on_exit_locked(g_last_loaded, req);
 
     if (!g_state.is_mod_enabled_toggle()) {
         g_in_redirected_stage = false;
@@ -2894,7 +2949,12 @@ static MapCoords resolve_map_load_locked(const MapCoords& req) {
     }
 
     if (g_in_redirected_stage && is_hub_coords(req)) {
-        // Leaving a shuffled stage: copy its completion flag onto the door Croc entered from
+        // Leaving a shuffled stage. The game sends Croc to the hub of the stage's own tribe, which is
+        // wrong for cross-village shuffles (e.g. an Inca stage behind a Sailor door would exit into a
+        // possibly-locked Inca Village). Always return to the hub Croc actually entered from.
+        MapCoords back = is_hub_coords(g_saved_hub) ? g_saved_hub : req;
+
+        // Copy the shuffled stage's completion flag onto the door Croc entered from
         auto fn_get_save_idx = reinterpret_cast<FnGetStageSaveIndex>(g_exe_base + RVA_FN_CALC_SAVE_INDEX);
         int32_t rand_idx = fn_get_save_idx(g_saved_rand_stage.tribe, g_saved_rand_stage.level,
                                            g_saved_rand_stage.submap, g_saved_rand_stage.map_type);
@@ -2911,6 +2971,8 @@ static MapCoords resolve_map_load_locked(const MapCoords& req) {
             }
         }
         g_fix_spawn_this_load = true; // place Croc at the hub door he originally entered
+        g_state.current_wad = coords_to_wad(back);
+        return back;
     }
 
     g_state.current_wad = req_wad;
@@ -3477,6 +3539,9 @@ static void trigger_collectable_pickup_check(const std::string& fallback_desc) {
             }
         }
     }
+
+    // In a multiworld every item comes from the server; never hand out local solo-seed items.
+    if (g_state.multiworld_session || g_state.conn.ap_server_connected) return;
 
     // If all in-stage checks claimed or in hub/village, grant randomized item
     static uint32_t s_pickup_counter = 0;
