@@ -65,7 +65,8 @@ struct MapCoords {
 static uintptr_t g_exe_base = 0;
 static bool g_hooks_installed = false;
 static bool g_in_redirected_stage = false;
-static bool g_transition_already_redirected = false;
+static bool g_pending_door_redirect = false;
+static std::string g_pending_target_wad;
 static MapCoords g_saved_hub{1, 1, 1, 0};
 static MapCoords g_saved_orig_door{1, 2, 1, 0};
 static MapCoords g_saved_rand_stage{1, 4, 1, 0};
@@ -2738,8 +2739,8 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
         g_exe_base + RVA_SAVE_DATA_TABLE + RVA_RANDO_SAVE_FOOTER_OFF
     );
 
-    // Title Screen / Main Menu (map_type == 3) or initial boot frames before a valid tribe (1..4) is loaded
-    const bool is_title_screen = (curr.map_type == 3 || curr.tribe < 1 || curr.tribe > 4);
+    // Title Screen / Main Menu (curr.tribe < 1 || curr.tribe > 5) or initial boot frames
+    const bool is_title_screen = (curr.tribe < 1 || curr.tribe > 5);
     if (is_title_screen) {
         if (g_state.in_active_save || g_state.save_locked_to_mod) {
             g_state.in_active_save = false;
@@ -2802,17 +2803,14 @@ static bool handle_map_transition_redirect() {
     const bool mod_on = g_state.is_mod_enabled_toggle();
 
     // Check if leaving a Village Hub (level == 1, map_type == 0, submap 1..3) into a Stage
-    const bool from_hub = (prev->tribe >= 1 && prev->tribe <= 4 &&
-                           prev->level == 1 && prev->map_type == 0 &&
-                           prev->submap >= 1 && prev->submap <= 3);
-    const bool to_stage = ((curr->map_type == 0 && curr->level >= 2) ||
-                           curr->map_type == 1 || curr->map_type == 2);
-    const bool to_hub   = (curr->tribe >= 1 && curr->tribe <= 4 &&
-                           curr->level == 1 && curr->map_type == 0 &&
-                           curr->submap >= 1 && curr->submap <= 3);
+    const bool from_hub = (prev->tribe >= 1 && prev->tribe <= 4 && prev->level == 1);
+    const bool to_stage = (curr->tribe >= 1 && curr->tribe <= 4 && curr->level >= 2);
+    const bool to_hub   = (curr->tribe >= 1 && curr->tribe <= 4 && curr->level == 1);
 
     if (!mod_on) {
         g_in_redirected_stage = false;
+        g_pending_door_redirect = false;
+        g_pending_target_wad.clear();
         g_state.current_wad = coords_to_wad(*curr);
         return true;
     }
@@ -2870,28 +2868,28 @@ static bool handle_map_transition_redirect() {
         }
 
         if (it != g_state.door_overrides.end() && !it->second.empty()) {
-            MapCoords target_coords{};
-            if (wad_to_coords(it->second, target_coords)) {
-                g_saved_hub = *prev;
-                g_saved_orig_door = *curr;
-                g_saved_rand_stage = target_coords;
-                g_in_redirected_stage = true;
+            // Queue pending redirect for Hooked_LoadMap without prematurely mutating *curr
+            // so croc2.exe's native OnDoorTransition (0x14002BA00) authentic door logic executes cleanly.
+            g_pending_door_redirect = true;
+            g_pending_target_wad = dest_wad;
+            g_saved_hub = *prev;
+            g_saved_orig_door = *curr;
 
-                *curr = target_coords;
-                g_state.current_wad = it->second;
-                std::string orig_name = (orig_idx >= 0) ? kStageDoors[orig_idx].level_name : orig_wad;
-                std::string target_name = (dest_idx >= 0) ? kStageDoors[dest_idx].level_name : it->second;
-                g_state.last_door_redirect_desc =
-                    orig_name + " -> " + target_name + " (Seed #" + g_state.current_seed_hex + ")";
-                g_state.add_log("Door Shuffle: " + orig_name + " -> " + target_name);
-                g_state.pending_events_json.push_back(
-                    "{\"event\":\"door_entered\",\"orig_name\":\"" + json_escape(orig_name) +
-                    "\",\"target_name\":\"" + json_escape(target_name) +
-                    "\",\"target_wad\":\"" + json_escape(dest_wad) + "\"}"
-                );
-                return true;
-            }
+            std::string orig_name = (orig_idx >= 0) ? kStageDoors[orig_idx].level_name : orig_wad;
+            std::string target_name = (dest_idx >= 0) ? kStageDoors[dest_idx].level_name : it->second;
+            g_state.last_door_redirect_desc =
+                orig_name + " -> " + target_name + " (Seed #" + g_state.current_seed_hex + ")";
+            g_state.add_log("Door Shuffle: " + orig_name + " -> " + target_name);
+            g_state.pending_events_json.push_back(
+                "{\"event\":\"door_entered\",\"orig_name\":\"" + json_escape(orig_name) +
+                "\",\"target_name\":\"" + json_escape(target_name) +
+                "\",\"target_wad\":\"" + json_escape(dest_wad) + "\"}"
+            );
+            return true;
         }
+
+        g_pending_door_redirect = false;
+        g_pending_target_wad.clear();
         g_in_redirected_stage = false;
         g_state.current_wad = orig_wad;
         return true;
@@ -2916,16 +2914,10 @@ static bool handle_map_transition_redirect() {
                 }
             }
         }
-
-        // Return Croc to the Village Hub right outside the door he originally entered
-        *curr = g_saved_hub;
-        *prev = g_saved_orig_door;
-        g_in_redirected_stage = false;
-        g_state.current_wad = coords_to_wad(*curr);
-        sync_state_to_save_footer_locked();
-        g_state.add_log("Returned from shuffled stage to Hub (" + g_state.current_wad + ")");
         return true;
     } else {
+        g_pending_door_redirect = false;
+        g_pending_target_wad.clear();
         g_state.current_wad = coords_to_wad(*curr);
         return true;
     }
@@ -2935,13 +2927,10 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
     if (!g_exe_base || !map_header) return;
 
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_state.is_mod_enabled_toggle()) return;
-
-    auto* prev = reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
-    if (prev->tribe == 0) return;
 
     uintptr_t wad_buf = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_WAD_BUFFER_BASE);
-    if (!wad_buf) return;
+    uintptr_t wad_limit = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_WAD_BUFFER_LIMIT);
+    if (!wad_buf || !wad_limit || wad_buf >= wad_limit) return;
 
     uintptr_t hdr = reinterpret_cast<uintptr_t>(map_header);
     uint16_t trig_count = *reinterpret_cast<uint16_t*>(hdr + 0x18);
@@ -2949,75 +2938,126 @@ static void fixup_spawn_trigger_after_map_load(void* map_header) {
     if (trig_count == 0) return;
 
     uintptr_t trig_base = wad_buf + trig_offset;
+    if (trig_base < wad_buf || trig_base >= wad_limit) return;
 
-    // 1. Check if any door trigger already matches *prev (as 0x1400628CD expects)
-    for (uint16_t i = 0; i < trig_count; ++i) {
-        uintptr_t t = trig_base + static_cast<uintptr_t>(i) * 0x54;
-        uint8_t flags = *reinterpret_cast<uint8_t*>(t + 0x1E);
-        if ((flags & 4) == 0) continue;
+    auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+    auto* prev = reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
 
-        int32_t dt = *reinterpret_cast<int32_t*>(t + 0x0C) & 0xFFF;
-        int32_t dl = *reinterpret_cast<int32_t*>(t + 0x10) & 0xFFF;
-        int32_t ds = *reinterpret_cast<int32_t*>(t + 0x14) & 0xFFF;
-        int32_t dm = *reinterpret_cast<int32_t*>(t + 0x18);
+    const bool is_hub = (curr->tribe >= 1 && curr->tribe <= 4 && curr->level == 1);
 
-        if (dt == prev->tribe && dl == prev->level && ds == prev->submap && dm == prev->map_type) {
-            return; // Exact match already exists!
+    uintptr_t exact_match = 0;
+    uintptr_t hub_door = 0;
+    uintptr_t flag8_trig = 0;
+    uintptr_t any_door = 0;
+
+    // When returning from a shuffled stage to the Hub, locate the entrance door Croc originally entered
+    if (is_hub && g_in_redirected_stage) {
+        for (uint16_t i = 0; i < trig_count; ++i) {
+            uintptr_t t = trig_base + static_cast<uintptr_t>(i) * 0x54;
+            if (t + 0x54 > wad_limit) break;
+
+            uint8_t flags = *reinterpret_cast<uint8_t*>(t + 0x1E);
+            if ((flags & 4) == 0) continue;
+
+            int32_t dt = *reinterpret_cast<int32_t*>(t + 0x0C) & 0xFFF;
+            int32_t dl = *reinterpret_cast<int32_t*>(t + 0x10) & 0xFFF;
+            int32_t ds = *reinterpret_cast<int32_t*>(t + 0x14) & 0xFFF;
+            int32_t dm = *reinterpret_cast<int32_t*>(t + 0x18);
+
+            if (dt == g_saved_orig_door.tribe && dl == g_saved_orig_door.level &&
+                ds == g_saved_orig_door.submap && dm == g_saved_orig_door.map_type) {
+                exact_match = t;
+                break;
+            }
+        }
+        g_in_redirected_stage = false;
+        sync_state_to_save_footer_locked();
+        g_state.add_log("Returned from shuffled stage to Hub (" + g_state.current_wad + ")");
+    }
+
+    if (!exact_match) {
+        for (uint16_t i = 0; i < trig_count; ++i) {
+            uintptr_t t = trig_base + static_cast<uintptr_t>(i) * 0x54;
+            if (t + 0x54 > wad_limit) break;
+
+            uint8_t flags = *reinterpret_cast<uint8_t*>(t + 0x1E);
+            int32_t dt = *reinterpret_cast<int32_t*>(t + 0x0C) & 0xFFF;
+            int32_t dl = *reinterpret_cast<int32_t*>(t + 0x10) & 0xFFF;
+            int32_t ds = *reinterpret_cast<int32_t*>(t + 0x14) & 0xFFF;
+            int32_t dm = *reinterpret_cast<int32_t*>(t + 0x18);
+
+            if (prev->tribe != 0 && dt == prev->tribe && dl == prev->level && ds == prev->submap && dm == prev->map_type) {
+                exact_match = t;
+                break;
+            }
+
+            if ((flags & 8) != 0 && !flag8_trig) {
+                flag8_trig = t;
+            }
+
+            if ((flags & 4) != 0) {
+                if (!any_door) any_door = t;
+                if (dl == 1) { // Points back to Hub
+                    hub_door = t;
+                }
+            }
         }
     }
 
-    // 2. No trigger matched *prev (because we redirected across doors/villages).
-    // Find the stage's entrance door trigger (pointing back to a Hub: level == 1, map_type == 0)
-    // or fallback to the first door trigger with (flags & 4) != 0, and align *prev to it!
-    uintptr_t best_trig = 0;
-    for (uint16_t i = 0; i < trig_count; ++i) {
-        uintptr_t t = trig_base + static_cast<uintptr_t>(i) * 0x54;
-        uint8_t flags = *reinterpret_cast<uint8_t*>(t + 0x1E);
-        if ((flags & 4) == 0) continue;
+    uintptr_t best_trig = exact_match ? exact_match :
+                          (hub_door ? hub_door :
+                          (flag8_trig ? flag8_trig :
+                          (any_door ? any_door : trig_base)));
 
-        if (!best_trig) best_trig = t;
-        int32_t dl = *reinterpret_cast<int32_t*>(t + 0x10) & 0xFFF;
-        int32_t dm = *reinterpret_cast<int32_t*>(t + 0x18);
-        if (dl == 1 && dm == 0) {
-            best_trig = t;
-            break;
+    // Prevent fatal assertion at 0x14005c9e4 ("Offset is outside of the memory range.")
+    uint32_t link_off = *reinterpret_cast<uint32_t*>(best_trig + 0x24);
+    if (link_off != 0) {
+        uintptr_t target_addr = wad_buf + link_off;
+        if (target_addr >= wad_limit) {
+            *reinterpret_cast<uint32_t*>(best_trig + 0x24) = 0;
         }
     }
 
-    if (best_trig) {
-        prev->tribe    = *reinterpret_cast<int32_t*>(best_trig + 0x0C) & 0xFFF;
-        prev->level    = *reinterpret_cast<int32_t*>(best_trig + 0x10) & 0xFFF;
-        prev->submap   = *reinterpret_cast<int32_t*>(best_trig + 0x14) & 0xFFF;
-        prev->map_type = *reinterpret_cast<int32_t*>(best_trig + 0x18);
-    }
+    // Explicitly set active entrance/spawn trigger in engine memory
+    *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_ACTIVE_SPAWN_TRIGGER) = best_trig;
+
+    // Align *prev to best_trig's destination coordinates so 0x1400628cd matches Croc perfectly
+    prev->tribe    = *reinterpret_cast<int32_t*>(best_trig + 0x0C) & 0xFFF;
+    prev->level    = *reinterpret_cast<int32_t*>(best_trig + 0x10) & 0xFFF;
+    prev->submap   = *reinterpret_cast<int32_t*>(best_trig + 0x14) & 0xFFF;
+    prev->map_type = *reinterpret_cast<int32_t*>(best_trig + 0x18);
 }
 
 static void __fastcall Hooked_OnDoorTransition() {
     if (!handle_map_transition_redirect()) {
-        g_transition_already_redirected = true;
         return; // Locked door! Do not initiate transition
     }
-    g_transition_already_redirected = true;
     g_orig_on_door_transition();
 }
 
 static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t submap, int32_t map_type) {
-    if (!g_transition_already_redirected) {
-        if (!handle_map_transition_redirect()) {
-            if (g_exe_base) {
-                auto* prev = reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
-                return g_orig_load_map(prev->tribe, prev->level, prev->submap, prev->map_type);
-            }
-        }
-    }
-    g_transition_already_redirected = false;
+    if (g_exe_base && g_pending_door_redirect && !g_pending_target_wad.empty()) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_pending_door_redirect = false;
+        MapCoords target_coords{};
+        if (wad_to_coords(g_pending_target_wad, target_coords)) {
+            int32_t load_type = (map_type == 3) ? 3 : target_coords.map_type;
+            tribe = target_coords.tribe;
+            level = target_coords.level;
+            submap = target_coords.submap;
+            map_type = load_type;
 
-    if (g_exe_base) {
-        auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
-        tribe    = curr->tribe;
-        level    = curr->level;
-        submap   = curr->submap;
-        map_type = curr->map_type;
+            auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+            curr->tribe = tribe;
+            curr->level = level;
+            curr->submap = submap;
+            curr->map_type = map_type;
+
+            g_in_redirected_stage = true;
+            g_saved_rand_stage = target_coords;
+            g_saved_rand_stage.map_type = map_type;
+            g_state.current_wad = g_pending_target_wad;
+        }
     }
 
     void* map_header = g_orig_load_map(tribe, level, submap, map_type);

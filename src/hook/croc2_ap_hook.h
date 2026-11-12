@@ -84,6 +84,7 @@ constexpr uintptr_t RVA_PAUSE_MENU_ACTIVE        = 0x00B8E018;
 constexpr uintptr_t RVA_COLORED_CRYSTAL_PTR      = 0x00B8E028; // Points to int32_t (0x1000 per crystal, 0x5000 = all 5)
 constexpr uintptr_t RVA_TRANSITION_STATE         = 0x00B90D30; // 7 = door transition triggered
 constexpr uintptr_t RVA_CURRENT_MAP_HEADER       = 0x00B90D70; // Loaded map header pointer
+constexpr uintptr_t RVA_ACTIVE_SPAWN_TRIGGER      = 0x00B90D78; // Pointer to active spawn/entrance trigger
 constexpr uintptr_t RVA_CLEAN_SAVE_TEMPLATE      = 0x00B90D88; // 0x17A30-byte clean save template copied on New Game
 constexpr uintptr_t RVA_SAVE_DATA_TABLE          = 0x00BA9880; // 0x17A30-byte active save table; completion bit at + idx + 0x304
 constexpr uintptr_t RVA_RANDO_SAVE_FOOTER_OFF    = 0x00017800; // Embedded randomizer seed/state footer inside save table
@@ -125,6 +126,7 @@ constexpr uintptr_t RVA_PLAYER_PTR               = 0x00BC7CE8; // Pointer to act
 constexpr uintptr_t RVA_MAP_FILENAME_STR         = 0x00BC8710;
 constexpr uintptr_t RVA_CROC_STRAT_DEF           = 0x00BD1540; // Pointer to Croc's on-foot Strat definition
 constexpr uintptr_t RVA_WAD_BUFFER_BASE          = 0x00BD25C0;
+constexpr uintptr_t RVA_WAD_BUFFER_LIMIT         = 0x00BD25C8;
 
 // Colored Crystal bitflags per level (all 5 = 0x1F -> activates Golden Gobbo)
 constexpr uint8_t CRYSTAL_RED    = 1 << 0; // 0x01
