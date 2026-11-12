@@ -3806,8 +3806,9 @@ static void __fastcall Hooked_PickupHeartPot(void* strat) {
 // Opcode 248 (0xF8): PickupClockwork
 static void __fastcall Hooked_PickupClockwork(void* strat) {
     if (handle_pickup(Pickup::Clockwork, "Clockwork Gobbo Pickup")) {
-        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_CLOCKWORK);
-        if (fn_sfx) fn_sfx();
+        // Same HUD feedback the game's own handler (0x140066010) shows. Do NOT call its tail target
+        // 0x140260F90: that is an achievement check, not a sound.
+        reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_CLOCKWORK)();
         return;
     }
     if (g_orig_pickup_clockwork) g_orig_pickup_clockwork(strat);
@@ -3816,8 +3817,9 @@ static void __fastcall Hooked_PickupClockwork(void* strat) {
 // Opcode 249 (0xF9): PickupKey
 static void __fastcall Hooked_PickupKey(void* strat) {
     if (handle_pickup(Pickup::Key, "Key Pickup")) {
-        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_KEY);
-        if (fn_sfx) fn_sfx();
+        // Same HUD feedback the game's own handler (0x140065F90) shows. Its tail target 0x140260DE0
+        // awards the "firstGoldenGobbo" achievement, so it must not be called here.
+        reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_KEY)();
         return;
     }
     if (g_orig_pickup_key) g_orig_pickup_key(strat);
@@ -3826,8 +3828,7 @@ static void __fastcall Hooked_PickupKey(void* strat) {
 // Opcode 250 (0xFA): PickupGobbo
 static void __fastcall Hooked_PickupGobbo(void* strat) {
     if (handle_pickup(Pickup::Gobbo, "Gobbo Pickup")) {
-        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_GOBBO);
-        if (fn_sfx) fn_sfx();
+        // The game's own handler only tail-calls 0x140041520, which is an empty function: no feedback.
         return;
     }
     if (g_orig_pickup_gobbo) g_orig_pickup_gobbo(strat);
@@ -3836,8 +3837,8 @@ static void __fastcall Hooked_PickupGobbo(void* strat) {
 // Opcode 270 (0x10E): PickupBinoculars (used by Sailor Village crate at 0x17736C!)
 static void __fastcall Hooked_PickupBinoculars(void* strat) {
     if (handle_pickup(Pickup::Binoculars, "Magic Eye-Zoomers (Binoculars) Pickup")) {
-        auto fn_sfx = reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_PLAY_SFX_BINOCULARS);
-        if (fn_sfx) fn_sfx();
+        // The game's own handler (0x140065FE0) only jumps to 0x140261060, an achievement check, so there
+        // is no native popup to show here.
         return;
     }
     if (g_orig_pickup_binoculars) g_orig_pickup_binoculars(strat);

@@ -77,10 +77,13 @@ constexpr uintptr_t RVA_STRAT_VM_KEY_SLOT        = 0x007F9BE8; // Opcode 249 (0x
 constexpr uintptr_t RVA_STRAT_VM_GOBBO_SLOT      = 0x007F9BF0; // Opcode 250 (0xFA) -> 0x140065FD0
 constexpr uintptr_t RVA_STRAT_VM_BINOCULARS_SLOT = 0x007F9C90; // Opcode 270 (0x10E) -> 0x140065FE0
 
-constexpr uintptr_t RVA_FN_PLAY_SFX_KEY          = 0x00260DE0;
-constexpr uintptr_t RVA_FN_PLAY_SFX_CLOCKWORK    = 0x00260F90;
-constexpr uintptr_t RVA_FN_PLAY_SFX_BINOCULARS   = 0x00261060;
-constexpr uintptr_t RVA_FN_PLAY_SFX_INV_ITEM     = 0x00260DD0;
+// NOT sound effects: these are the AchievementManager checks the game's pickup handlers tail-call
+// (each builds an achievement ID and calls RVA_FN_SET_ACHIEVEMENT). Calling them unlocks real Steam
+// achievements, so the mod must never use them as pickup feedback. Kept only as documentation.
+constexpr uintptr_t RVA_FN_ACH_CHECK_KEY         = 0x00260DE0; // was RVA_FN_PLAY_SFX_KEY; sets "firstGoldenGobbo"
+constexpr uintptr_t RVA_FN_ACH_CHECK_CLOCKWORK   = 0x00260F90; // was RVA_FN_PLAY_SFX_CLOCKWORK
+constexpr uintptr_t RVA_FN_ACH_CHECK_BINOCULARS  = 0x00261060; // was RVA_FN_PLAY_SFX_BINOCULARS
+constexpr uintptr_t RVA_FN_ACH_CHECK_INV_ITEM    = 0x00260DD0; // was RVA_FN_PLAY_SFX_INV_ITEM; opcode 172 tail-jumps here with the item type
 
 // Exact croc2.exe Global State RVAs
 constexpr uintptr_t RVA_ACTIVE_SAVE_SLOT         = 0x00B4D5A8; // int32_t save slot index (0..4)

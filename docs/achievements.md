@@ -37,10 +37,12 @@ has UI strings); they come from Steam. Look up the conditions for each before wr
 - Both have the same 18-byte prologue (`55 56 57 48 81 EC 40 01 00 00 48 8D AC 24 80 00 00 00`), with
   no RIP-relative instructions, so they are detoured like the other inline hooks
   (`Hooked_SetAchievement` / `Hooked_IncrementAchievement` in `croc2_ap_hook.cpp`).
-- Gotcha: `0x140260DE0`, labelled `RVA_FN_PLAY_SFX_KEY` in the header, and `0x140260DD0`
-  (`RVA_FN_PLAY_SFX_INV_ITEM`) are **not** sound functions. They are the game's "check inventory
-  achievements" routines (opcode 172 tail-jumps into `0x260DD0` with the item type). Calling them for
-  sound effects can unlock real Steam achievements as a side effect.
+- `0x140260DE0`, `0x140260F90`, `0x140261060` and `0x140260DD0` were labelled as sound-effect functions
+  (`RVA_FN_PLAY_SFX_*`). They are the game's achievement checks that its pickup handlers tail-call
+  (`0x260DE0` sets `firstGoldenGobbo`, for example). The mod called them as "sounds" when it swallowed
+  key, clockwork and binocular pickups, which could unlock real Steam achievements. Fixed in this
+  branch: they're renamed `RVA_FN_ACH_CHECK_*` (documentation only, never called), and the pickup hooks
+  use the game's real HUD popups (`0x41530` key, `0x414F0` clockwork).
 
 ## Open questions for the test log
 
