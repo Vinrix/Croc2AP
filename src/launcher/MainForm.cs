@@ -210,7 +210,7 @@ namespace Croc2Launcher
 
                 Log("Exported Archipelago YAML: " + yamlFilePath, Color.LimeGreen);
                 _lblExportStatus.Text = "Saved: " + yamlFilePath;
-                _lblExportStatus.ForeColor = Color.DarkGreen;
+                _lblExportStatus.ForeColor = StatusOk;
 
                 MessageBox.Show(
                     "Successfully exported Archipelago player configuration!\n\n" +
@@ -304,7 +304,7 @@ namespace Croc2Launcher
                 {
                     bool isConn = _apClient.IsConnected;
                     _lblStatusAp.Text = "Archipelago: " + status;
-                    _lblStatusAp.ForeColor = isConn ? Color.DarkGreen : Color.DarkRed;
+                    _lblStatusAp.ForeColor = isConn ? StatusOk : StatusBad;
                     _btnDisconnect.Enabled = isConn || _hookClient.IsConnected;
                     _btnSyncItems.Enabled = isConn && _hookClient.IsConnected;
                 });
@@ -419,6 +419,7 @@ namespace Croc2Launcher
             if (_chkAutoCheckUpdates != null) _chkAutoCheckUpdates.Checked = _settings.AutoCheckUpdates;
 
             UpdateDetectedPaths();
+            InitTheme();
         }
 
         private void SaveSettings()
@@ -564,18 +565,18 @@ namespace Croc2Launcher
                 if (_paths.HasHookDll)
                 {
                     _lblDetectedStatus.Text = "✓ Ready: croc2.exe & version.dll found in " + _paths.BaseDir;
-                    _lblDetectedStatus.ForeColor = Color.DarkGreen;
+                    _lblDetectedStatus.ForeColor = StatusOk;
                 }
                 else
                 {
                     _lblDetectedStatus.Text = "⚠ Found croc2.exe, but version.dll (mod hook) is missing. Vanilla mode only.";
-                    _lblDetectedStatus.ForeColor = Color.DarkOrange;
+                    _lblDetectedStatus.ForeColor = StatusWarn;
                 }
             }
             else
             {
                 _lblDetectedStatus.Text = "✗ croc2.exe not found in this folder. Click 'Browse...' to locate it.";
-                _lblDetectedStatus.ForeColor = Color.DarkRed;
+                _lblDetectedStatus.ForeColor = StatusBad;
             }
         }
 
@@ -738,9 +739,9 @@ namespace Croc2Launcher
             _btnDisconnect.Enabled = false;
             _btnSyncItems.Enabled = false;
             _lblStatusAp.Text = "Archipelago: Disconnected";
-            _lblStatusAp.ForeColor = Color.DarkRed;
+            _lblStatusAp.ForeColor = StatusBad;
             _lblStatusHook.Text = "Mod link: off";
-            _lblStatusHook.ForeColor = Color.DarkRed;
+            _lblStatusHook.ForeColor = StatusBad;
             LogFormatted("Disconnected from Archipelago.", Color.Orange);
         }
 
@@ -768,13 +769,13 @@ namespace Croc2Launcher
         {
             bool gameRunning = GameDetector.FindRunningGame() != null;
             _lblStatusGame.Text = gameRunning ? "Game: running" : "Game: not running";
-            _lblStatusGame.ForeColor = gameRunning ? Color.DarkGreen : Color.DarkRed;
+            _lblStatusGame.ForeColor = gameRunning ? StatusOk : StatusBad;
 
             if (gameRunning && !_hookClient.IsConnected)
             {
                 bool connected = await _hookClient.ConnectAsync();
                 _lblStatusHook.Text = connected ? "Mod link: connected" : "Mod link: waiting for game…";
-                _lblStatusHook.ForeColor = connected ? Color.DarkGreen : Color.DarkGoldenrod;
+                _lblStatusHook.ForeColor = connected ? StatusOk : StatusWarn;
                 if (connected)
                 {
                     LogFormatted("[Hook] Connected to Croc 2 In-Game Bridge on port 43825!", Color.LimeGreen);

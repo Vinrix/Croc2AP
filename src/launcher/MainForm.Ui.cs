@@ -10,16 +10,60 @@ namespace Croc2Launcher
     // name, so the logic is unchanged.
     public partial class MainForm
     {
-        // ---- palette ----
-        private static readonly Color CAccent = Color.FromArgb(31, 122, 80);
-        private static readonly Color CAccentHover = Color.FromArgb(24, 100, 65);
-        private static readonly Color CAccentSoft = Color.FromArgb(232, 244, 237);
-        private static readonly Color CText = Color.FromArgb(28, 31, 35);
-        private static readonly Color CMuted = Color.FromArgb(100, 108, 118);
-        private static readonly Color CBorder = Color.FromArgb(222, 225, 230);
-        private static readonly Color CRail = Color.FromArgb(246, 247, 249);
-        private static readonly Color CWarnSoft = Color.FromArgb(253, 243, 224);
-        private static readonly Color CBadSoft = Color.FromArgb(252, 233, 233);
+        // ---- palette (switched by SetPalette; custom controls read these at paint time) ----
+        private static Color CAccent, CAccentHover, CAccentSoft, CAccentText, CText, CMuted, CBorder, CRail,
+                             CPage, CInput, CToggleOff, CWarnSoft, CBadSoft;
+        // Status colours, also used by the launcher logic in MainForm.cs
+        private static Color StatusOk, StatusBad, StatusWarn;
+        private static bool _darkTheme;
+
+        static MainForm()
+        {
+            SetPalette(false);
+        }
+
+        private static void SetPalette(bool dark)
+        {
+            _darkTheme = dark;
+            if (!dark)
+            {
+                CAccent = Color.FromArgb(31, 122, 80);
+                CAccentHover = Color.FromArgb(24, 100, 65);
+                CAccentSoft = Color.FromArgb(232, 244, 237);
+                CAccentText = Color.FromArgb(31, 122, 80);
+                CText = Color.FromArgb(28, 31, 35);
+                CMuted = Color.FromArgb(100, 108, 118);
+                CBorder = Color.FromArgb(222, 225, 230);
+                CRail = Color.FromArgb(246, 247, 249);
+                CPage = Color.White;
+                CInput = Color.White;
+                CToggleOff = Color.FromArgb(205, 209, 214);
+                CWarnSoft = Color.FromArgb(253, 243, 224);
+                CBadSoft = Color.FromArgb(252, 233, 233);
+                StatusOk = Color.FromArgb(22, 120, 60);
+                StatusBad = Color.FromArgb(180, 35, 35);
+                StatusWarn = Color.FromArgb(166, 92, 0);
+            }
+            else
+            {
+                CAccent = Color.FromArgb(38, 140, 92);
+                CAccentHover = Color.FromArgb(48, 160, 106);
+                CAccentSoft = Color.FromArgb(27, 50, 39);
+                CAccentText = Color.FromArgb(96, 200, 142);
+                CText = Color.FromArgb(230, 232, 235);
+                CMuted = Color.FromArgb(150, 157, 166);
+                CBorder = Color.FromArgb(58, 62, 68);
+                CRail = Color.FromArgb(30, 32, 36);
+                CPage = Color.FromArgb(22, 24, 27);
+                CInput = Color.FromArgb(34, 37, 41);
+                CToggleOff = Color.FromArgb(72, 77, 84);
+                CWarnSoft = Color.FromArgb(58, 45, 22);
+                CBadSoft = Color.FromArgb(62, 30, 30);
+                StatusOk = Color.FromArgb(96, 200, 130);
+                StatusBad = Color.FromArgb(240, 112, 112);
+                StatusWarn = Color.FromArgb(236, 172, 82);
+            }
+        }
 
         private const string IconFont = "Segoe MDL2 Assets";
         private const int ContentLeft = 36;
@@ -46,6 +90,9 @@ namespace Croc2Launcher
         private Label _lblSoloSummary;
         private Panel _gameStatusCard;
         private Label _lblSettingsSub;
+        private Panel _rail;
+        private ThemeSwitch _themeSwitch;
+        private static readonly string[] ThemeValues = { "light", "dark", "system" };
 
         private static readonly string[] PresetNames = { "Relaxed", "Standard", "Chaos" };
 
@@ -99,7 +146,8 @@ namespace Croc2Launcher
 
         private void BuildRail()
         {
-            var rail = new Panel { Location = new Point(0, 0), Size = new Size(200, 660), BackColor = CRail };
+            var rail = new Panel { Location = new Point(0, 0), Size = new Size(200, 660), BackColor = CRail, Tag = "rail" };
+            _rail = rail;
             rail.Paint += (s, e) => e.Graphics.DrawLine(new Pen(CBorder), rail.Width - 1, 0, rail.Width - 1, rail.Height);
             Controls.Add(rail);
 
@@ -129,6 +177,10 @@ namespace Croc2Launcher
                 _railItems[i] = item;
                 rail.Controls.Add(item);
             }
+
+            _themeSwitch = new ThemeSwitch(new[] { "Light", "Dark", "System" }) { Location = new Point(18, 536), Size = new Size(164, 30) };
+            _themeSwitch.Picked += (s, e) => SetThemeChoice(ThemeValues[_themeSwitch.SelectedIndex]);
+            rail.Controls.Add(_themeSwitch);
 
             var about = LinkButton("About and updates");
             about.Location = new Point(18, 580);
@@ -228,7 +280,8 @@ namespace Croc2Launcher
                 Size = new Size(ContentWidth - 32, 40),
                 BackColor = Color.Transparent,
                 TextAlign = ContentAlignment.MiddleLeft,
-                UseMnemonic = false
+                UseMnemonic = false,
+                Tag = "status"
             };
             _gameStatusCard.Controls.Add(_lblDetectedStatus);
             page.Controls.Add(_gameStatusCard);
@@ -244,7 +297,7 @@ namespace Croc2Launcher
             if (_gameStatusCard == null || _lblDetectedStatus == null) return;
             Color c = _lblDetectedStatus.ForeColor;
             var rp = (RoundedPanel)_gameStatusCard;
-            rp.FillColor = c == Color.DarkGreen ? CAccentSoft : c == Color.DarkOrange ? CWarnSoft : CBadSoft;
+            rp.FillColor = c == StatusOk ? CAccentSoft : c == StatusWarn ? CWarnSoft : CBadSoft;
             rp.BorderColor = rp.FillColor;
             rp.Invalidate();
         }
@@ -361,7 +414,7 @@ namespace Croc2Launcher
                 t.CheckedChanged += changed;
 
             // Status line for YAML export (shown under the footer buttons' row, inside the page)
-            _lblExportStatus = new Label { ForeColor = CMuted, Location = new Point(ContentLeft + 360, 104), Size = new Size(ContentWidth - 360, 20), TextAlign = ContentAlignment.MiddleRight };
+            _lblExportStatus = new Label { Tag = "status", ForeColor = CMuted, Location = new Point(ContentLeft + 360, 104), Size = new Size(ContentWidth - 360, 20), TextAlign = ContentAlignment.MiddleRight };
             page.Controls.Add(_lblExportStatus);
             _btnOpenPlayersFolder = new Button { Visible = false };
             _btnOpenPlayersFolder.Click += (s, e) => OpenPlayersFolder();
@@ -580,8 +633,24 @@ namespace Croc2Launcher
 
         private ComboBox Combo(string[] items)
         {
-            var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat };
+            var c = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                FlatStyle = FlatStyle.Flat,
+                DrawMode = DrawMode.OwnerDrawFixed,
+                ItemHeight = 22
+            };
             c.Items.AddRange(items);
+            // Owner-drawn so the closed box and the open list both follow the theme.
+            c.DrawItem += (s, e) =>
+            {
+                if (e.Index < 0) return;
+                bool highlighted = (e.State & DrawItemState.Selected) != 0 && (e.State & DrawItemState.ComboBoxEdit) == 0;
+                using (var bg = new SolidBrush(highlighted ? CAccentSoft : CInput)) e.Graphics.FillRectangle(bg, e.Bounds);
+                TextRenderer.DrawText(e.Graphics, c.Items[e.Index].ToString(), c.Font,
+                    new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 6, e.Bounds.Height), CText,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+            };
             return c;
         }
 
@@ -592,12 +661,12 @@ namespace Croc2Launcher
 
         private Label StatusLabel(string text, Point loc)
         {
-            return new Label { Text = text, Location = loc, AutoSize = true, BackColor = Color.Transparent, ForeColor = Color.DarkRed, Font = new Font("Segoe UI Semibold", 9F) };
+            return new Label { Text = text, Location = loc, AutoSize = true, BackColor = Color.Transparent, ForeColor = StatusBad, Font = new Font("Segoe UI Semibold", 9F), Tag = "status" };
         }
 
         private Button PrimaryButton(string text, int width)
         {
-            var b = new Button
+            var b = new ThemedButton
             {
                 Text = text,
                 Size = new Size(width, 38),
@@ -614,7 +683,7 @@ namespace Croc2Launcher
 
         private Button SecondaryButton(string text, int width)
         {
-            var b = new Button
+            var b = new ThemedButton
             {
                 Text = text,
                 Size = new Size(width, 38),
@@ -733,7 +802,7 @@ namespace Croc2Launcher
 
             protected override void OnPaintBackground(PaintEventArgs e)
             {
-                e.Graphics.Clear(Parent != null ? Parent.BackColor : Color.White);
+                e.Graphics.Clear(Parent != null ? Parent.BackColor : CPage);
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 var r = new Rectangle(BorderWidth / 2, BorderWidth / 2, Width - 1 - BorderWidth, Height - 1 - BorderWidth);
                 using (var path = RoundRect(r, 10))
@@ -767,9 +836,9 @@ namespace Croc2Launcher
 
             public bool Selected { get { return _selected; } set { _selected = value; ApplyLook(); } }
 
-            private void ApplyLook()
+            public void ApplyLook()
             {
-                FillColor = _selected ? CAccentSoft : _hover ? CRail : Color.White;
+                FillColor = _selected ? CAccentSoft : _hover ? CRail : CPage;
                 BorderColor = _selected ? CAccent : CBorder;
                 BorderWidth = _selected ? 2 : 1;
                 Invalidate();
@@ -816,15 +885,226 @@ namespace Croc2Launcher
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
-                g.Clear(Parent != null ? Parent.BackColor : Color.White);
+                g.Clear(Parent != null ? Parent.BackColor : CPage);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 var track = new Rectangle(0, 0, Width - 1, Height - 1);
                 using (var path = RoundRect(track, Height / 2))
-                using (var b = new SolidBrush(Checked ? CAccent : Color.FromArgb(205, 209, 214)))
+                using (var b = new SolidBrush(Checked ? CAccent : CToggleOff))
                     g.FillPath(b, path);
                 int d = Height - 6;
                 int kx = Checked ? Width - d - 4 : 3;
                 using (var k = new SolidBrush(Color.White)) g.FillEllipse(k, kx, 3, d, d);
+            }
+        }
+
+        // ------------------------------------------------------------------ theme
+
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+        private static bool SystemPrefersDark()
+        {
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    object v = key != null ? key.GetValue("AppsUseLightTheme") : null;
+                    return v is int && (int)v == 0;
+                }
+            }
+            catch { return false; }
+        }
+
+        private bool _themeHooksInstalled;
+
+        // Called once settings are loaded, and whenever the switch or the Windows theme changes.
+        private void InitTheme()
+        {
+            string choice = _settings != null && !string.IsNullOrEmpty(_settings.Theme) ? _settings.Theme : "system";
+            int idx = Array.IndexOf(ThemeValues, choice);
+            _themeSwitch.SelectedIndex = idx < 0 ? 2 : idx;
+
+            if (!_themeHooksInstalled)
+            {
+                _themeHooksInstalled = true;
+                TagThemeRoles(this);
+                Microsoft.Win32.SystemEvents.UserPreferenceChanged += (s, e) =>
+                {
+                    if (_settings != null && (_settings.Theme ?? "system") == "system") SafeInvoke(InitTheme);
+                };
+                FormClosed += (s, e) => { };
+                HandleCreated += (s, e) => ApplyTitleBar();
+            }
+
+            bool dark = choice == "dark" || (choice == "system" && SystemPrefersDark());
+            Color oldOk = StatusOk, oldBad = StatusBad, oldWarn = StatusWarn, oldMuted = CMuted;
+            SetPalette(dark);
+            ApplyTheme(this, oldOk, oldBad, oldWarn, oldMuted);
+            ApplyTitleBar();
+            Invalidate(true);
+        }
+
+        private void SetThemeChoice(string choice)
+        {
+            if (_settings == null) return;
+            _settings.Theme = choice;
+            try { SettingsManager.Save(_settings); } catch { }
+            InitTheme();
+        }
+
+        private void ApplyTitleBar()
+        {
+            if (!IsHandleCreated) return;
+            int on = _darkTheme ? 1 : 0;
+            try
+            {
+                if (DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int)) != 0)
+                    DwmSetWindowAttribute(Handle, 19, ref on, sizeof(int)); // older Windows 10 builds
+            }
+            catch { }
+        }
+
+        // Records each standard control's role once, from the light palette it was built with.
+        private void TagThemeRoles(Control root)
+        {
+            foreach (Control c in root.Controls)
+            {
+                if (c.Tag == null)
+                {
+                    if (c is Label) c.Tag = c.ForeColor == CMuted ? "muted" : "text";
+                    else if (c is Button) c.Tag = c.BackColor == CAccent ? "primary" : c.BackColor == Color.Transparent ? "link" : "secondary";
+                    else if (c is ToggleSwitch || c is ThemeSwitch || c is StepRailItem) c.Tag = "custom";
+                    else if (c is CheckBox) c.Tag = c.ForeColor == CMuted ? "muted" : "text";
+                    else if (c is RichTextBox) c.Tag = "log";
+                    else if (c is TextBox || c is NumericUpDown || c is ComboBox) c.Tag = "input";
+                    else if (c is ChoiceCard) c.Tag = "choice";
+                    else if (c is RoundedPanel) c.Tag = c == _gameStatusCard ? "gamecard" : "card";
+                    else if (c is Panel) c.Tag = "page";
+                }
+                TagThemeRoles(c);
+            }
+        }
+
+        private void ApplyTheme(Control root, Color oldOk, Color oldBad, Color oldWarn, Color oldMuted)
+        {
+            if (root == this)
+            {
+                BackColor = CPage;
+                ForeColor = CText;
+            }
+            foreach (Control c in root.Controls)
+            {
+                switch (c.Tag as string)
+                {
+                    case "rail": c.BackColor = CRail; break;
+                    case "page": c.BackColor = CPage; break;
+                    case "muted": c.ForeColor = CMuted; break;
+                    case "text": c.ForeColor = CText; break;
+                    case "status":
+                        c.ForeColor = c.ForeColor == oldOk ? StatusOk : c.ForeColor == oldWarn ? StatusWarn
+                                    : c.ForeColor == oldBad ? StatusBad : c.ForeColor == oldMuted ? CMuted : c.ForeColor;
+                        break;
+                    case "input": c.BackColor = CInput; c.ForeColor = CText; break;
+                    case "primary":
+                    {
+                        var b = (Button)c;
+                        b.BackColor = CAccent;
+                        b.ForeColor = Color.White;
+                        b.FlatAppearance.MouseOverBackColor = CAccentHover;
+                        break;
+                    }
+                    case "secondary":
+                    {
+                        var b = (Button)c;
+                        b.BackColor = CPage;
+                        b.ForeColor = CText;
+                        b.FlatAppearance.BorderColor = CBorder;
+                        b.FlatAppearance.MouseOverBackColor = CRail;
+                        break;
+                    }
+                    case "link": c.ForeColor = CAccentText; break;
+                    case "log": c.BackColor = _darkTheme ? Color.FromArgb(14, 16, 18) : Color.FromArgb(24, 28, 32); break;
+                    case "card": ((RoundedPanel)c).FillColor = CRail; ((RoundedPanel)c).BorderColor = CRail; break;
+                    case "gamecard": RefreshGameStatusCard(); break;
+                    case "choice": ((ChoiceCard)c).ApplyLook(); break;
+                }
+                c.Invalidate();
+                ApplyTheme(c, oldOk, oldBad, oldWarn, oldMuted);
+            }
+        }
+
+        // Flat button whose disabled state stays readable in both themes (Windows draws disabled flat
+        // buttons in a fixed grey that disappears on a dark background).
+        private class ThemedButton : Button
+        {
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                if (Enabled) { base.OnPaint(e); return; }
+                var g = e.Graphics;
+                g.Clear(BackColor == Color.Transparent && Parent != null ? Parent.BackColor : BackColor);
+                if (FlatAppearance.BorderSize > 0)
+                {
+                    using (var pen = new Pen(CBorder)) g.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+                }
+                TextRenderer.DrawText(g, Text, Font, ClientRectangle,
+                    _darkTheme ? Color.FromArgb(108, 114, 122) : Color.FromArgb(160, 166, 173),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+        }
+
+        // Small segmented control (Light / Dark / System) for the rail.
+        private class ThemeSwitch : Control
+        {
+            private readonly string[] _options;
+            private int _selected;
+
+            public event EventHandler Picked;
+
+            public ThemeSwitch(string[] options)
+            {
+                _options = options;
+                DoubleBuffered = true;
+                Cursor = Cursors.Hand;
+                Font = new Font("Segoe UI", 8.5F);
+            }
+
+            public int SelectedIndex { get { return _selected; } set { _selected = value; Invalidate(); } }
+
+            protected override void OnMouseClick(MouseEventArgs e)
+            {
+                base.OnMouseClick(e);
+                int idx = Math.Min(_options.Length - 1, Math.Max(0, e.X * _options.Length / Math.Max(1, Width)));
+                if (idx == _selected) return;
+                _selected = idx;
+                Invalidate();
+                if (Picked != null) Picked(this, EventArgs.Empty);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var g = e.Graphics;
+                g.Clear(Parent != null ? Parent.BackColor : CRail);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var path = RoundRect(new Rectangle(0, 0, Width - 1, Height - 1), 7))
+                using (var bg = new SolidBrush(CInput))
+                using (var pen = new Pen(CBorder))
+                {
+                    g.FillPath(bg, path);
+                    g.DrawPath(pen, path);
+                }
+                int w = Width / _options.Length;
+                for (int i = 0; i < _options.Length; i++)
+                {
+                    var r = new Rectangle(i * w + 2, 2, w - 4, Height - 5);
+                    if (i == _selected)
+                    {
+                        using (var path = RoundRect(r, 5))
+                        using (var sel = new SolidBrush(CAccentSoft))
+                            g.FillPath(sel, path);
+                    }
+                    TextRenderer.DrawText(g, _options[i], Font, r, i == _selected ? CAccentText : CMuted,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
             }
         }
 
