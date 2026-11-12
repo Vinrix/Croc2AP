@@ -107,7 +107,9 @@ static FnLoadMap g_orig_load_map = nullptr;
 static FnReadInput g_orig_read_input = nullptr;
 static FnSaveGameSlot g_orig_save_game_slot = nullptr;
 static FnClimbAction g_orig_climb_wall_idle = nullptr;
+static FnClimbAction g_orig_climb_wall_attach = nullptr;
 static FnClimbAction g_orig_climb_surface_check = nullptr;
+static FnClimbAction g_orig_climb_state_init = nullptr;
 
 static FnStratVmHandler g_orig_pickup_heart_pot = nullptr;
 static FnStratVmHandler g_orig_pickup_clockwork = nullptr;
@@ -697,6 +699,16 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
         }
     }
 
+    const bool is_gate_warning =
+        (imp == ItemImportance::TRAP) &&
+        (item_name.find("Required") != std::string::npos ||
+         item_name.find("Locked") != std::string::npos);
+
+    // Ensure item pickups get at least 5000ms (5 full seconds) display duration
+    if (!is_gate_warning && duration_ms < 5000) {
+        duration_ms = 5000;
+    }
+
     uint64_t now = static_cast<uint64_t>(GetTickCount());
     toast.is_self = is_self;
     toast.sender = s;
@@ -705,40 +717,25 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
     toast.duration_ms = duration_ms;
     toast.expire_tick = now + duration_ms;
 
-    const bool is_gate_warning =
-        (imp == ItemImportance::TRAP) &&
-        (item_name.find("Required") != std::string::npos ||
-         item_name.find("Locked") != std::string::npos);
-
-    // If the currently active toast has already expired on the clock, advance the queue first
-    // so a newly arriving toast never jumps ahead of already-queued toasts!
-    if (g_state.toast_active && g_ui_running.load() && now >= g_state.active_toast.expire_tick) {
-        if (!g_state.toast_queue.empty()) {
-            g_state.active_toast = g_state.toast_queue.front();
-            g_state.toast_queue.pop_front();
-            uint32_t dur = g_state.active_toast.duration_ms >= 5000 ? g_state.active_toast.duration_ms : 5000;
-            g_state.active_toast.expire_tick = now + dur;
-        } else {
-            g_state.toast_active = false;
-        }
-    }
-
-    if (g_state.toast_active && g_ui_running.load()) {
+    if (g_state.toast_active) {
         if (is_gate_warning) {
             if (g_state.active_toast.item_name == toast.item_name) {
                 g_state.active_toast.expire_tick = now + duration_ms;
             }
             return;
         }
-        // If the currently active toast is only a gate warning ("... Required!"), replace it immediately with the real item pickup!
+
+        // If active toast is a gate warning ("Required!"), replace it immediately with the incoming item pickup
         bool active_is_gate_warning =
             (g_state.active_toast.importance == ItemImportance::TRAP) &&
             (g_state.active_toast.item_name.find("Required") != std::string::npos ||
              g_state.active_toast.item_name.find("Locked") != std::string::npos);
         if (active_is_gate_warning && g_state.toast_queue.empty()) {
             g_state.active_toast = toast;
+            g_state.active_toast.expire_tick = now + duration_ms;
             return;
         }
+
         // Strictly queue every single item pickup in FIFO order without overwriting or dropping!
         if (g_state.toast_queue.size() < 256) {
             g_state.toast_queue.push_back(toast);
@@ -747,6 +744,7 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
     }
 
     g_state.active_toast = toast;
+    g_state.active_toast.expire_tick = now + duration_ms;
     g_state.toast_active = true;
 }
 
@@ -3137,13 +3135,6 @@ static void drain_pending_native_inventory_grants() {
 
     reset_pending_native_grants();
     g_need_full_inventory_sync.store(false);
-
-    // Ensure the inventory wheel state is ready (2) whenever at least 1 wheel item is owned,
-    // without touching RVA_INV_WHEEL_SEL_INDEX (0x140BC4EA4) or RVA_INV_WHEEL_CUR_ITEM_ID (0x140BA9B68)
-    // so the player can freely cycle through items with L2 / R2!
-    if (i32(RVA_INV_WHEEL_SLOT_COUNT) > 0 && i32(RVA_INV_WHEEL_STATE) == 0) {
-        i32(RVA_INV_WHEEL_STATE) = 2;
-    }
 }
 
 static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
@@ -3264,63 +3255,56 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
+            static bool s_jump_started_on_ground = false;
+
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
-                g_ground_jump_in_progress = false;
+                s_jump_started_on_ground = false;
             } else if (!g_state.abilities.butt_stomp) {
                 bool jump_pressed_edge = (newly_pressed & 0x4000u) != 0;
                 bool jump_button_down = (buttons & 0x4000u) != 0;
-                DWORD now_tick = GetTickCount();
 
-                // Read Croc's real ground vs airborne state using croc2.exe's exact IsOnGround check (0x1401FC590):
-                // PlayerStrat->floor_poly (+0xC8) holds the floor height at offset +0x0, and PlayerStrat->pos_y (+0x50)
-                // is <= floor_height when standing on the floor and > floor_height the entire time Croc is airborne!
-                bool croc_is_airborne = false;
+                // Read Croc's real ground vs airborne physics state:
+                // PlayerStrat->floor_poly (+0xC8) holds floor height at +0x0.
+                // In croc2.exe (see 0x1401FC590), croc_y <= floor_y means ON GROUND, and croc_y > floor_y means AIRBORNE.
+                bool is_on_ground = false;
                 uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
-                uintptr_t croc_strat_def = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_CROC_STRAT_DEF);
-                if (player_strat != 0 && croc_strat_def != 0 &&
-                    *reinterpret_cast<uintptr_t*>(player_strat + 0x110) == croc_strat_def) {
+                if (player_strat != 0) {
                     uintptr_t floor_poly = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
-                    if (floor_poly == 0) {
-                        croc_is_airborne = true;
-                    } else {
+                    if (floor_poly != 0) {
                         int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
                         int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
-                        if (croc_y > floor_y) {
-                            croc_is_airborne = true;
+                        if (croc_y <= floor_y) {
+                            is_on_ground = true;
                         }
                     }
-                } else {
-                    croc_is_airborne = (now_tick - g_last_jump_press_tick < 950);
                 }
 
-                // Also treat the first 160ms after ground jump press as takeoff so 240Hz button mashing
-                // on the ground before the 30Hz physics tick lifts Croc cannot queue a second press.
-                bool in_takeoff_or_air = croc_is_airborne || (now_tick - g_last_jump_press_tick < 160);
-
-                if (!in_takeoff_or_air) {
+                if (is_on_ground) {
                     if (jump_pressed_edge) {
-                        g_last_jump_press_tick = now_tick;
-                        g_ground_jump_in_progress = true;
-                    } else if (!jump_button_down) {
-                        g_ground_jump_in_progress = false;
+                        s_jump_started_on_ground = true;
                     }
                 } else {
-                    if (!jump_button_down || (now_tick - g_last_jump_press_tick > 220)) {
-                        g_ground_jump_in_progress = false;
+                    if (!jump_button_down) {
+                        s_jump_started_on_ground = false;
                     }
-                }
-
-                if (!g_ground_jump_in_progress) {
-                    buttons &= ~0x4000u;
-                    *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PRESSED_BUTTONS) &= ~0x4000u;
-                    *reinterpret_cast<uint32_t*>(g_exe_base + RVA_HELD_BUTTONS) &= ~0x4000u;
+                    // Croc is airborne: any press of Jump that did not originate as a continuous ground jump is a Butt Stomp!
+                    if (!s_jump_started_on_ground) {
+                        buttons &= ~0x4000u;
+                        *reinterpret_cast<uint32_t*>(g_exe_base + RVA_PRESSED_BUTTONS) &= ~0x4000u;
+                        *reinterpret_cast<uint32_t*>(g_exe_base + RVA_HELD_BUTTONS) &= ~0x4000u;
+                    }
                 }
 
                 // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
                 // Note: Keep L2 (0x0100) and R2 (0x0200) enabled so the player can cycle through the inventory wheel
-                // (e.g. to select the Clockwork Gobbo) without needing Butt Stomp!
                 buttons &= ~0x0C00u;
+            }
+
+            if (!g_state.abilities.climbing_claws) {
+                *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
+                *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
+                *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_WALL_STATE_2) = 0;
             }
 
             if (has_reverse_controls) {
@@ -3418,6 +3402,50 @@ static void __fastcall Hooked_ClimbSurfaceCheck(void* player_strat) {
     }
     if (g_orig_climb_surface_check) {
         g_orig_climb_surface_check(player_strat);
+    }
+}
+
+// Hooked Opcode 371: Wall/Vine/Ladder Attach (0x1401FAC30)
+static void __fastcall Hooked_ClimbWallAttach(void* player_strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        trigger_climb_blocked_toast_locked();
+        *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
+        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_WALL_STATE_2) = 0;
+        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
+        if (player_strat) {
+            uintptr_t vars = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(player_strat) + 0x118);
+            if (vars != 0) {
+                *reinterpret_cast<int32_t*>(vars + 0x54) = 0;
+                *reinterpret_cast<int32_t*>(vars + 0x20) = 0;
+            }
+        }
+        return;
+    }
+    if (g_orig_climb_wall_attach) {
+        g_orig_climb_wall_attach(player_strat);
+    }
+}
+
+// Hooked Opcode 376: Wall/Vine Climb State Init (0x1401FAD10)
+static void __fastcall Hooked_ClimbStateInit(void* player_strat) {
+    if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && !g_state.abilities.climbing_claws) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        trigger_climb_blocked_toast_locked();
+        *reinterpret_cast<uint8_t*>(g_exe_base + RVA_CLIMB_ALLOWED_BYTE) = 0;
+        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_WALL_STATE_2) = 0;
+        *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
+        if (player_strat) {
+            uintptr_t vars = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(player_strat) + 0x118);
+            if (vars != 0) {
+                *reinterpret_cast<int32_t*>(vars + 0x54) = 0;
+                *reinterpret_cast<int32_t*>(vars + 0x20) = 0;
+            }
+        }
+        return;
+    }
+    if (g_orig_climb_state_init) {
+        g_orig_climb_state_init(player_strat);
     }
 }
 
@@ -3603,7 +3631,9 @@ static void install_croc2_engine_hooks() {
     };
 
     hook_dispatch_slot(RVA_CLIMB_WALL_IDLE_SLOT, RVA_FN_CLIMB_WALL_IDLE, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallIdle), g_orig_climb_wall_idle);
+    hook_dispatch_slot(RVA_CLIMB_WALL_ATTACH_SLOT, RVA_FN_CLIMB_WALL_ATTACH, reinterpret_cast<uintptr_t>(&Hooked_ClimbWallAttach), g_orig_climb_wall_attach);
     hook_dispatch_slot(RVA_CLIMB_SURFACE_CHECK_SLOT, RVA_FN_CLIMB_SURFACE_CHECK, reinterpret_cast<uintptr_t>(&Hooked_ClimbSurfaceCheck), g_orig_climb_surface_check);
+    hook_dispatch_slot(RVA_CLIMB_STATE_INIT_SLOT, RVA_FN_CLIMB_STATE_INIT, reinterpret_cast<uintptr_t>(&Hooked_ClimbStateInit), g_orig_climb_state_init);
 
     // 6. Hook Strat VM Collectable & Inventory Pickup Slots (Opcodes 171, 248, 249, 250, 270)
     auto hook_strat_slot = [](uintptr_t slot_rva, uintptr_t expected_target, uintptr_t hooked_fn, FnStratVmHandler& orig_fn) {
