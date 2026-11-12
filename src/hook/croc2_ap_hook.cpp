@@ -4202,6 +4202,61 @@ static void __fastcall TraceOpcode(void* strat, int32_t op, uintptr_t original) 
     reinterpret_cast<FnStratVmHandler>(original)(strat);
 }
 
+// debug_watch crash reporter: a first-in-line vectored exception handler that writes the crash location,
+// faulting address, registers and an unwound call stack (as croc2.exe / version.dll offsets) to the debug log
+// before the game's own crash reporter takes over. Only installed when debug_watch = 1.
+static std::string describe_address(DWORD64 a) {
+    HMODULE mod = nullptr;
+    char buf[96];
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(a), &mod) && mod) {
+        char name[MAX_PATH] = {0};
+        GetModuleFileNameA(mod, name, MAX_PATH);
+        const char* base = std::strrchr(name, '\\');
+        std::snprintf(buf, sizeof(buf), "%s+0x%llX", base ? base + 1 : name,
+                      static_cast<unsigned long long>(a - reinterpret_cast<DWORD64>(mod)));
+    } else {
+        std::snprintf(buf, sizeof(buf), "0x%llX", static_cast<unsigned long long>(a));
+    }
+    return buf;
+}
+
+static LONG CALLBACK DebugCrashReporter(EXCEPTION_POINTERS* ep) {
+    const DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != 0xC0000409 && code != EXCEPTION_ILLEGAL_INSTRUCTION) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    static std::atomic<int> s_reports{0};
+    if (s_reports.fetch_add(1) >= 3) return EXCEPTION_CONTINUE_SEARCH;
+    CONTEXT ctx = *ep->ContextRecord;
+    char buf[512];
+    std::snprintf(buf, sizeof(buf), "CRASH code=0x%08lX at %s, accessing 0x%llX", code,
+                  describe_address(ctx.Rip).c_str(),
+                  ep->ExceptionRecord->NumberParameters > 1
+                      ? static_cast<unsigned long long>(ep->ExceptionRecord->ExceptionInformation[1]) : 0ULL);
+    debug_log_locked(buf);
+    std::snprintf(buf, sizeof(buf), "CRASH rax=%llX rbx=%llX rcx=%llX rdx=%llX rsi=%llX rdi=%llX rbp=%llX rsp=%llX",
+                  ctx.Rax, ctx.Rbx, ctx.Rcx, ctx.Rdx, ctx.Rsi, ctx.Rdi, ctx.Rbp, ctx.Rsp);
+    debug_log_locked(buf);
+    std::snprintf(buf, sizeof(buf), "CRASH r8=%llX r9=%llX r10=%llX r11=%llX r12=%llX r13=%llX r14=%llX r15=%llX",
+                  ctx.R8, ctx.R9, ctx.R10, ctx.R11, ctx.R12, ctx.R13, ctx.R14, ctx.R15);
+    debug_log_locked(buf);
+    for (int frame = 0; frame < 24 && ctx.Rip; ++frame) {
+        debug_log_locked("CRASH stack " + std::to_string(frame) + ": " + describe_address(ctx.Rip));
+        DWORD64 image_base = 0;
+        PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &image_base, nullptr);
+        if (!fn) { // leaf function: return address is at [rsp]
+            ctx.Rip = *reinterpret_cast<DWORD64*>(ctx.Rsp);
+            ctx.Rsp += 8;
+            continue;
+        }
+        void* handler_data = nullptr;
+        DWORD64 establisher = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Rip, fn, &ctx, &handler_data, &establisher, nullptr);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 static void install_script_tracer() {
     uintptr_t* table = reinterpret_cast<uintptr_t*>(g_exe_base + RVA_STRAT_VM_DISPATCH_TABLE);
     const size_t stub_size = 32;
@@ -4362,7 +4417,10 @@ static void install_croc2_engine_hooks() {
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
-    if (g_state.debug_watch) install_script_tracer(); // after every other opcode-slot hook, so it wraps them
+    if (g_state.debug_watch) {
+        install_script_tracer(); // after every other opcode-slot hook, so it wraps them
+        AddVectoredExceptionHandler(1, DebugCrashReporter);
+    }
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
