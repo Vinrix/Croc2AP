@@ -3871,6 +3871,44 @@ static void __fastcall Hooked_GiveInventoryItem(void* strat) {
     if (g_orig_give_inv_item) g_orig_give_inv_item(strat);
 }
 
+// ============================================================================
+// Achievements (logging only for now, see docs/achievements.md)
+// AchievementManager::SetAchievementValue (0x14025FF00) and ::IncrementAchievement (0x14025F900)
+// take (const std::string* id, int32_t value). id is an MSVC std::string: the characters are inline
+// unless capacity (+0x18) >= 16, in which case +0x0 points to them; size is at +0x10.
+// ============================================================================
+using FnAchievement = uint64_t(__fastcall*)(void* id, int32_t value);
+static FnAchievement g_orig_set_achievement = nullptr;
+static FnAchievement g_orig_increment_achievement = nullptr;
+
+static std::string read_msvc_string(const void* str) {
+    if (!str) return std::string();
+    const uint8_t* b = static_cast<const uint8_t*>(str);
+    uint64_t size = *reinterpret_cast<const uint64_t*>(b + 0x10);
+    uint64_t cap = *reinterpret_cast<const uint64_t*>(b + 0x18);
+    if (size > 64 || cap < size) return std::string("?");
+    const char* chars = cap >= 16 ? *reinterpret_cast<const char* const*>(b) : reinterpret_cast<const char*>(b);
+    return chars ? std::string(chars, static_cast<size_t>(size)) : std::string();
+}
+
+static void log_achievement(const char* kind, void* id, int32_t value) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_state.debug_watch) return;
+    const MapCoords cur = *reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+    debug_log_locked(std::string("ACHIEVEMENT ") + kind + " " + read_msvc_string(id) + " value=" +
+                     std::to_string(value) + " map=" + coords_to_wad(cur));
+}
+
+static uint64_t __fastcall Hooked_SetAchievement(void* id, int32_t value) {
+    log_achievement("set", id, value);
+    return g_orig_set_achievement(id, value);
+}
+
+static uint64_t __fastcall Hooked_IncrementAchievement(void* id, int32_t value) {
+    log_achievement("increment", id, value);
+    return g_orig_increment_achievement(id, value);
+}
+
 // SetActionState (0x14022E290): Core engine action state transition handler
 // action_id == 3 corresponds to Butt Stomp.
 static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
@@ -3968,6 +4006,25 @@ static void install_croc2_engine_hooks() {
         VirtualProtect(fn_set_action, 32, PAGE_EXECUTE_READWRITE, &old_prot);
         write_abs_jmp64(fn_set_action, reinterpret_cast<const void*>(&Hooked_SetActionState), 20);
         VirtualProtect(fn_set_action, 32, old_prot, &old_prot);
+    }
+
+    // 5b. Achievement logging hooks (18-byte prologue: 55 56 57 48 81 EC 40 01 00 00 48 8D AC 24 80 00 00 00)
+    {
+        static const uint8_t kAchPrologue[18] = {0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x40, 0x01, 0x00,
+                                                 0x00, 0x48, 0x8D, 0xAC, 0x24, 0x80, 0x00, 0x00, 0x00};
+        auto hook_ach = [&](uintptr_t rva, uint8_t* tramp, const void* hooked, FnAchievement& orig) {
+            uint8_t* fn = reinterpret_cast<uint8_t*>(g_exe_base + rva);
+            if (std::memcmp(fn, kAchPrologue, sizeof(kAchPrologue)) != 0) return;
+            std::memcpy(tramp, fn, 18);
+            write_abs_jmp64(tramp + 18, fn + 18, 14);
+            orig = reinterpret_cast<FnAchievement>(tramp);
+            DWORD prot = 0;
+            VirtualProtect(fn, 32, PAGE_EXECUTE_READWRITE, &prot);
+            write_abs_jmp64(fn, hooked, 18);
+            VirtualProtect(fn, 32, prot, &prot);
+        };
+        hook_ach(RVA_FN_SET_ACHIEVEMENT, tramp_mem + 320, reinterpret_cast<const void*>(&Hooked_SetAchievement), g_orig_set_achievement);
+        hook_ach(RVA_FN_INCREMENT_ACHIEVEMENT, tramp_mem + 384, reinterpret_cast<const void*>(&Hooked_IncrementAchievement), g_orig_increment_achievement);
     }
 
     // 6. Hook Strat VM Collectable & Inventory Pickup Slots (Opcodes 171, 248, 249, 250, 270)
