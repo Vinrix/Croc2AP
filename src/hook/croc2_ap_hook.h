@@ -91,7 +91,7 @@ constexpr uintptr_t RVA_FN_ACH_CHECK_INV_ITEM    = 0x00260DD0; // was RVA_FN_PLA
 constexpr uintptr_t RVA_ACTIVE_SAVE_SLOT         = 0x00B4D5A8; // int32_t save slot index (0..4)
 constexpr uintptr_t RVA_PAUSE_MENU_ACTIVE        = 0x00B8E018;
 constexpr uintptr_t RVA_COLORED_CRYSTAL_PTR      = 0x00B8E028; // Points to int32_t (0x1000 per crystal, 0x5000 = all 5)
-constexpr uintptr_t RVA_CROC_AIRBORNE            = 0x00BA8970; // int32_t 1 from a jump's take-off until landing (traced in-game)
+constexpr uintptr_t RVA_CROC_LANDED_PULSE        = 0x00BC4B4C; // int32_t 1 for one frame when Croc lands (traced in-game)
 constexpr uintptr_t RVA_TRANSITION_STATE         = 0x00B90D30; // 7 = door transition triggered
 constexpr uintptr_t RVA_CURRENT_MAP_HEADER       = 0x00B90D70; // Loaded map header pointer
 constexpr uintptr_t RVA_ACTIVE_SPAWN_TRIGGER      = 0x00B90D78; // Pointer to active spawn/entrance trigger
