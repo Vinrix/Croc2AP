@@ -2937,6 +2937,10 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
             g_state.in_active_save = false;
             g_state.save_locked_to_mod = false;
             g_in_redirected_stage = false;
+            // Forget the previous save's seed: otherwise a New Game started after loading a save kept that
+            // save's seed (same door shuffle, collected crystals and unlocked abilities). Loading a save
+            // restores its seed from the footer.
+            g_state.current_save_seed = 0;
             g_state.add_log("Returned to Title Screen — Mod Toggle (F10) is now unlocked.");
         }
         // Clear any in-memory footer magic while on the Title Screen so starting a New Game
