@@ -4221,46 +4221,26 @@ static void clear_coloured_crystal_state(const MapCoords& m) {
     for (int g = 0; g < 5; ++g) gem_state[g] = 0;
 }
 
+static std::string g_crystal_wad;              // current map, for the spawn hook
+static int32_t* g_coloured_state_ptr = nullptr; // remaster saved coloured-crystal state for the current stage
+static void clear_coloured_crystal_state_fast() {
+    if (int32_t* g = g_coloured_state_ptr) { g[0] = g[1] = g[2] = g[3] = g[4] = 0; }
+}
+
 // Runs on the game thread every frame (inside the Hooked_ReadInput lock).
 static void apply_crystal_persistence_locked(const MapCoords& cur) {
     const bool rando_save = g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && g_state.save_locked_to_mod;
     set_wallet_patches(rando_save);
     if (!rando_save) return;
     ensure_collected_crystals_loaded_locked();
+    // Everything below only needs to run when the map changes or the counter restore is pending.
+    static MapCoords s_last{-1, -1, -1, -1};
+    static bool s_restore_pending = false;
+    const bool map_changed = std::memcmp(&s_last, &cur, sizeof(MapCoords)) != 0;
+    if (map_changed) { s_last = cur; s_restore_pending = true; g_crystal_wad = coords_to_wad(cur); }
+    if (!map_changed && !s_restore_pending) { clear_coloured_crystal_state_fast(); return; }
     if (g_collected_crystals.empty()) return;
-    const std::string wad = coords_to_wad(cur);
-
-    // Remove already-collected crystals in this map. Only during normal play: croc2.exe also calls the input
-    // hook in the middle of a level load (0x14005C9B9 -> 0x140041040) while the strat list is being rebuilt,
-    // and walking it then crashed. Every pointer is also checked before it is read.
-    int removed = 0;
-    const int32_t game_state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
-    // Throttled: the input hook runs many times per frame, and checking every strat each time (with VirtualQuery)
-    // dropped the game to ~5 fps in testing. Sweep at most every 200 ms.
-    static DWORD s_last_sweep = 0;
-    const DWORD now_tick = GetTickCount();
-    const bool sweep_due = now_tick - s_last_sweep >= 200;
-    if (sweep_due) s_last_sweep = now_tick;
-    const bool list_stable = sweep_due && game_state == 0 && now_tick - g_last_map_load_tick > 1500;
-    int guard = 0;
-    for (uint8_t* st = list_stable ? *reinterpret_cast<uint8_t**>(g_exe_base + RVA_STRAT_LIST_HEAD) : nullptr;
-         st && readable_memory(st, 0x140) && ++guard < 4096; st = *reinterpret_cast<uint8_t**>(st + 8)) {
-        uint32_t& flags = *reinterpret_cast<uint32_t*>(st + 0xFC);
-        if (flags & 4) continue; // already removed
-        if (std::find(g_crystals_collecting.begin(), g_crystals_collecting.end(), st) != g_crystals_collecting.end()) continue;
-        const char* name = *reinterpret_cast<const char**>(st + 0x30);
-        if (!name || !readable_memory(name, 16)) continue;
-        if (std::strcmp(name, "crystal") != 0 && std::strcmp(name, "bonus crystal") != 0) continue;
-        const bool is_bonus = name[0] == 'b';
-        if (crystal_collected_locked(is_bonus ? wad + "*" : wad, *reinterpret_cast<int32_t*>(st + 0x4C),
-                                     *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54))) {
-            flags |= 6;
-            ++removed;
-        }
-    }
-    if (removed && g_state.debug_watch) {
-        debug_log_locked("CRYSTALS removed " + std::to_string(removed) + " already-collected crystal(s) in " + wad);
-    }
+    const std::string& wad = g_crystal_wad;
 
     // Restore the stage's top-right counter once, about a second after entering it.
     static std::string s_counter_stage;
@@ -4283,9 +4263,36 @@ static void apply_crystal_persistence_locked(const MapCoords& cur) {
         }
         s_entered = 0; // once per stage entry
     }
+    if (stage_key.empty() || !s_entered) s_restore_pending = false;
 
-    if (stage_idx >= 0) clear_coloured_crystal_state(cur);
+    g_coloured_state_ptr = stage_idx >= 0 && g_state.colored_crystals_mode == 1
+        ? reinterpret_cast<int32_t*>(g_exe_base + RVA_SAVE_DATA_TABLE + 0x4F8 + map_flag_index(cur) * 0x3C) : nullptr;
+    clear_coloured_crystal_state_fast();
 }
+
+// Spawn-time removal of already-collected crystals. Traced in-game: every white crystal strat ("crystal") runs
+// opcode 180 within its first few instructions, and every coloured one ("bonus crystal") runs opcode 329 (the
+// remaster's saved-crystal check). Both slots are hooked; when the running strat is a crystal at a remembered
+// position in this map it is removed (stRemove flags, +0xFC |= 6). Costs one pointer read and a char compare
+// for other strats, and nothing per frame.
+static FnStratVmHandler g_orig_crystal_spawn_180 = nullptr;
+static FnStratVmHandler g_orig_crystal_spawn_329 = nullptr;
+static void remove_if_collected(void* strat) {
+    uint8_t* st = static_cast<uint8_t*>(strat);
+    const char* name = *reinterpret_cast<const char**>(st + 0x30);
+    if (!name || (name[0] != 'c' && name[0] != 'b')) return;
+    const bool is_bonus = std::strcmp(name, "bonus crystal") == 0;
+    if (!is_bonus && std::strcmp(name, "crystal") != 0) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_collected_crystals.empty() || g_crystal_wad.empty()) return;
+    if (crystal_collected_locked(is_bonus ? g_crystal_wad + "*" : g_crystal_wad, *reinterpret_cast<int32_t*>(st + 0x4C),
+                                 *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54))) {
+        *reinterpret_cast<uint32_t*>(st + 0xFC) |= 6;
+        if (g_state.debug_watch) debug_log_locked(std::string("CRYSTALS removed collected ") + name + " in " + g_crystal_wad);
+    }
+}
+static void __fastcall Hooked_CrystalSpawn180(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_180(strat); }
+static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_329(strat); }
 
 // Strat opcode 173 (0x140066030): GainCrystal. Pops a value; value >> 12 of 1..5 is a coloured crystal of that
 // colour (AddColoredCrystal), anything else is a white crystal (top-right counter 0xBA9B3C += 1, plus the
@@ -4385,31 +4392,6 @@ static void log_script_trace_entry(const char* tag, const ScriptTraceEntry& e) {
 }
 
 static void __fastcall TraceOpcode(void* strat, int32_t op, uintptr_t original) {
-    // Spawn-hook research: log the first 24 opcodes the first few crystal strats run after a map load.
-    {
-        static void* s_seen[6] = {nullptr};
-        static int s_counts[6] = {0};
-        static DWORD s_epoch = 0;
-        if (s_epoch != g_last_map_load_tick) {
-            s_epoch = g_last_map_load_tick;
-            for (int i = 0; i < 6; ++i) { s_seen[i] = nullptr; s_counts[i] = 0; }
-        }
-        const char* nm = strat ? *reinterpret_cast<const char**>(static_cast<uint8_t*>(strat) + 0x30) : nullptr;
-        if (nm && (nm[0] == 'c' || nm[0] == 'b') && (std::strcmp(nm, "crystal") == 0 || std::strcmp(nm, "bonus crystal") == 0)) {
-            for (int i = 0; i < 6; ++i) {
-                if (s_seen[i] == strat || !s_seen[i]) {
-                    s_seen[i] = strat;
-                    if (s_counts[i]++ < 24) {
-                        char b[128];
-                        const int32_t* a = *reinterpret_cast<int32_t**>(strat);
-                        std::snprintf(b, sizeof(b), "SPAWNTRACE %s %p #%d op=%d args=%d,%d,%d", nm, strat, s_counts[i], op, a[0], a[1], a[2]);
-                        debug_log_locked(b);
-                    }
-                    break;
-                }
-            }
-        }
-    }
     if (strat && strat == *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR)) {
         const int32_t* args = *reinterpret_cast<int32_t**>(strat); // stream already points past the opcode
         ScriptTraceEntry e{GetTickCount(), op, reinterpret_cast<uintptr_t>(args) - 4, args[0], args[1], args[2], args[3]};
@@ -4644,6 +4626,8 @@ static void install_croc2_engine_hooks() {
                             kHurtHooks[i], g_orig_hurt_ops[i]);
         }
     }
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 180 * 8, 0x00069BC0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn180), g_orig_crystal_spawn_180);
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 329 * 8, 0x000227E0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn329), g_orig_crystal_spawn_329);
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 173 * 8, 0x00066030, reinterpret_cast<uintptr_t>(&Hooked_GainCrystal), g_orig_gain_crystal);
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
