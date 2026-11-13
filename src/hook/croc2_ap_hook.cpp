@@ -45,6 +45,16 @@ static void sync_state_to_save_footer_locked();
 static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& footer);
 static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std::string& check_desc);
 static void debug_log_locked(const std::string& msg);
+struct MapCoords;
+static void apply_crystal_persistence_locked(const MapCoords& cur);
+static void check_crystal_spawn_queue_locked();
+static bool readable_memory(const void* p, size_t size);
+static void clear_coloured_crystal_state(const MapCoords& m);
+static void set_wallet_patches(bool enable);
+static std::atomic<bool> g_jump_lock_active{false}; // Butt Stomp locked, in a randomizer save (set in Hooked_ReadInput)
+static std::vector<void*> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
+static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
+static DWORD g_last_map_load_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
 static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
@@ -70,6 +80,12 @@ static MapCoords g_saved_hub{1, 1, 1, 0};
 static MapCoords g_saved_orig_door{1, 2, 1, 0};
 static MapCoords g_saved_rand_stage{1, 4, 1, 0};
 static std::atomic<int> g_pending_heart_damage{0};
+static std::atomic<int> g_debug_hurt_opcode{0};  // debug_watch only: run strat opcode 154/155/455/457 on Croc
+static std::atomic<DWORD> g_hit_log_until{0};    // debug_watch: log every action change until this tick
+static std::atomic<int> g_pending_lava_hurt{0};  // run Croc's own lava-hurt script routine (bounce, flash, -1 heart)
+// Where to enter the routine (0 = its first step, opcode 124/94 which spawn the tail smoke).
+static std::atomic<int> g_lava_entry_offset{0};
+static int g_script_trace_after = 0;             // debug_watch script tracer: steps still to log
 static std::atomic<int> g_pending_heart_pots{0};
 static std::atomic<int> g_pending_keys{0};
 static std::atomic<int> g_pending_clockwork{0};
@@ -242,6 +258,7 @@ static uint8_t pack_abilities_mask(const PlayerAbilities& a) {
     if (a.lever_wrench)       m |= (1 << 4);
     if (a.vehicle_license)    m |= (1 << 5);
     if (a.airplane_ammo_feed) m |= (1 << 6);
+    if (a.long_jump)          m |= (1 << 7);
     return m;
 }
 
@@ -253,6 +270,7 @@ static void unpack_abilities_mask(uint8_t m, PlayerAbilities& a) {
     a.lever_wrench       = (m & (1 << 4)) != 0;
     a.vehicle_license    = (m & (1 << 5)) != 0;
     a.airplane_ammo_feed = (m & (1 << 6)) != 0;
+    a.long_jump          = (m & (1 << 7)) != 0;
 }
 
 static bool is_vehicle_stage_wad(const std::string& wad) {
@@ -372,7 +390,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200142, 7200143, 7200144,                   // Clockwork Gobbo, Red Jelly, Blue Jelly
         7200021,                                     // Heart Pot
         7200042,                                     // Red Crystal
-        7200151                                      // Fire Breakout Trap
+        7200161                                      // Long Jump
     };
     for (size_t i = 0; i < 15 && i < sphere1_slots.size(); ++i) {
         g_state.solo_check_items[sphere1_slots[i]] = sphere1_items[i];
@@ -451,7 +469,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200019, 7200020,                            // Silver Key + Gold Key (Inventory Wheel & HUD)
         7200021,                                     // Heart Pot
         7200042,                                     // Find the Key! Save the Gobbo! - Red Crystal
-        7200148                                      // Croc Crystals (1)
+        7200161                                      // Long Jump
     };
     for (size_t i = 0; i < 20 && i < wc_start_stage_slots.size(); ++i) {
         g_state.solo_white_crystal_items[wc_start_stage_slots[i]] = start_stage_items[i];
@@ -625,6 +643,7 @@ static void generate_new_save_seed_locked(uint64_t seed) {
         g_state.abilities.butt_stomp = true;
         g_state.abilities.climbing_claws = true;
         g_state.abilities.power_gloves = true;
+        g_state.abilities.long_jump = true;
     }
     if (!g_state.shuffle_levers) g_state.abilities.lever_wrench = true;
     if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
@@ -1105,11 +1124,13 @@ static void load_config_ini(const char* ini_path) {
             g_state.abilities.butt_stomp = true;
             g_state.abilities.climbing_claws = true;
             g_state.abilities.power_gloves = true;
+            g_state.abilities.long_jump = true;
         } else {
             g_state.abilities.tail_whack = false;
             g_state.abilities.butt_stomp = false;
             g_state.abilities.climbing_claws = false;
             g_state.abilities.power_gloves = false;
+            g_state.abilities.long_jump = false;
         }
         g_state.abilities.lever_wrench = !g_state.shuffle_levers;
         g_state.abilities.vehicle_license = !g_state.shuffle_vehicles;
@@ -1263,6 +1284,7 @@ static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance&
         case 7200005: out_name = "Lever Wrench"; return;
         case 7200006: out_name = "Vehicle License"; return;
         case 7200007: out_name = "Airplane Ammo Feed"; return;
+        case 7200161: out_name = "Long Jump"; return;
         case 7200008: out_name = "Sailor Village VIP Pass"; return;
         case 7200009: out_name = "Cossack Village VIP Pass"; return;
         case 7200010: out_name = "Caveman Village VIP Pass"; return;
@@ -1331,6 +1353,7 @@ static void apply_ap_item_by_id_locked(int item_id,
     std::string item_name;
     ItemImportance imp = ItemImportance::PROGRESSION;
     get_ap_item_info(item_id, item_name, imp);
+    debug_log_locked("ITEM " + std::to_string(item_id) + " " + item_name + " from " + sender_name + " @ " + location_name);
 
     if (show_toast && item_id > 0) {
         g_state.pending_events_json.push_back(
@@ -1351,6 +1374,7 @@ static void apply_ap_item_by_id_locked(int item_id,
         case 7200005: g_state.abilities.lever_wrench = true; g_state.add_log("Unlocked Ability: Lever Wrench!"); break;
         case 7200006: g_state.abilities.vehicle_license = true; g_state.add_log("Unlocked Ability: Vehicle License!"); break;
         case 7200007: g_state.abilities.airplane_ammo_feed = true; g_state.add_log("Unlocked Ability: Airplane Ammo Feed!"); break;
+        case 7200161: g_state.abilities.long_jump = true; g_state.add_log("Unlocked Ability: Long Jump!"); break;
         case 7200008: g_state.vip_passes.insert("Sailor Village"); g_state.add_log("Received Pete's VIP Pass (Sailor Village)!"); break;
         case 7200009: g_state.vip_passes.insert("Cossack Village"); g_state.add_log("Received Pete's VIP Pass (Cossack Village)!"); break;
         case 7200010: g_state.vip_passes.insert("Caveman Village"); g_state.add_log("Received Pete's VIP Pass (Caveman Village)!"); break;
@@ -1435,9 +1459,8 @@ static void apply_ap_item_by_id_locked(int item_id,
             g_pending_wallet_crystals.fetch_add(10);
             g_state.add_log("Received Croc Crystals (+10)!");
             break;
-        case 7200151: // Fire Breakout Trap: INSTANT heart down + flame animation & knockback
-            if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
-            g_pending_heart_damage.fetch_add(1);
+        case 7200151: // Fire Breakout Trap: Croc's own lava reaction (bounce, tail smoke, flash, -1 heart)
+            g_pending_lava_hurt.fetch_add(1); // Croc's own lava reaction: bounce, tail smoke, flash, -1 heart
             g_state.fire_trap.active = true;
             g_state.fire_trap.timer = 2.0f;
             g_state.add_log("🔥 TRAP! Fire Breakout: Instant Heart Lost with Fire Knockback!");
@@ -1623,6 +1646,7 @@ static std::string build_state_json_locked() {
        << "\"abilities\":{"
        << "\"tail_whack\":" << (g_state.abilities.tail_whack ? "true" : "false") << ","
        << "\"butt_stomp\":" << (g_state.abilities.butt_stomp ? "true" : "false") << ","
+       << "\"long_jump\":" << (g_state.abilities.long_jump ? "true" : "false") << ","
        << "\"climbing_claws\":" << (g_state.abilities.climbing_claws ? "true" : "false") << ","
        << "\"power_gloves\":" << (g_state.abilities.power_gloves ? "true" : "false") << ","
        << "\"lever_wrench\":" << (g_state.abilities.lever_wrench ? "true" : "false") << ","
@@ -1750,11 +1774,29 @@ static std::string handle_command_locked(const std::string& req) {
             g_state.abilities.butt_stomp = true;
             g_state.abilities.climbing_claws = true;
             g_state.abilities.power_gloves = true;
+            g_state.abilities.long_jump = true;
         }
         if (!g_state.shuffle_levers) g_state.abilities.lever_wrench = true;
         if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
         if (!g_state.shuffle_plane_guns) g_state.abilities.airplane_ammo_feed = true;
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
+    }
+
+    if (cmd == "debug_lava_hurt") {
+        if (!g_state.debug_watch) return "{\"status\":\"refused\"}";
+        g_lava_entry_offset.store(extract_json_int(req, "entry", 0));
+        g_pending_lava_hurt.fetch_add(1);
+        return "{\"status\":\"ok\"}";
+    }
+
+    if (cmd == "debug_hurt_opcode") {
+        // Testing aid (debug_watch only): runs one of the game's hurt opcode handlers on Croc next frame.
+        int op = extract_json_int(req, "opcode", 0);
+        if (!g_state.debug_watch || (op != 154 && op != 155 && op != 455 && op != 457)) {
+            return "{\"status\":\"refused\"}";
+        }
+        g_debug_hurt_opcode.store(op);
+        return "{\"status\":\"ok\"}";
     }
 
     if (cmd == "get_claimed_locations") {
@@ -1899,6 +1941,7 @@ static std::string handle_command_locked(const std::string& req) {
         else if (item_name == "Lever Wrench") g_state.abilities.lever_wrench = true;
         else if (item_name == "Vehicle License") g_state.abilities.vehicle_license = true;
         else if (item_name == "Airplane Ammo Feed") g_state.abilities.airplane_ammo_feed = true;
+        else if (item_name == "Long Jump") g_state.abilities.long_jump = true;
         else if (item_name == "Jigsaw Piece" || group == "Jigsaw Pieces") {
             g_state.jigsaw_pieces += 1;
             g_pending_jigsaws.fetch_add(1);
@@ -2027,8 +2070,8 @@ static std::string handle_command_locked(const std::string& req) {
 
         if (trap_type == "fire_breakout") {
             display_name = "Fire Breakout Trap";
-            if (g_state.current_hearts > 0) g_state.current_hearts -= 1;
-            g_pending_heart_damage.fetch_add(1);
+            if (g_state.current_hearts > 0) g_state.current_hearts -= 1; // bookkeeping; resynced from the game
+            g_pending_lava_hurt.fetch_add(1);                             // real effect: Croc's lava reaction
             g_state.fire_trap.active = true;
             g_state.fire_trap.timer = 2.0f;
             g_state.add_log("🔥 FIRE BREAKOUT TRAP! Instant Heart Lost with Fire Knockback!");
@@ -2884,14 +2927,21 @@ static void inspect_and_sync_save_lifecycle_locked(const MapCoords& curr) {
         g_exe_base + RVA_SAVE_DATA_TABLE + RVA_RANDO_SAVE_FOOTER_OFF
     );
 
-    // Title Screen / Main Menu or initial boot frames. Tribe 0 alone is not enough: T0L1M003 is a real
-    // stage (Inca Door 5, "Burning Down the Forest") and must not wipe the randomizer save state.
-    const bool is_title_screen = (curr.tribe < 0 || curr.tribe > 5) || (curr.tribe == 0 && curr.level == 0);
+    // Title Screen / Main Menu or initial boot frames. Seen in testing: boot = T0L0M000, title menu =
+    // T0I0M000, Continue screen after a game over = T0I0M002. Only sub-area 0 is the front end: the
+    // Continue screen is mid-game and must keep the randomizer state, and T0L1M003 is a real stage
+    // (Inca Door 5, "Burning Down the Forest").
+    const bool is_title_screen = (curr.tribe < 0 || curr.tribe > 5) ||
+                                 (curr.tribe == 0 && curr.level == 0 && curr.submap == 0);
     if (is_title_screen) {
         if (g_state.in_active_save || g_state.save_locked_to_mod) {
             g_state.in_active_save = false;
             g_state.save_locked_to_mod = false;
             g_in_redirected_stage = false;
+            // Forget the previous save's seed: otherwise a New Game started after loading a save kept that
+            // save's seed (same door shuffle, collected crystals and unlocked abilities). Loading a save
+            // restores its seed from the footer.
+            g_state.current_save_seed = 0;
             g_state.add_log("Returned to Title Screen — Mod Toggle (F10) is now unlocked.");
         }
         // Clear any in-memory footer magic while on the Title Screen so starting a New Game
@@ -3102,6 +3152,35 @@ static MapCoords resolve_map_load_locked(const MapCoords& req) {
         return dest;
     }
 
+    // Loading a save from the title screen: the game spawns Croc at the hub door of the LAST STAGE played
+    // (kept in the previous-map coordinates). With door shuffle that is the stage's own vanilla door, not
+    // the door that leads to it in this seed, and after a restart nothing in memory remembers which door
+    // that was. Work it out from the seed's door table instead and spawn Croc at that door.
+    if (!g_in_redirected_stage && is_hub_coords(req) && g_last_loaded.tribe == 0 && g_last_loaded.level == 0) {
+        const MapCoords prev = *reinterpret_cast<MapCoords*>(g_exe_base + RVA_PREV_MAP_TRIBE);
+        const std::string last_stage = coords_to_wad(prev);
+        int stage_i = find_stage_index_by_wad(last_stage);
+        debug_log_locked("LOAD SAVE into " + coords_to_wad(req) + ", last stage " + last_stage);
+        if (stage_i >= 0) {
+            const std::string stage_entrance = kStageDoors[stage_i].vanilla_wad;
+            for (int d = 0; d < 20; ++d) {
+                auto it = g_state.door_overrides.find(kStageDoors[d].vanilla_wad);
+                if (it == g_state.door_overrides.end() || it->second != stage_entrance) continue;
+                if (d == stage_i) break; // not shuffled: the game's spawn is already right
+                MapCoords door{};
+                if (!wad_to_coords(kStageDoors[d].vanilla_wad, door) || door.tribe != req.tribe) break;
+                g_saved_orig_door = door;   // the hub spawn fixup looks for this door's trigger
+                g_saved_hub = req;          // used by the hub-return branch below
+                wad_to_coords(stage_entrance, g_saved_rand_stage);
+                g_in_redirected_stage = true;
+                g_fix_spawn_this_load = true;
+                debug_log_locked(std::string("LOAD SAVE: spawn at ") + kStageDoors[d].door_id +
+                                 " (leads to " + stage_entrance + ") instead of that stage's own door");
+                break;
+            }
+        }
+    }
+
     if (g_in_redirected_stage && is_hub_coords(req)) {
         // Leaving a shuffled stage. The game sends Croc to the hub of the stage's own tribe, which is
         // wrong for cross-village shuffles (e.g. an Inca stage behind a Sailor door would exit into a
@@ -3270,6 +3349,10 @@ static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t sub
         std::lock_guard<std::mutex> lock(g_mutex);
         MapCoords req{tribe, level, submap, map_type};
         MapCoords dest = resolve_map_load_locked(req);
+        g_crystals_collecting.clear();
+        g_crystal_spawn_queue.clear();
+        g_last_map_load_tick = GetTickCount();
+        if (find_stage_index_by_wad(coords_to_wad(dest)) >= 0) clear_coloured_crystal_state(dest);
         debug_log_locked("LoadMap " + coords_to_wad(req) + (coords_to_wad(dest) != coords_to_wad(req) ? " -> " + coords_to_wad(dest) : std::string()) +
                          " (from " + coords_to_wad(g_last_loaded) + ", shuffled_stage=" + (g_in_redirected_stage ? "1" : "0") + ")");
         if (dest.tribe != req.tribe || dest.level != req.level ||
@@ -3365,8 +3448,9 @@ static void drain_pending_native_inventory_grants() {
         i32(RVA_HUD_CLOCKWORK_GOBBOS) = std::min(9, g_state.clockwork_gobbos);
     }
 
-    // Golden Gobbos / Trophies -> Wheel item_type 2 (0x140BA9B40)
-    sync_item(i32(RVA_INV_GOLDEN_GOBBOS), g_state.golden_gobbos, 2);
+    // Golden Gobbos used to be synced as wheel item_type 2 (0x140BA9B40), but in-game testing showed type 2
+    // is the binoculars, so received Golden Gobbos showed up as binoculars. Disabled until the real Golden
+    // Gobbo counter is found; the count is still tracked in g_state.golden_gobbos and the save footer.
 
     // Jigsaw Pieces -> Wheel item_type 10 (0x140BA9B60)
     sync_item(i32(RVA_INV_JIGSAW_PIECES), g_state.jigsaw_pieces, 10);
@@ -3408,6 +3492,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
 
     int dmg_to_apply = 0;
     int pots_to_apply = 0;
+    bool detach_climb_after_unlock = false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         auto* curr = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
@@ -3423,6 +3508,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             }
         }
         if (!g_state.is_mod_enabled_toggle()) {
+            set_wallet_patches(false); // vanilla save / mod off: original wallet behaviour
             return buttons;
         }
 
@@ -3450,6 +3536,8 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             }
             s_prev_state = state;
         }
+
+        apply_crystal_persistence_locked(*curr);
 
         // Only drain pending heart grants while actually in-game (never on the Title Screen),
         // so items received before a save is started/loaded are never silently lost.
@@ -3487,17 +3575,8 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         // Sync Colored Crystal count for current stage -> activates Golden Gobbo at 5/5!
         uintptr_t crystal_ptr = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_COLORED_CRYSTAL_PTR);
         if (crystal_ptr != 0) {
-            int32_t in_stage_val = *reinterpret_cast<int32_t*>(crystal_ptr);
-            int in_stage_gems = in_stage_val / 0x1000;
-            if (stage_idx >= 0 && g_state.is_randomizer_active()) {
-                static const char* kGemColors[5] = {"Red", "Blue", "Green", "Yellow", "Purple"};
-                for (int g = 0; g < in_stage_gems && g < 5; ++g) {
-                    claim_solo_check_locked(
-                        stage_idx, 3 + g,
-                        std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[g] + " Crystal"
-                    );
-                }
-            }
+            // Coloured crystal checks are sent by Hooked_GainCrystal (strat opcode 173), which knows the
+            // exact colour. This block only keeps the displayed counts at the crystals RECEIVED.
 
             if (g_state.colored_crystals_mode == 1 && g_state.is_randomizer_active()) {
                 std::string canonical_wad = (stage_idx >= 0)
@@ -3515,11 +3594,16 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 // Clamp HUD crystal display to the number of colored crystals ACTUALLY received for this stage!
                 // This prevents picking up an in-level check from falsely filling the player's HUD crystal inventory.
                 *reinterpret_cast<int32_t*>(crystal_ptr) = game_val;
+                // The HUD's coloured-crystal display reads its own per-stage count (0xBC4DAC), which the
+                // remaster also restores from its saved crystal state on entry. Seen in testing: the red crystal
+                // picked up as a check still showed in the HUD after reloading. Keep it at the received count.
+                *reinterpret_cast<int32_t*>(g_exe_base + RVA_STAGE_COLORED_COUNT) = count;
             }
         }
 
         // Enforce Randomized Moveset Locks & Active Traps in ANY Randomizer Save (both Solo Seed & Archipelago)!
         int32_t paused = *reinterpret_cast<int32_t*>(g_exe_base + RVA_PAUSE_MENU_ACTIVE);
+        if (!g_state.is_randomizer_active()) g_jump_lock_active.store(false);
         if (g_state.is_randomizer_active() && paused == 0 && curr->map_type != 3) {
             bool has_tail_knot = false;
             bool has_lead_boots = false;
@@ -3548,55 +3632,18 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
-            static bool s_airborne_butt_stomp_locked = false;
-
+            // Jump lock (Butt Stomp / High Jump): decided in Hooked_StratReadValue, at the moment Croc's script
+            // reads the controller. Here only whether it applies.
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
-                s_airborne_butt_stomp_locked = false;
-            } else if (!g_state.abilities.butt_stomp) {
-                // Read Croc's physics state safely with strict pointer validation:
-                bool is_on_ground = false;
-                uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
-                if (player_strat > 0x10000 && player_strat < 0x7FFFFFFFFFFF) {
-                    if (!IsBadReadPtr(reinterpret_cast<const void*>(player_strat), 0xD0)) {
-                        int32_t action_state = *reinterpret_cast<int32_t*>(player_strat + 0x44);
-                        if (action_state == 3) {
-                            *reinterpret_cast<int32_t*>(player_strat + 0x44) = 2; // Force reset out of Butt Stomp
-                        }
-                        if (action_state == 0) {
-                            is_on_ground = true;
-                        } else {
-                            uintptr_t floor_poly = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
-                            if (floor_poly > 0x10000 && floor_poly < 0x7FFFFFFFFFFF) {
-                                if (!IsBadReadPtr(reinterpret_cast<const void*>(floor_poly), sizeof(int32_t))) {
-                                    int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
-                                    int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
-                                    if (croc_y <= floor_y || std::abs(croc_y - floor_y) < 0x1000) {
-                                        is_on_ground = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (is_on_ground) {
-                    s_airborne_butt_stomp_locked = false;
-                } else {
-                    // While airborne: any newly pressed jump or released jump strictly locks out Butt Stomp
-                    if ((newly_pressed & 0x4000u) || !(buttons & 0x4000u)) {
-                        s_airborne_butt_stomp_locked = true;
-                    }
-                    if (s_airborne_butt_stomp_locked) {
-                        buttons &= ~0x4000u; // Suppress mid-air Jump button so Butt Stomp cannot trigger
-                    }
-                }
-
-                // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
-                // Note: Keep L2 (0x0100) and R2 (0x0200) enabled so the player can cycle through the inventory wheel
-                buttons &= ~0x0C00u;
+                g_jump_lock_active.store(false);
             } else {
-                s_airborne_butt_stomp_locked = false;
+                g_jump_lock_active.store(!g_state.abilities.butt_stomp);
+            }
+
+            // Long Jump (front flip): L1 + R1 together. L1 or R1 alone stays usable.
+            if (!g_state.abilities.long_jump && (buttons & 0x0C00u) == 0x0C00u) {
+                buttons &= ~0x0C00u;
             }
 
             // Gating climbing claws: prevent grabbing climb surfaces by zeroing RVA_CLIMB_ALLOWED_BYTE
@@ -3608,15 +3655,11 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 if (wall_climbing != 0 || bar_climbing != 0) {
                     *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
                     *reinterpret_cast<int32_t*>(g_exe_base + 0x00BD1B60) = 0;
-                    {
-                        std::lock_guard<std::mutex> lock(g_mutex);
-                        trigger_climb_blocked_toast_locked();
-                    }
-                    using FnDetachAllClimb = void(__fastcall*)();
-                    auto fn_detach = reinterpret_cast<FnDetachAllClimb>(g_exe_base + 0x0020E130);
-                    if (fn_detach) {
-                        fn_detach();
-                    }
+                    // g_mutex is already held here (this whole block runs under the lock taken at the top of
+                    // Hooked_ReadInput). Locking it again threw std::system_error ("resource deadlock would
+                    // occur") and crashed the game whenever Croc touched a climbable surface without claws.
+                    trigger_climb_blocked_toast_locked();
+                    detach_climb_after_unlock = true; // game call deferred until the lock is released
                 }
             }
 
@@ -3666,7 +3709,11 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
     int32_t* p_curr_hearts = reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
     if (*p_max_pots > 0) {
         if (dmg_to_apply > 0) {
+            int before = *p_curr_hearts;
             *p_curr_hearts = std::max(0, *p_curr_hearts - dmg_to_apply);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked("TRAP damage " + std::to_string(dmg_to_apply) + ": hearts " + std::to_string(before) +
+                             " -> " + std::to_string(*p_curr_hearts) + " (max " + std::to_string(*p_max_pots) + ")");
         }
         if (pots_to_apply > 0) {
             *p_max_pots += pots_to_apply;
@@ -3675,6 +3722,107 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_state.max_heart_pots = *p_max_pots;
         g_state.current_hearts = *p_curr_hearts;
+    }
+
+    // debug_watch: log every heart drop, and open a 1.5 s window in which all action changes are logged
+    {
+        static int32_t s_prev_hearts = -1;
+        int32_t hearts = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+        if (s_prev_hearts >= 0 && hearts < s_prev_hearts && g_state.debug_watch) {
+            g_hit_log_until.store(GetTickCount() + 1500);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked("HEARTS " + std::to_string(s_prev_hearts) + " -> " + std::to_string(hearts) +
+                             " state=" + std::to_string(*reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE)));
+        }
+        s_prev_hearts = hearts;
+    }
+
+    // Croc's lava-hurt routine. Traced in-game (debug_watch script tracer): when Croc touches lava his own
+    // strat script jumps to a routine that starts with "124 652720 / 94 0 2 8 0" and, 0x68 bytes later,
+    // "181 0 / 7 16 / 10 4096". It plays the bounce, the tail smoke and the flash, removes a heart through
+    // opcode 154, then jumps back into the main script. Script addresses move on every load, so the routine
+    // is found by these contents inside the memory region that holds Croc's script, then Croc's script
+    // pointer is set to it between frames. Falls back to plain opcode 154 if the routine can't be found.
+    if (g_pending_lava_hurt.load() > 0) {
+        void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+        int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+        int32_t paused = *reinterpret_cast<int32_t*>(g_exe_base + RVA_PAUSE_MENU_ACTIVE);
+        const MapCoords* where = reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+        bool in_level = where->tribe >= 1 && where->tribe <= 5 && where->map_type != 3;
+        if (player && in_level && state == 0 && paused == 0 && *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT) > 0) {
+            g_pending_lava_hurt.fetch_sub(1);
+            uintptr_t script_pos = *reinterpret_cast<uintptr_t*>(player);
+            static const int32_t kHead[7] = {124, 652720, 94, 0, 2, 8, 0};
+            static const int32_t kBody[6] = {181, 0, 7, 16, 10, 4096};
+            uintptr_t found = 0;
+            // Search every committed region of the allocation that holds Croc's script (the routine sat in an
+            // earlier region of the same allocation than the current script position in testing).
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (script_pos && VirtualQuery(reinterpret_cast<void*>(script_pos), &mbi, sizeof(mbi))) {
+                void* alloc = mbi.AllocationBase;
+                uintptr_t region = reinterpret_cast<uintptr_t>(alloc);
+                MEMORY_BASIC_INFORMATION r{};
+                while (!found && VirtualQuery(reinterpret_cast<void*>(region), &r, sizeof(r)) && r.AllocationBase == alloc) {
+                    if (r.State == MEM_COMMIT && r.RegionSize > 0x68 + sizeof(kBody)) {
+                        const uint8_t* lo = static_cast<const uint8_t*>(r.BaseAddress);
+                        const uint8_t* hi = lo + r.RegionSize - (0x68 + sizeof(kBody));
+                        for (const uint8_t* q = lo; q < hi; q += 4) {
+                            if (std::memcmp(q, kHead, sizeof(kHead)) == 0 && std::memcmp(q + 0x68, kBody, sizeof(kBody)) == 0) {
+                                found = reinterpret_cast<uintptr_t>(q);
+                                break;
+                            }
+                        }
+                    }
+                    region = reinterpret_cast<uintptr_t>(r.BaseAddress) + r.RegionSize;
+                }
+            }
+            int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+            if (found) {
+                // The routine is a subroutine: it ends with opcode 127, which pops a 64-bit return address off
+                // the strat's value stack (high half first, then low; see 0x14005DB80). Push Croc's current
+                // script position the same way a real call does, so the routine returns to where he was.
+                using FnPush = void(__fastcall*)(void* strat, int32_t value);
+                auto push = reinterpret_cast<FnPush>(g_exe_base + RVA_FN_STRAT_VM_PUSH_INT);
+                push(player, static_cast<int32_t>(script_pos & 0xFFFFFFFFu));
+                push(player, static_cast<int32_t>(script_pos >> 32));
+                // Lava sets Croc's script variable 19 to 1.0 (4096) right before calling the routine; at
+                // +0xC0 the routine compares it with 4096 (opcode 19, then 130) and skips the heart loss
+                // otherwise. Croc's own script clears it again next frame. Variables are int32[] at +0x118.
+                int32_t* croc_vars = *reinterpret_cast<int32_t**>(reinterpret_cast<uint8_t*>(player) + 0x118);
+                if (croc_vars) croc_vars[19] = 4096;
+                *reinterpret_cast<uintptr_t*>(player) = found + g_lava_entry_offset.load();
+                g_script_trace_after = 80; // debug_watch tracer: log the steps Croc runs from here
+            } else {
+                using FnHurt = void(__fastcall*)(void*);
+                reinterpret_cast<FnHurt>(g_exe_base + RVA_FN_HURT_CROC_HIT)(player);
+            }
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "LAVA HURT: routine %s (script %p -> %p), hearts before %d",
+                          found ? "found" : "NOT found, used opcode 154", reinterpret_cast<void*>(script_pos),
+                          reinterpret_cast<void*>(found), before);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked(buf);
+        }
+    }
+
+    if (int op = g_debug_hurt_opcode.load()) {
+        void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+        int32_t state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+        if (player && state == 0) {
+            g_debug_hurt_opcode.store(0);
+            uintptr_t fn = op == 154 ? 0x00065BD0 : op == 155 ? 0x00065F20 : op == 455 ? 0x002044E0 : 0x00204720;
+            int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+            using FnStrat = void(__fastcall*)(void*);
+            reinterpret_cast<FnStrat>(g_exe_base + fn)(player);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            debug_log_locked("DEBUG hurt opcode " + std::to_string(op) + ": hearts " + std::to_string(before) + " -> " +
+                             std::to_string(*reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4)));
+        }
+    }
+
+    if (detach_climb_after_unlock) {
+        using FnDetachAllClimb = void(__fastcall*)();
+        reinterpret_cast<FnDetachAllClimb>(g_exe_base + 0x0020E130)();
     }
 
     drain_pending_native_inventory_grants();
@@ -3845,14 +3993,18 @@ static void __fastcall Hooked_PickupBinoculars(void* strat) {
 }
 
 // Opcode 172 (0xAC): GiveInventoryItem(type) -> AddInventoryItem(type, 1, 1, 0) at 0x140041600.
-// The item type is the next int32 in the strat script stream (*(int32_t**)strat). Types match the
-// inventory wheel: 2 Golden Gobbo, 5 Red Jelly, 7 Blue Jelly, 8 Clockwork Gobbo, 10 Jigsaw Piece.
+// The item type is the next int32 in the strat script stream (*(int32_t**)strat). AddInventoryItem's
+// switch maps type -> counter: 2 -> 0xBA9B40 (labelled "golden gobbos", but observed giving binoculars),
+// 4 -> 0xBA9B5C, 5 red jelly, 6 green jelly, 7 blue jelly, 8 clockwork, 9/12/13/14 keys, 10 jigsaw.
 static FnStratVmHandler g_orig_give_inv_item = nullptr;
 static void __fastcall Hooked_GiveInventoryItem(void* strat) {
     int32_t type = **reinterpret_cast<int32_t**>(strat);
     Pickup kind = Pickup::Other;
     switch (type) {
-        case 2: kind = Pickup::GoldenGobbo; break;
+        // Type 2 is the Magic Eye-Zoomers (binoculars), not a Golden Gobbo: in testing, the Sailor Village
+        // crate gave the binoculars through GiveInventoryItem(2). Treated like the binoculars opcode
+        // (randomized in solo, vanilla in a multiworld).
+        case 2: kind = Pickup::Binoculars; break;
         case 5: kind = Pickup::RedJelly; break;
         case 7: kind = Pickup::BlueJelly; break;
         case 8: kind = Pickup::Clockwork; break;
@@ -3892,8 +4044,10 @@ static std::string read_msvc_string(const void* str) {
     return chars ? std::string(chars, static_cast<size_t>(size)) : std::string();
 }
 
+// Deliberately lock-free: the game can award achievements from inside calls the mod makes while it
+// already holds g_mutex, and std::mutex is not re-entrant. Only a bool is read and the log file is
+// appended (the CRT serialises fprintf), so no lock is needed.
 static void log_achievement(const char* kind, void* id, int32_t value) {
-    std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_state.debug_watch) return;
     const MapCoords cur = *reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
     debug_log_locked(std::string("ACHIEVEMENT ") + kind + " " + read_msvc_string(id) + " value=" +
@@ -3910,17 +4064,484 @@ static uint64_t __fastcall Hooked_IncrementAchievement(void* id, int32_t value) 
     return g_orig_increment_achievement(id, value);
 }
 
+// debug_watch: log the hurt-related strat opcodes (154 hurt, 155 reset to checkpoint, 291 checkpoint state,
+// 455/457 hurt with coloured effect) with the strat that ran them. Used to find what an enemy hit and a
+// fire hazard actually execute. Lock-free (see log_achievement).
+static FnStratVmHandler g_orig_hurt_ops[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+static const int kHurtOps[5] = {154, 155, 291, 455, 457};
+static void log_hurt_op(int idx, void* strat) {
+    if (!g_state.debug_watch) return;
+    char buf[160];
+    void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+    std::snprintf(buf, sizeof(buf), "OPCODE %d by strat %p (player ptr %p%s) hearts=%d", kHurtOps[idx], strat, player,
+                  strat == player ? ", MATCH" : "", *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4));
+    debug_log_locked(buf);
+}
+static void __fastcall Hooked_HurtOp0(void* s) { log_hurt_op(0, s); g_orig_hurt_ops[0](s); }
+static void __fastcall Hooked_HurtOp1(void* s) { log_hurt_op(1, s); g_orig_hurt_ops[1](s); }
+static void __fastcall Hooked_HurtOp2(void* s) { log_hurt_op(2, s); g_orig_hurt_ops[2](s); }
+static void __fastcall Hooked_HurtOp3(void* s) { log_hurt_op(3, s); g_orig_hurt_ops[3](s); }
+static void __fastcall Hooked_HurtOp4(void* s) { log_hurt_op(4, s); g_orig_hurt_ops[4](s); }
+
+// ============================================================================
+// Wallet: in vanilla, leaving a level adds that level's crystal counter (0xBA9B3C) to the wallet (0xBA9A9C) in
+// two places: 0x14002BE51 "add eax, [counter]" in OnDoorTransition (wallet = min(9999, wallet + counter)) and
+// 0x14002EFB6 "add [wallet], eax" in the map loader. In randomizer saves crystals are checks, not currency, so
+// both 6-byte instructions are replaced with NOPs; the original bytes are restored for vanilla saves.
+// ============================================================================
+struct CodePatch { uintptr_t rva; uint8_t expect[6]; bool applied; };
+static CodePatch g_wallet_patches[2] = {
+    {0x0002BE51, {0x03, 0x05, 0xE5, 0xDC, 0xB7, 0x00}, false},
+    {0x0002EFB6, {0x01, 0x05, 0xE0, 0xAA, 0xB7, 0x00}, false},
+};
+
+static void set_wallet_patches(bool enable) {
+    for (auto& pt : g_wallet_patches) {
+        if (pt.applied == enable) continue;
+        uint8_t* code = reinterpret_cast<uint8_t*>(g_exe_base + pt.rva);
+        static const uint8_t kNop6[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+        if (std::memcmp(code, enable ? pt.expect : kNop6, 6) != 0) continue; // unexpected bytes: leave alone
+        DWORD old = 0;
+        VirtualProtect(code, 6, PAGE_EXECUTE_READWRITE, &old);
+        std::memcpy(code, enable ? kNop6 : pt.expect, 6);
+        VirtualProtect(code, 6, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), code, 6);
+        pt.applied = enable;
+        debug_log_locked(std::string("WALLET level-crystal transfer ") + (enable ? "disabled" : "restored") +
+                         " at croc2.exe+" + [&] { char b[16]; std::snprintf(b, sizeof(b), "0x%llX", (unsigned long long)pt.rva); return std::string(b); }());
+    }
+}
+
+// ============================================================================
+// White crystal persistence. The remaster remembers coloured crystals per level but white crystals respawn on
+// every visit. In a randomizer save, each white crystal collected is remembered by map and spawn position
+// (white crystal strats are all named "crystal" with the same var 0, but each sits at a fixed position) in
+// croc2ap_crystals_<seed>.txt next to croc2.exe. On every frame, crystal strats at remembered positions in the
+// current map are removed (the stRemove flags, strat+0xFC |= 6), and shortly after entering a stage its
+// top-right counter is restored to the number remembered for that stage.
+// ============================================================================
+// True if [p, p+size) lies in committed, readable memory (checked fresh every call: memory can be freed between
+// frames, so no caching).
+static bool readable_memory(const void* p, size_t size) {
+    uintptr_t a = reinterpret_cast<uintptr_t>(p);
+    if (a < 0x10000 || a + size < a) return false;
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                           PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if (!(mbi.Protect & readable) || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return false;
+    uintptr_t lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress), hi = lo + mbi.RegionSize;
+    return a >= lo && a + size <= hi;
+}
+
+struct CollectedCrystal { std::string wad; int32_t x, y, z; };
+static std::vector<CollectedCrystal> g_collected_crystals;
+static uint64_t g_collected_crystals_seed = 0;
+static bool g_collected_crystals_loaded = false;
+
+static std::string collected_crystals_path(uint64_t seed) {
+    char path[MAX_PATH] = {0};
+    GetModuleFileNameA(nullptr, path, MAX_PATH);
+    std::string p(path);
+    size_t slash = p.find_last_of("\\/");
+    char name[64];
+    std::snprintf(name, sizeof(name), "croc2ap_crystals_%016llX.txt", static_cast<unsigned long long>(seed));
+    return (slash == std::string::npos ? std::string() : p.substr(0, slash + 1)) + name;
+}
+
+static void ensure_collected_crystals_loaded_locked() {
+    uint64_t seed = g_state.current_save_seed;
+    if (g_collected_crystals_loaded && seed == g_collected_crystals_seed) return;
+    g_collected_crystals.clear();
+    g_collected_crystals_seed = seed;
+    g_collected_crystals_loaded = true;
+    if (seed == 0) return;
+    FILE* f = std::fopen(collected_crystals_path(seed).c_str(), "r");
+    if (!f) return;
+    char wad[16];
+    CollectedCrystal c;
+    while (std::fscanf(f, "%15s %d %d %d", wad, &c.x, &c.y, &c.z) == 4) {
+        c.wad = wad;
+        g_collected_crystals.push_back(c);
+    }
+    std::fclose(f);
+}
+
+static bool crystal_collected_locked(const std::string& wad, int32_t x, int32_t y, int32_t z) {
+    for (const auto& c : g_collected_crystals) {
+        if (c.x == x && c.y == y && c.z == z && c.wad == wad) return true;
+    }
+    return false;
+}
+
+static void remember_crystal_locked(const std::string& wad, int32_t x, int32_t y, int32_t z) {
+    ensure_collected_crystals_loaded_locked();
+    if (g_collected_crystals_seed == 0 || crystal_collected_locked(wad, x, y, z)) return;
+    g_collected_crystals.push_back({wad, x, y, z});
+    if (FILE* f = std::fopen(collected_crystals_path(g_collected_crystals_seed).c_str(), "a")) {
+        std::fprintf(f, "%s %d %d %d\n", wad.c_str(), x, y, z);
+        std::fclose(f);
+    }
+}
+
+// Number of white crystals remembered for every sub-area of the given stage (same 4-char prefix, e.g. "T1L6").
+static int collected_crystals_in_stage_locked(const std::string& stage_wad) {
+    int n = 0;
+    for (const auto& c : g_collected_crystals) {
+        if (c.wad.compare(0, 4, stage_wad, 0, 4) == 0 && c.wad.back() != '*') ++n; // '*' = coloured
+    }
+    return n;
+}
+
+// Coloured crystals: the remaster's saved crystal state (save table +0x4F8 + map_index * 0x3C, first 5 ints =
+// Red..Purple) both shows the crystal in the HUD and stops it spawning, including crystals that spawn mid-level
+// (from a smashed box). With crystals shuffled, keep it cleared so every coloured crystal can spawn, and let the
+// mod remove the collected ones by position. Cleared before a stage loads (resolve_map_load_locked) and every
+// frame while in it. Side effect: the HUD shows no coloured crystals.
+static void clear_coloured_crystal_state(const MapCoords& m) {
+    if (g_state.colored_crystals_mode != 1 || !g_state.is_randomizer_active() || !g_state.save_locked_to_mod) return;
+    int32_t* gem_state = reinterpret_cast<int32_t*>(g_exe_base + RVA_SAVE_DATA_TABLE + 0x4F8 + map_flag_index(m) * 0x3C);
+    for (int g = 0; g < 5; ++g) gem_state[g] = 0;
+}
+
+static std::string g_crystal_wad;              // current map, for the spawn hook
+static int32_t* g_coloured_state_ptr = nullptr; // remaster saved coloured-crystal state for the current stage
+static void clear_coloured_crystal_state_fast() {
+    if (int32_t* g = g_coloured_state_ptr) { g[0] = g[1] = g[2] = g[3] = g[4] = 0; }
+}
+
+// Runs on the game thread every frame (inside the Hooked_ReadInput lock).
+static void apply_crystal_persistence_locked(const MapCoords& cur) {
+    const bool rando_save = g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && g_state.save_locked_to_mod;
+    set_wallet_patches(rando_save);
+    if (!rando_save) return;
+    ensure_collected_crystals_loaded_locked();
+    // Everything below only needs to run when the map changes or the counter restore is pending.
+    static MapCoords s_last{-1, -1, -1, -1};
+    static bool s_restore_pending = false;
+    const bool map_changed = std::memcmp(&s_last, &cur, sizeof(MapCoords)) != 0;
+    if (map_changed) { s_last = cur; s_restore_pending = true; g_crystal_wad = coords_to_wad(cur); }
+    check_crystal_spawn_queue_locked();
+    if (!map_changed && !s_restore_pending) { clear_coloured_crystal_state_fast(); return; }
+    if (g_collected_crystals.empty()) return;
+    const std::string& wad = g_crystal_wad;
+
+    // Restore the stage's top-right counter once, about a second after entering it.
+    static std::string s_counter_stage;
+    static DWORD s_entered = 0;
+    int stage_idx = find_stage_index_by_wad(wad);
+    std::string stage_key = stage_idx >= 0 ? std::string(kStageDoors[stage_idx].vanilla_wad) : std::string();
+    if (stage_key != s_counter_stage) {
+        s_counter_stage = stage_key;
+        s_entered = GetTickCount();
+    }
+    if (!stage_key.empty() && s_entered && GetTickCount() - s_entered > 1000) {
+        int remembered = collected_crystals_in_stage_locked(stage_key);
+        int32_t& counter = *reinterpret_cast<int32_t*>(g_exe_base + RVA_LEVEL_CRYSTALS);
+        if (counter < remembered) {
+            if (g_state.debug_watch) {
+                debug_log_locked("CRYSTALS counter " + std::to_string(counter) + " -> " + std::to_string(remembered) +
+                                 " for " + stage_key);
+            }
+            counter = remembered;
+        }
+        s_entered = 0; // once per stage entry
+    }
+    if (stage_key.empty() || !s_entered) s_restore_pending = false;
+
+    g_coloured_state_ptr = stage_idx >= 0 && g_state.colored_crystals_mode == 1
+        ? reinterpret_cast<int32_t*>(g_exe_base + RVA_SAVE_DATA_TABLE + 0x4F8 + map_flag_index(cur) * 0x3C) : nullptr;
+    clear_coloured_crystal_state_fast();
+}
+
+// Spawn-time removal of already-collected crystals. Traced in-game: every white crystal strat ("crystal") runs
+// opcode 180 within its first few instructions, and every coloured one ("bonus crystal") runs opcode 329 (the
+// remaster's saved-crystal check). Both slots are hooked; when the running strat is a crystal at a remembered
+// position in this map it is removed (stRemove flags, +0xFC |= 6). Costs one pointer read and a char compare
+// for other strats, and nothing per frame.
+static FnStratVmHandler g_orig_crystal_spawn_180 = nullptr;
+static FnStratVmHandler g_orig_crystal_spawn_329 = nullptr;
+// 0 = not a crystal, 1 = white, 2 = coloured
+static int crystal_kind(const uint8_t* st) {
+    const char* name = *reinterpret_cast<const char* const*>(st + 0x30);
+    if (!name || (name[0] != 'c' && name[0] != 'b')) return 0;
+    if (std::strcmp(name, "crystal") == 0) return 1;
+    return std::strcmp(name, "bonus crystal") == 0 ? 2 : 0;
+}
+static bool remove_crystal_if_collected_locked(uint8_t* st, int kind) {
+    if (g_collected_crystals.empty() || g_crystal_wad.empty()) return false;
+    if (!crystal_collected_locked(kind == 2 ? g_crystal_wad + "*" : g_crystal_wad, *reinterpret_cast<int32_t*>(st + 0x4C),
+                                  *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54))) return false;
+    *reinterpret_cast<uint32_t*>(st + 0xFC) |= 6;
+    if (g_state.debug_watch) debug_log_locked(std::string("CRYSTALS removed collected ") + (kind == 2 ? "bonus crystal" : "crystal") + " in " + g_crystal_wad);
+    return true;
+}
+// White crystals run opcode 180 before their position / the current map is final, so each one is also queued
+// and checked again from the input hook once the map has settled (only the queued strats, no list walk).
+static void remove_if_collected(void* strat) {
+    uint8_t* st = static_cast<uint8_t*>(strat);
+    const int kind = crystal_kind(st);
+    if (!kind) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (remove_crystal_if_collected_locked(st, kind)) return;
+    if (g_crystal_spawn_queue.size() < 512 &&
+        std::find(g_crystal_spawn_queue.begin(), g_crystal_spawn_queue.end(), strat) == g_crystal_spawn_queue.end())
+        g_crystal_spawn_queue.push_back(strat);
+}
+static void check_crystal_spawn_queue_locked() {
+    if (g_crystal_spawn_queue.empty()) return;
+    if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE) != 0 || GetTickCount() - g_last_map_load_tick < 500) return;
+    for (void* p : g_crystal_spawn_queue) {
+        uint8_t* st = static_cast<uint8_t*>(p);
+        if (std::find(g_crystals_collecting.begin(), g_crystals_collecting.end(), p) != g_crystals_collecting.end()) continue;
+        if (*reinterpret_cast<uint32_t*>(st + 0xFC) & 4) continue;
+        if (int kind = crystal_kind(st)) remove_crystal_if_collected_locked(st, kind);
+    }
+    g_crystal_spawn_queue.clear();
+}
+static void __fastcall Hooked_CrystalSpawn180(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_180(strat); }
+static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_329(strat); }
+
+// Strat opcode 4 (0x140068CA0): push game value N (0x140067EA0). Croc's script reads the controller through it
+// (values 42, 44 and 144, tested against Jump = 16384 in every on-foot state, including the stomp checks).
+// Jump lock, while Butt Stomp is locked: recorded in-game, bit 1 of Croc's strat +0x100 is clear exactly while he
+// is off the ground. Once Jump has been let go in the air (the game's own held buttons, 0xBC4B54), the Jump bit is
+// cleared from these reads for Croc's strat until he is back on the ground. The controller itself is never
+// masked, so the game's landing, auto-jump and jump-height code see the real input; a jump held from the ground
+// still reaches full height.
+static FnStratVmHandler g_orig_strat_read_value = nullptr;
+static void __fastcall Hooked_StratReadValue(void* strat) {
+    const int32_t which = **reinterpret_cast<int32_t**>(strat); // argument word, before the handler consumes it
+    g_orig_strat_read_value(strat);
+    // Any strat: the controller values are global, and Croc's moves are not all read by his own strat.
+    if ((which != 42 && which != 44 && which != 144) || !g_jump_lock_active.load(std::memory_order_relaxed)) return;
+    uint8_t* croc = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
+    if (!croc) return;
+    uint8_t* sp = static_cast<uint8_t*>(strat);
+    static bool s_held_from_ground = true;
+    static bool s_prev_ground = true, s_prev_hidden = false;
+    const bool on_ground = (*reinterpret_cast<uint32_t*>(croc + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
+    const bool held = (*reinterpret_cast<uint32_t*>(g_exe_base + RVA_HELD_BUTTONS) & 0x4000u) != 0;
+    // A press that starts in the air stays hidden after landing until Jump is released: Croc's landing code
+    // turns Jump still held at touchdown into the stomp / high jump (seen with X pressed just before a front
+    // flip lands).
+    static bool s_air_press = false;
+    if (on_ground) s_held_from_ground = true;
+    else if (!held) s_held_from_ground = false;
+    if (!on_ground && !s_held_from_ground && held) s_air_press = true;
+    if (!held) s_air_press = false;
+    const bool hide = (!on_ground && !s_held_from_ground) || s_air_press;
+    int32_t* top = nullptr;
+    if (*reinterpret_cast<int32_t*>(sp + 0x138) > 0) top = reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4);
+    if (g_state.debug_watch && which != 144 &&
+        (on_ground != s_prev_ground || hide != s_prev_hidden || (hide && top && (*top & 0x4000)))) {
+        char b[128];
+        const char* nm = *reinterpret_cast<const char**>(sp + 0x30);
+        std::snprintf(b, sizeof(b), "JUMPLOCK %s read %d=0x%X ground=%d held=%d hide=%d", strat == croc ? "croc" : (nm ? nm : "?"),
+                      which, top ? *top : -1, on_ground, held, hide);
+        std::lock_guard<std::mutex> lock(g_mutex);
+        debug_log_locked(b);
+    }
+    s_prev_ground = on_ground;
+    s_prev_hidden = hide;
+    if (hide && top) *top &= ~0x4000;
+}
+
+// Strat opcode 173 (0x140066030): GainCrystal. Pops a value; value >> 12 of 1..5 is a coloured crystal of that
+// colour (AddColoredCrystal), anything else is a white crystal (top-right counter 0xBA9B3C += 1, plus the
+// 50/100 crystal bonuses). The opcode runs on the crystal's own strat.
+// - Coloured: send that colour's check. With crystals shuffled into the pool, skip adding it to Croc (the
+//   value is still popped); the remaster still records it as collected (opcode 330), so it won't respawn.
+// - White: debug_watch logs the crystal's identity (name, position, var 0) for crystal persistence work.
+static FnStratVmHandler g_orig_gain_crystal = nullptr;
+static void __fastcall Hooked_GainCrystal(void* strat) {
+    uint8_t* sp = static_cast<uint8_t*>(strat);
+    int32_t stack_count = *reinterpret_cast<int32_t*>(sp + 0x138);
+    int32_t value = stack_count > 0 ? *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4) : 0;
+    int colour = value >> 12;
+    bool coloured = colour >= 1 && colour <= 5;
+    bool suppress = false;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_state.debug_watch) {
+            const char* name = *reinterpret_cast<const char**>(sp + 0x30);
+            int32_t* vars = *reinterpret_cast<int32_t**>(sp + 0x118);
+            char buf[220];
+            std::snprintf(buf, sizeof(buf), "CRYSTAL %s value=%d strat=%p name=%.40s pos=%d,%d,%d var0=%d map=%s",
+                          coloured ? "coloured" : "white", value, strat, name ? name : "?",
+                          *reinterpret_cast<int32_t*>(sp + 0x4C), *reinterpret_cast<int32_t*>(sp + 0x50),
+                          *reinterpret_cast<int32_t*>(sp + 0x54), vars ? vars[0] : -1, g_state.current_wad.c_str());
+            debug_log_locked(buf);
+        }
+        if (coloured && g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active()) {
+            static const char* kGemColors[5] = {"Red", "Blue", "Green", "Yellow", "Purple"};
+            int stage_idx = find_stage_index_by_wad(g_state.current_wad);
+            if (stage_idx >= 0) {
+                claim_solo_check_locked(stage_idx, 3 + (colour - 1),
+                    std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[colour - 1] + " Crystal");
+            }
+            suppress = g_state.colored_crystals_mode == 1;
+        }
+        if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && g_state.save_locked_to_mod) {
+            g_crystals_collecting.push_back(strat);
+            if (g_crystals_collecting.size() > 256) g_crystals_collecting.erase(g_crystals_collecting.begin());
+            remember_crystal_locked(coloured ? g_state.current_wad + "*" : g_state.current_wad, *reinterpret_cast<int32_t*>(sp + 0x4C),
+                                    *reinterpret_cast<int32_t*>(sp + 0x50), *reinterpret_cast<int32_t*>(sp + 0x54));
+        }
+    }
+    if (suppress && stack_count > 0) {
+        using FnPop = int32_t(__fastcall*)(void*);
+        reinterpret_cast<FnPop>(g_exe_base + 0x0005DA70)(strat); // consume the value like the original would
+        return;
+    }
+    g_orig_gain_crystal(strat);
+}
+
 // SetActionState (0x14022E290): Core engine action state transition handler
 // action_id == 3 corresponds to Butt Stomp.
 static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
-    if (action_id == 3) {
-        if (g_state.is_mod_enabled_toggle() && !g_state.abilities.butt_stomp) {
-            return; // Reject entering Butt Stomp action state!
+    // debug_watch: log Croc's action changes (used to identify the "hurt" action for the fire trap).
+    // No lock taken: the game can call this from inside calls the mod makes while holding g_mutex.
+    if (g_state.debug_watch) {
+        void* player = *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR);
+        bool in_hit_window = static_cast<int32_t>(g_hit_log_until.load() - GetTickCount()) > 0;
+        static int32_t s_last_action = -1;
+        if (in_hit_window || (strat == player && action_id != s_last_action)) {
+            if (strat == player) s_last_action = action_id;
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "ACTION %p -> %d (player ptr %p%s) hearts=%d", strat, action_id, player,
+                          strat == player ? ", MATCH" : "", *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4));
+            debug_log_locked(buf);
         }
     }
+    // The original code refused action 3 here as "Butt Stomp" while it was locked. Recordings never showed a stomp
+    // going through this function, and refusing it was the prime suspect for the landing delay and broken
+    // auto-jump, so it's no longer touched. Butt Stomp is locked in Hooked_StratReadValue.
     if (g_orig_set_action_state) {
         g_orig_set_action_state(strat, action_id);
     }
+}
+
+// ============================================================================
+// debug_watch script tracer: records every strat opcode Croc's own script runs. When Croc runs opcode 154
+// (the heart loss of an enemy hit) the previous 128 steps and the next 160 are written to the debug log,
+// so the full hit sequence (flinch, knockback, flash) can be read and reproduced for the Fire Breakout trap.
+// Every one of the 468 opcode table slots gets a small generated stub: mov edx, opcode; mov r8, original;
+// mov rax, TraceOpcode; jmp rax. Only installed when debug_watch = 1.
+// ============================================================================
+static constexpr int kStratOpcodeCount = 468;
+struct ScriptTraceEntry { DWORD tick; int32_t op; uintptr_t pos; int32_t a0, a1, a2, a3; };
+static ScriptTraceEntry g_script_trace[128];
+static unsigned g_script_trace_head = 0;
+static int g_script_trace_dumps = 0;
+
+static void log_script_trace_entry(const char* tag, const ScriptTraceEntry& e) {
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), "%s t=%lu op=%d pos=%p args=%d,%d,%d,%d", tag, static_cast<unsigned long>(e.tick),
+                  e.op, reinterpret_cast<void*>(e.pos), e.a0, e.a1, e.a2, e.a3);
+    debug_log_locked(buf);
+}
+
+static void __fastcall TraceOpcode(void* strat, int32_t op, uintptr_t original) {
+    if (strat && strat == *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR)) {
+        const int32_t* args = *reinterpret_cast<int32_t**>(strat); // stream already points past the opcode
+        ScriptTraceEntry e{GetTickCount(), op, reinterpret_cast<uintptr_t>(args) - 4, args[0], args[1], args[2], args[3]};
+        if (g_script_trace_after > 0) {
+            log_script_trace_entry("TRACE after ", e);
+            --g_script_trace_after;
+        } else {
+            g_script_trace[g_script_trace_head++ & 127] = e;
+            if (op == 154 && g_script_trace_dumps < 5) {
+                ++g_script_trace_dumps;
+                debug_log_locked("==== Croc script trace: 128 steps before the hit (oldest first) ====");
+                for (unsigned i = 0; i < 128; ++i) {
+                    const ScriptTraceEntry& old = g_script_trace[(g_script_trace_head + i) & 127];
+                    if (old.tick) log_script_trace_entry("TRACE before", old);
+                }
+                debug_log_locked("==== hit (opcode 154); next 160 steps ====");
+                g_script_trace_after = 160;
+            }
+        }
+    }
+    reinterpret_cast<FnStratVmHandler>(original)(strat);
+}
+
+// debug_watch crash reporter: a first-in-line vectored exception handler that writes the crash location,
+// faulting address, registers and an unwound call stack (as croc2.exe / version.dll offsets) to the debug log
+// before the game's own crash reporter takes over. Only installed when debug_watch = 1.
+static std::string describe_address(DWORD64 a) {
+    HMODULE mod = nullptr;
+    char buf[96];
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(a), &mod) && mod) {
+        char name[MAX_PATH] = {0};
+        GetModuleFileNameA(mod, name, MAX_PATH);
+        const char* base = std::strrchr(name, '\\');
+        std::snprintf(buf, sizeof(buf), "%s+0x%llX", base ? base + 1 : name,
+                      static_cast<unsigned long long>(a - reinterpret_cast<DWORD64>(mod)));
+    } else {
+        std::snprintf(buf, sizeof(buf), "0x%llX", static_cast<unsigned long long>(a));
+    }
+    return buf;
+}
+
+static LONG CALLBACK DebugCrashReporter(EXCEPTION_POINTERS* ep) {
+    const DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != 0xC0000409 && code != EXCEPTION_ILLEGAL_INSTRUCTION) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    static std::atomic<int> s_reports{0};
+    if (s_reports.fetch_add(1) >= 3) return EXCEPTION_CONTINUE_SEARCH;
+    CONTEXT ctx = *ep->ContextRecord;
+    char buf[512];
+    std::snprintf(buf, sizeof(buf), "CRASH code=0x%08lX at %s, accessing 0x%llX", code,
+                  describe_address(ctx.Rip).c_str(),
+                  ep->ExceptionRecord->NumberParameters > 1
+                      ? static_cast<unsigned long long>(ep->ExceptionRecord->ExceptionInformation[1]) : 0ULL);
+    debug_log_locked(buf);
+    std::snprintf(buf, sizeof(buf), "CRASH rax=%llX rbx=%llX rcx=%llX rdx=%llX rsi=%llX rdi=%llX rbp=%llX rsp=%llX",
+                  ctx.Rax, ctx.Rbx, ctx.Rcx, ctx.Rdx, ctx.Rsi, ctx.Rdi, ctx.Rbp, ctx.Rsp);
+    debug_log_locked(buf);
+    std::snprintf(buf, sizeof(buf), "CRASH r8=%llX r9=%llX r10=%llX r11=%llX r12=%llX r13=%llX r14=%llX r15=%llX",
+                  ctx.R8, ctx.R9, ctx.R10, ctx.R11, ctx.R12, ctx.R13, ctx.R14, ctx.R15);
+    debug_log_locked(buf);
+    for (int frame = 0; frame < 24 && ctx.Rip; ++frame) {
+        debug_log_locked("CRASH stack " + std::to_string(frame) + ": " + describe_address(ctx.Rip));
+        DWORD64 image_base = 0;
+        PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &image_base, nullptr);
+        if (!fn) { // leaf function: return address is at [rsp]
+            ctx.Rip = *reinterpret_cast<DWORD64*>(ctx.Rsp);
+            ctx.Rsp += 8;
+            continue;
+        }
+        void* handler_data = nullptr;
+        DWORD64 establisher = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Rip, fn, &ctx, &handler_data, &establisher, nullptr);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void install_script_tracer() {
+    uintptr_t* table = reinterpret_cast<uintptr_t*>(g_exe_base + RVA_STRAT_VM_DISPATCH_TABLE);
+    const size_t stub_size = 32;
+    uint8_t* stubs = static_cast<uint8_t*>(VirtualAlloc(nullptr, kStratOpcodeCount * stub_size,
+                                                        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!stubs) return;
+    DWORD old_prot = 0;
+    VirtualProtect(table, kStratOpcodeCount * sizeof(uintptr_t), PAGE_READWRITE, &old_prot);
+    for (int op = 0; op < kStratOpcodeCount; ++op) {
+        uint8_t* st = stubs + op * stub_size;
+        uint64_t original = table[op];
+        uint64_t target = reinterpret_cast<uint64_t>(&TraceOpcode);
+        st[0] = 0xBA; std::memcpy(st + 1, &op, 4);              // mov edx, op
+        st[5] = 0x49; st[6] = 0xB8; std::memcpy(st + 7, &original, 8); // mov r8, original
+        st[15] = 0x48; st[16] = 0xB8; std::memcpy(st + 17, &target, 8); // mov rax, TraceOpcode
+        st[25] = 0xFF; st[26] = 0xE0;                           // jmp rax
+        table[op] = reinterpret_cast<uintptr_t>(st);
+    }
+    VirtualProtect(table, kStratOpcodeCount * sizeof(uintptr_t), old_prot, &old_prot);
+    FlushInstructionCache(GetCurrentProcess(), stubs, kStratOpcodeCount * stub_size);
+    debug_log_locked("Script tracer installed on all 468 strat opcodes");
 }
 
 static void install_croc2_engine_hooks() {
@@ -4044,10 +4665,30 @@ static void install_croc2_engine_hooks() {
     hook_strat_slot(RVA_STRAT_VM_CLOCKWORK_SLOT, RVA_FN_GIVE_CLOCKWORK_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupClockwork), g_orig_pickup_clockwork);
     hook_strat_slot(RVA_STRAT_VM_KEY_SLOT, RVA_FN_GIVE_KEY_NATIVE, reinterpret_cast<uintptr_t>(&Hooked_PickupKey), g_orig_pickup_key);
     hook_strat_slot(RVA_STRAT_VM_GOBBO_SLOT, RVA_FN_GIVE_GOBBO_NATIVE, reinterpret_cast<uintptr_t>(&Hooked_PickupGobbo), g_orig_pickup_gobbo);
+    {
+        // Opcode table at RVA_STRAT_VM_DISPATCH_TABLE; only hooked if each slot still holds the expected handler.
+        static const uintptr_t kHurtTargets[5] = {0x00065BD0, 0x00065F20, 0x00065F00, 0x002044E0, 0x00204720};
+        static const uintptr_t kHurtHooks[5] = {
+            reinterpret_cast<uintptr_t>(&Hooked_HurtOp0), reinterpret_cast<uintptr_t>(&Hooked_HurtOp1),
+            reinterpret_cast<uintptr_t>(&Hooked_HurtOp2), reinterpret_cast<uintptr_t>(&Hooked_HurtOp3),
+            reinterpret_cast<uintptr_t>(&Hooked_HurtOp4)};
+        for (int i = 0; i < 5; ++i) {
+            hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + static_cast<uintptr_t>(kHurtOps[i]) * 8, kHurtTargets[i],
+                            kHurtHooks[i], g_orig_hurt_ops[i]);
+        }
+    }
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 180 * 8, 0x00069BC0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn180), g_orig_crystal_spawn_180);
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 329 * 8, 0x000227E0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn329), g_orig_crystal_spawn_329);
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 4 * 8, 0x00068CA0, reinterpret_cast<uintptr_t>(&Hooked_StratReadValue), g_orig_strat_read_value);
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 173 * 8, 0x00066030, reinterpret_cast<uintptr_t>(&Hooked_GainCrystal), g_orig_gain_crystal);
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+    if (g_state.debug_watch) {
+        install_script_tracer(); // after every other opcode-slot hook, so it wraps them
+        AddVectoredExceptionHandler(1, DebugCrashReporter);
+    }
     g_hooks_installed = true;
 
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -4212,6 +4853,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             HANDLE hThread = CreateThread(nullptr, 0, SafeBootstrapThread, nullptr, 0, nullptr);
             if (hThread) CloseHandle(hThread);
         }
+    } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
+        // croc2.exe never calls Croc2AP_Shutdown, so the worker threads are still joinable when the process
+        // exits. Destroying a joinable std::thread calls std::terminate, which aborted the game with
+        // 0xC0000409 on EVERY exit. At process exit the threads are already gone, so just release them.
+        if (croc2_ap::g_server_thread.joinable()) croc2_ap::g_server_thread.detach();
+        if (croc2_ap::g_ui_thread.joinable()) croc2_ap::g_ui_thread.detach();
+        if (croc2_ap::g_ws_thread.joinable()) croc2_ap::g_ws_thread.detach();
     }
     return TRUE;
 }

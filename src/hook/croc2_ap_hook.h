@@ -23,6 +23,8 @@ constexpr uintptr_t RVA_ACTION_PROMPT_ENUMS   = 0x0081B9A0;
 // Exact croc2.exe Function RVAs (disassembled from x64 Steam binary)
 constexpr uintptr_t RVA_FN_ADD_HEART_POT         = 0x00028A60;
 constexpr uintptr_t RVA_FN_TAKE_HEART_DAMAGE     = 0x00028AA0;
+constexpr uintptr_t RVA_FN_HURT_CROC             = 0x00065F20; // strat opcode 155 "stReset_to_checkpoint": heart loss + teleport to checkpoint
+constexpr uintptr_t RVA_FN_HURT_CROC_HIT         = 0x00065BD0; // strat opcode 154: the heart loss an enemy hit runs on Croc's own strat
 constexpr uintptr_t RVA_FN_CALC_SAVE_INDEX       = 0x0002B9C0;
 constexpr uintptr_t RVA_FN_ON_DOOR_TRANSITION    = 0x0002BA00;
 constexpr uintptr_t RVA_FN_READ_INPUT            = 0x00040990;
@@ -89,6 +91,8 @@ constexpr uintptr_t RVA_FN_ACH_CHECK_INV_ITEM    = 0x00260DD0; // was RVA_FN_PLA
 constexpr uintptr_t RVA_ACTIVE_SAVE_SLOT         = 0x00B4D5A8; // int32_t save slot index (0..4)
 constexpr uintptr_t RVA_PAUSE_MENU_ACTIVE        = 0x00B8E018;
 constexpr uintptr_t RVA_COLORED_CRYSTAL_PTR      = 0x00B8E028; // Points to int32_t (0x1000 per crystal, 0x5000 = all 5)
+constexpr uintptr_t PLAYER_GROUND_FLAGS_OFF      = 0x100;      // Croc strat flags word; bit 1 set while on the ground (recorded in-game)
+constexpr uint32_t  PLAYER_ON_GROUND_BIT         = 0x2;
 constexpr uintptr_t RVA_TRANSITION_STATE         = 0x00B90D30; // 7 = door transition triggered
 constexpr uintptr_t RVA_CURRENT_MAP_HEADER       = 0x00B90D70; // Loaded map header pointer
 constexpr uintptr_t RVA_ACTIVE_SPAWN_TRIGGER      = 0x00B90D78; // Pointer to active spawn/entrance trigger
@@ -106,7 +110,7 @@ constexpr uintptr_t RVA_HUD_KEYS                 = 0x00BA9B30; // int32_t in-sta
 constexpr uintptr_t RVA_HUD_GOBBOS               = 0x00BA9B34; // int32_t HUD gobbo count
 constexpr uintptr_t RVA_HUD_CLOCKWORK_GOBBOS     = 0x00BA9B38; // int32_t HUD clockwork gobbo count (max 9)
 constexpr uintptr_t RVA_LEVEL_CRYSTALS           = 0x00BA9B3C; // Current in-level white crystals
-constexpr uintptr_t RVA_INV_GOLDEN_GOBBOS        = 0x00BA9B40; // Wheel item_type 2
+constexpr uintptr_t RVA_INV_GOLDEN_GOBBOS        = 0x00BA9B40; // Wheel item_type 2. Observed in-game as the BINOCULARS, not Golden Gobbos
 constexpr uintptr_t RVA_INV_STAGE_ITEM           = 0x00BA9B44; // Wheel item_type 3
 constexpr uintptr_t RVA_INV_RED_JELLIES          = 0x00BA9B48; // Wheel item_type 5 (Gummi Jump Red Jelly, max 9)
 constexpr uintptr_t RVA_INV_BLUE_JELLIES         = 0x00BA9B4C; // Wheel item_type 7 (Jelly Jump Blue Jelly, max 9)
@@ -130,6 +134,7 @@ constexpr uintptr_t RVA_INV_WHEEL_STATE          = 0x00BC4E9C; // int32_t 2 = in
 constexpr uintptr_t RVA_INV_WHEEL_SEL_INDEX      = 0x00BC4EA4; // int32_t selected slot index in wheel
 constexpr uintptr_t RVA_INV_WHEEL_SLOTS_ARRAY    = 0x00BC4EB0; // 0x1C-byte slot entries in live inventory wheel
 constexpr uintptr_t RVA_PLAYER_PTR               = 0x00BC7CE8; // Pointer to active PlayerStrat instance
+constexpr uintptr_t RVA_STRAT_LIST_HEAD          = 0x00BC7D20; // First live strat; next = *(strat + 8) (interpreter loop at 0x14005E7F0)
 constexpr uintptr_t RVA_MAP_FILENAME_STR         = 0x00BC8710;
 constexpr uintptr_t RVA_CROC_STRAT_DEF           = 0x00BD1540; // Pointer to Croc's on-foot Strat definition
 constexpr uintptr_t RVA_WAD_BUFFER_BASE          = 0x00BD25C0;
@@ -234,6 +239,7 @@ struct PlayerAbilities {
     bool lever_wrench = false;
     bool vehicle_license = false;
     bool airplane_ammo_feed = false;
+    bool long_jump = false;
 };
 
 struct ServerConnectionConfig {
