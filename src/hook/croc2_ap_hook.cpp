@@ -54,7 +54,8 @@ static void set_wallet_patches(bool enable);
 static std::atomic<bool> g_jump_lock_active{false}; // Butt Stomp locked, in a randomizer save (set in Hooked_ReadInput)
 static std::atomic<bool> g_jump_hidden{false};      // jump lock decision, updated in Hooked_ReadInput from the raw buttons
 static std::atomic<bool> g_jump_raw_held{false};
-static constexpr DWORD JUMP_LOCK_FLIP_GRACE_MS = 300; // see the jump lock in Hooked_ReadInput
+static constexpr DWORD JUMP_LOCK_FLIP_GRACE_MS = 150;   // see the jump lock in Hooked_ReadInput
+static constexpr DWORD JUMP_LOCK_GRACE_MIN_AIR_MS = 200; // shorter drops (steps, slopes) get no grace
 static std::vector<void*> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
 static DWORD g_last_map_load_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
@@ -3658,13 +3659,16 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 bool hide = false;
                 // Front flips and falls: the ground bit comes back slightly before the flip finishes, and a press then
                 // still stomps. After time in the air that didn't start with Jump held, Croc counts as in the air for
-                // JUMP_LOCK_FLIP_GRACE_MS more.
+                // JUMP_LOCK_FLIP_GRACE_MS more (only after at least JUMP_LOCK_GRACE_MIN_AIR_MS in the air, so walking
+                // off a step doesn't delay the next jump).
                 static bool s_prev_on_ground = true, s_air_from_jump = false;
-                static DWORD s_grace_until = 0;
+                static DWORD s_grace_until = 0, s_left_ground = 0;
                 const DWORD jl_now = GetTickCount();
                 if (g_jump_lock_active.load()) {
-                    if (s_prev_on_ground && !on_ground_now) s_air_from_jump = raw_held;
-                    if (!s_prev_on_ground && on_ground_now && !s_air_from_jump) s_grace_until = jl_now + JUMP_LOCK_FLIP_GRACE_MS;
+                    if (s_prev_on_ground && !on_ground_now) { s_air_from_jump = raw_held; s_left_ground = jl_now; }
+                    if (!s_prev_on_ground && on_ground_now && !s_air_from_jump && jl_now - s_left_ground >= JUMP_LOCK_GRACE_MIN_AIR_MS) {
+                        s_grace_until = jl_now + JUMP_LOCK_FLIP_GRACE_MS;
+                    }
                     s_prev_on_ground = on_ground_now;
                     const bool in_grace = static_cast<int32_t>(s_grace_until - jl_now) > 0;
                     if (on_ground_now && !in_grace) s_held_from_ground = true;
