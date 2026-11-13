@@ -95,7 +95,7 @@ class Croc2World(World):
 
         # 1. Core Abilities
         if self.options.shuffle_abilities.value:
-            for ab in ("Tail Whack", "Butt Stomp", "Climbing Claws", "Power Gloves"):
+            for ab in ("Tail Whack", "Butt Stomp", "Long Jump", "Climbing Claws", "Power Gloves"):
                 pool.append(self.create_item(ab))
 
         if self.options.shuffle_levers.value:

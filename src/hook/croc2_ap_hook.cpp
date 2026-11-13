@@ -48,6 +48,7 @@ static void debug_log_locked(const std::string& msg);
 struct MapCoords;
 static void apply_crystal_persistence_locked(const MapCoords& cur);
 static void check_crystal_spawn_queue_locked();
+static bool readable_memory(const void* p, size_t size);
 static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
 static std::vector<void*> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
@@ -256,6 +257,7 @@ static uint8_t pack_abilities_mask(const PlayerAbilities& a) {
     if (a.lever_wrench)       m |= (1 << 4);
     if (a.vehicle_license)    m |= (1 << 5);
     if (a.airplane_ammo_feed) m |= (1 << 6);
+    if (a.long_jump)          m |= (1 << 7);
     return m;
 }
 
@@ -267,6 +269,7 @@ static void unpack_abilities_mask(uint8_t m, PlayerAbilities& a) {
     a.lever_wrench       = (m & (1 << 4)) != 0;
     a.vehicle_license    = (m & (1 << 5)) != 0;
     a.airplane_ammo_feed = (m & (1 << 6)) != 0;
+    a.long_jump          = (m & (1 << 7)) != 0;
 }
 
 static bool is_vehicle_stage_wad(const std::string& wad) {
@@ -386,7 +389,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200142, 7200143, 7200144,                   // Clockwork Gobbo, Red Jelly, Blue Jelly
         7200021,                                     // Heart Pot
         7200042,                                     // Red Crystal
-        7200151                                      // Fire Breakout Trap
+        7200161                                      // Long Jump
     };
     for (size_t i = 0; i < 15 && i < sphere1_slots.size(); ++i) {
         g_state.solo_check_items[sphere1_slots[i]] = sphere1_items[i];
@@ -465,7 +468,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200019, 7200020,                            // Silver Key + Gold Key (Inventory Wheel & HUD)
         7200021,                                     // Heart Pot
         7200042,                                     // Find the Key! Save the Gobbo! - Red Crystal
-        7200148                                      // Croc Crystals (1)
+        7200161                                      // Long Jump
     };
     for (size_t i = 0; i < 20 && i < wc_start_stage_slots.size(); ++i) {
         g_state.solo_white_crystal_items[wc_start_stage_slots[i]] = start_stage_items[i];
@@ -639,6 +642,7 @@ static void generate_new_save_seed_locked(uint64_t seed) {
         g_state.abilities.butt_stomp = true;
         g_state.abilities.climbing_claws = true;
         g_state.abilities.power_gloves = true;
+        g_state.abilities.long_jump = true;
     }
     if (!g_state.shuffle_levers) g_state.abilities.lever_wrench = true;
     if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
@@ -1119,11 +1123,13 @@ static void load_config_ini(const char* ini_path) {
             g_state.abilities.butt_stomp = true;
             g_state.abilities.climbing_claws = true;
             g_state.abilities.power_gloves = true;
+            g_state.abilities.long_jump = true;
         } else {
             g_state.abilities.tail_whack = false;
             g_state.abilities.butt_stomp = false;
             g_state.abilities.climbing_claws = false;
             g_state.abilities.power_gloves = false;
+            g_state.abilities.long_jump = false;
         }
         g_state.abilities.lever_wrench = !g_state.shuffle_levers;
         g_state.abilities.vehicle_license = !g_state.shuffle_vehicles;
@@ -1277,6 +1283,7 @@ static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance&
         case 7200005: out_name = "Lever Wrench"; return;
         case 7200006: out_name = "Vehicle License"; return;
         case 7200007: out_name = "Airplane Ammo Feed"; return;
+        case 7200161: out_name = "Long Jump"; return;
         case 7200008: out_name = "Sailor Village VIP Pass"; return;
         case 7200009: out_name = "Cossack Village VIP Pass"; return;
         case 7200010: out_name = "Caveman Village VIP Pass"; return;
@@ -1366,6 +1373,7 @@ static void apply_ap_item_by_id_locked(int item_id,
         case 7200005: g_state.abilities.lever_wrench = true; g_state.add_log("Unlocked Ability: Lever Wrench!"); break;
         case 7200006: g_state.abilities.vehicle_license = true; g_state.add_log("Unlocked Ability: Vehicle License!"); break;
         case 7200007: g_state.abilities.airplane_ammo_feed = true; g_state.add_log("Unlocked Ability: Airplane Ammo Feed!"); break;
+        case 7200161: g_state.abilities.long_jump = true; g_state.add_log("Unlocked Ability: Long Jump!"); break;
         case 7200008: g_state.vip_passes.insert("Sailor Village"); g_state.add_log("Received Pete's VIP Pass (Sailor Village)!"); break;
         case 7200009: g_state.vip_passes.insert("Cossack Village"); g_state.add_log("Received Pete's VIP Pass (Cossack Village)!"); break;
         case 7200010: g_state.vip_passes.insert("Caveman Village"); g_state.add_log("Received Pete's VIP Pass (Caveman Village)!"); break;
@@ -1637,6 +1645,7 @@ static std::string build_state_json_locked() {
        << "\"abilities\":{"
        << "\"tail_whack\":" << (g_state.abilities.tail_whack ? "true" : "false") << ","
        << "\"butt_stomp\":" << (g_state.abilities.butt_stomp ? "true" : "false") << ","
+       << "\"long_jump\":" << (g_state.abilities.long_jump ? "true" : "false") << ","
        << "\"climbing_claws\":" << (g_state.abilities.climbing_claws ? "true" : "false") << ","
        << "\"power_gloves\":" << (g_state.abilities.power_gloves ? "true" : "false") << ","
        << "\"lever_wrench\":" << (g_state.abilities.lever_wrench ? "true" : "false") << ","
@@ -1764,6 +1773,7 @@ static std::string handle_command_locked(const std::string& req) {
             g_state.abilities.butt_stomp = true;
             g_state.abilities.climbing_claws = true;
             g_state.abilities.power_gloves = true;
+            g_state.abilities.long_jump = true;
         }
         if (!g_state.shuffle_levers) g_state.abilities.lever_wrench = true;
         if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
@@ -1930,6 +1940,7 @@ static std::string handle_command_locked(const std::string& req) {
         else if (item_name == "Lever Wrench") g_state.abilities.lever_wrench = true;
         else if (item_name == "Vehicle License") g_state.abilities.vehicle_license = true;
         else if (item_name == "Airplane Ammo Feed") g_state.abilities.airplane_ammo_feed = true;
+        else if (item_name == "Long Jump") g_state.abilities.long_jump = true;
         else if (item_name == "Jigsaw Piece" || group == "Jigsaw Pieces") {
             g_state.jigsaw_pieces += 1;
             g_pending_jigsaws.fetch_add(1);
@@ -3615,55 +3626,26 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
-            static bool s_airborne_butt_stomp_locked = false;
-
+            // Jump lock (Butt Stomp / High Jump): traced in-game, 0xBA8970 is 1 from a jump's take-off until
+            // landing. Butt Stomp is a second Jump press in the air, and the High Jump is holding Jump through the
+            // stomp. Without Butt Stomp, once Jump is released mid-air it is masked until Croc lands, so only the
+            // single jump works. (The old check read the wrong field and never saw Croc land or take off.)
+            static bool s_air_jump_locked = false;
+            const bool airborne = *reinterpret_cast<int32_t*>(g_exe_base + RVA_CROC_AIRBORNE) != 0;
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
-                s_airborne_butt_stomp_locked = false;
+                s_air_jump_locked = false;
             } else if (!g_state.abilities.butt_stomp) {
-                // Read Croc's physics state safely with strict pointer validation:
-                bool is_on_ground = false;
-                uintptr_t player_strat = *reinterpret_cast<uintptr_t*>(g_exe_base + RVA_PLAYER_PTR);
-                if (player_strat > 0x10000 && player_strat < 0x7FFFFFFFFFFF) {
-                    if (!IsBadReadPtr(reinterpret_cast<const void*>(player_strat), 0xD0)) {
-                        int32_t action_state = *reinterpret_cast<int32_t*>(player_strat + 0x44);
-                        if (action_state == 3) {
-                            *reinterpret_cast<int32_t*>(player_strat + 0x44) = 2; // Force reset out of Butt Stomp
-                        }
-                        if (action_state == 0) {
-                            is_on_ground = true;
-                        } else {
-                            uintptr_t floor_poly = *reinterpret_cast<uintptr_t*>(player_strat + 0xC8);
-                            if (floor_poly > 0x10000 && floor_poly < 0x7FFFFFFFFFFF) {
-                                if (!IsBadReadPtr(reinterpret_cast<const void*>(floor_poly), sizeof(int32_t))) {
-                                    int32_t croc_y = *reinterpret_cast<int32_t*>(player_strat + 0x50);
-                                    int32_t floor_y = *reinterpret_cast<int32_t*>(floor_poly);
-                                    if (croc_y <= floor_y || std::abs(croc_y - floor_y) < 0x1000) {
-                                        is_on_ground = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (is_on_ground) {
-                    s_airborne_butt_stomp_locked = false;
-                } else {
-                    // While airborne: any newly pressed jump or released jump strictly locks out Butt Stomp
-                    if ((newly_pressed & 0x4000u) || !(buttons & 0x4000u)) {
-                        s_airborne_butt_stomp_locked = true;
-                    }
-                    if (s_airborne_butt_stomp_locked) {
-                        buttons &= ~0x4000u; // Suppress mid-air Jump button so Butt Stomp cannot trigger
-                    }
-                }
-
-                // Strictly lock Flip Jump & shoulder maneuvers (L1, R1: 0x0C00) until Butt Stomp unlocked
-                // Note: Keep L2 (0x0100) and R2 (0x0200) enabled so the player can cycle through the inventory wheel
-                buttons &= ~0x0C00u;
+                if (!airborne) s_air_jump_locked = false;
+                else if (!(raw_buttons & 0x4000u)) s_air_jump_locked = true;
+                if (airborne && s_air_jump_locked) buttons &= ~0x4000u;
             } else {
-                s_airborne_butt_stomp_locked = false;
+                s_air_jump_locked = false;
+            }
+
+            // Long Jump (front flip): L1 + R1 together. L1 or R1 alone stays usable.
+            if (!g_state.abilities.long_jump && (buttons & 0x0C00u) == 0x0C00u) {
+                buttons &= ~0x0C00u;
             }
 
             // Gating climbing claws: prevent grabbing climb surfaces by zeroing RVA_CLIMB_ALLOWED_BYTE
