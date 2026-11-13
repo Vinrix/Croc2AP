@@ -3630,45 +3630,24 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
-            // Jump lock (Butt Stomp / High Jump). Butt Stomp is a second Jump press in the air; the High Jump is
-            // holding Jump through the stomp. Traced in-game: 0xBC4B4C pulses to 1 for one frame when Croc lands.
-            // (0xBA8970 is only set while Croc is still rising, so it can't mark the whole time in the air.)
-            // Without Butt Stomp: a Jump press on the ground starts a jump; from then until the landing pulse
-            // (or 4 s, or a death/checkpoint reset), Jump is masked once it has been released, so pressing it
-            // again in the air does nothing. Holding it from take-off still gives the full-height jump.
-            // Mashing: if Jump is held at the landing pulse, the game would read it as a fresh press, so Jump stays
-            // masked until it's released (JUMP_GROUND_WAIT). And if 0xBA8970 (set while Croc rises after a jump)
-            // shows a jump the lock didn't see, the lock switches to "in the air" so it can't fall out of step.
-            enum { JUMP_GROUND, JUMP_GROUND_WAIT, JUMP_AIR_HELD, JUMP_AIR_LOCKED };
-            static int s_jump_phase = JUMP_GROUND;
-            static DWORD s_takeoff_tick = 0;
-            const DWORD jump_now = GetTickCount();
-            const bool landed = *reinterpret_cast<int32_t*>(g_exe_base + RVA_CROC_LANDED_PULSE) != 0;
-            const int32_t game_state_now = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+            // Jump lock (Butt Stomp / High Jump). Butt Stomp is a Jump press while Croc is in the air (after a
+            // jump, a front flip or a fall); the High Jump is holding Jump through the stomp. Recorded in-game
+            // (every move, ~30 rows/s): bit 1 of Croc's strat +0x100 is clear exactly while he is off the ground.
+            // Without Butt Stomp, once Jump has been released in the air it is masked until he is back on the
+            // ground, so a held jump still reaches full height and a ground jump always works.
+            static bool s_jump_held_from_ground = true;
+            uint8_t* jump_player = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
+            const bool on_ground = !jump_player || !readable_memory(jump_player + PLAYER_GROUND_FLAGS_OFF, 4) ||
+                                   (*reinterpret_cast<uint32_t*>(jump_player + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
-                s_jump_phase = JUMP_GROUND;
+                s_jump_held_from_ground = true;
             } else if (!g_state.abilities.butt_stomp) {
-                const bool rising = *reinterpret_cast<int32_t*>(g_exe_base + RVA_CROC_RISING) != 0;
-                if ((s_jump_phase == JUMP_AIR_HELD || s_jump_phase == JUMP_AIR_LOCKED) &&
-                    ((landed && jump_now - s_takeoff_tick > 150) || game_state_now != 0 || jump_now - s_takeoff_tick > 4000)) {
-                    s_jump_phase = (raw_buttons & 0x4000u) ? JUMP_GROUND_WAIT : JUMP_GROUND;
-                }
-                if (s_jump_phase == JUMP_GROUND_WAIT && !(raw_buttons & 0x4000u)) s_jump_phase = JUMP_GROUND;
-                if (s_jump_phase != JUMP_AIR_HELD && s_jump_phase != JUMP_AIR_LOCKED && rising && game_state_now == 0) {
-                    s_jump_phase = (raw_buttons & 0x4000u) ? JUMP_AIR_HELD : JUMP_AIR_LOCKED; // a jump the lock missed
-                    s_takeoff_tick = jump_now;
-                }
-                if (s_jump_phase == JUMP_GROUND_WAIT) {
-                    buttons &= ~0x4000u;
-                } else if (s_jump_phase == JUMP_GROUND) {
-                    if (newly_pressed & 0x4000u) { s_jump_phase = JUMP_AIR_HELD; s_takeoff_tick = jump_now; }
-                } else if (s_jump_phase == JUMP_AIR_HELD && !(raw_buttons & 0x4000u)) {
-                    s_jump_phase = JUMP_AIR_LOCKED;
-                }
-                if (s_jump_phase == JUMP_AIR_LOCKED) buttons &= ~0x4000u;
+                if (on_ground) s_jump_held_from_ground = true;
+                else if (!(raw_buttons & 0x4000u)) s_jump_held_from_ground = false;
+                if (!on_ground && !s_jump_held_from_ground) buttons &= ~0x4000u;
             } else {
-                s_jump_phase = JUMP_GROUND;
+                s_jump_held_from_ground = true;
             }
 
             // Long Jump (front flip): L1 + R1 together. L1 or R1 alone stays usable.
