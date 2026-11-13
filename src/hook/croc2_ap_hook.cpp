@@ -51,7 +51,7 @@ static void check_crystal_spawn_queue_locked();
 static bool readable_memory(const void* p, size_t size);
 static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
-static std::atomic<bool> g_hide_jump_from_croc_script{false}; // set by the jump lock in Hooked_ReadInput
+static std::atomic<bool> g_jump_lock_active{false}; // Butt Stomp locked, in a randomizer save (set in Hooked_ReadInput)
 static std::vector<void*> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
 static DWORD g_last_map_load_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
@@ -3603,6 +3603,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
 
         // Enforce Randomized Moveset Locks & Active Traps in ANY Randomizer Save (both Solo Seed & Archipelago)!
         int32_t paused = *reinterpret_cast<int32_t*>(g_exe_base + RVA_PAUSE_MENU_ACTIVE);
+        if (!g_state.is_randomizer_active()) g_jump_lock_active.store(false);
         if (g_state.is_randomizer_active() && paused == 0 && curr->map_type != 3) {
             bool has_tail_knot = false;
             bool has_lead_boots = false;
@@ -3631,28 +3632,13 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
-            // Jump lock (Butt Stomp / High Jump). Butt Stomp is a Jump press while Croc is in the air (after a
-            // jump, a front flip or a fall); the High Jump is holding Jump through the stomp. Recorded in-game
-            // (every move, ~30 rows/s): bit 1 of Croc's strat +0x100 is clear exactly while he is off the ground.
-            // Without Butt Stomp, once Jump has been released in the air it is masked until he is back on the
-            // ground, so a held jump still reaches full height and a ground jump always works.
-            static bool s_jump_held_from_ground = true;
-            uint8_t* jump_player = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
-            const bool on_ground = !jump_player || !readable_memory(jump_player + PLAYER_GROUND_FLAGS_OFF, 4) ||
-                                   (*reinterpret_cast<uint32_t*>(jump_player + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
+            // Jump lock (Butt Stomp / High Jump): decided in Hooked_StratReadValue, at the moment Croc's script
+            // reads the controller. Here only whether it applies.
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
-                s_jump_held_from_ground = true;
-                g_hide_jump_from_croc_script.store(false);
-            } else if (!g_state.abilities.butt_stomp) {
-                if (on_ground) s_jump_held_from_ground = true;
-                else if (!(raw_buttons & 0x4000u)) s_jump_held_from_ground = false;
-                // The controller itself is left alone (masking it confused the game's landing and auto-jump code);
-                // Hooked_StratReadValue hides Jump from Croc's script instead.
-                g_hide_jump_from_croc_script.store(!on_ground && !s_jump_held_from_ground);
+                g_jump_lock_active.store(false);
             } else {
-                s_jump_held_from_ground = true;
-                g_hide_jump_from_croc_script.store(false);
+                g_jump_lock_active.store(!g_state.abilities.butt_stomp);
             }
 
             // Long Jump (front flip): L1 + R1 together. L1 or R1 alone stays usable.
@@ -4317,20 +4303,42 @@ static void __fastcall Hooked_CrystalSpawn180(void* strat) { remove_if_collected
 static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_329(strat); }
 
 // Strat opcode 4 (0x140068CA0): push game value N (0x140067EA0). Croc's script reads the controller through it
-// (values 42, 44 and 144, tested against Jump = 16384 in every on-foot state, including the stomp checks). While
-// Butt Stomp is locked and Croc is in the air after letting go of Jump, the Jump bit is cleared from those values
-// for Croc's strat only, so his script never sees a mid-air press. See g_hide_jump_from_croc_script.
+// (values 42, 44 and 144, tested against Jump = 16384 in every on-foot state, including the stomp checks).
+// Jump lock, while Butt Stomp is locked: recorded in-game, bit 1 of Croc's strat +0x100 is clear exactly while he
+// is off the ground. Once Jump has been let go in the air (the game's own held buttons, 0xBC4B54), the Jump bit is
+// cleared from these reads for Croc's strat until he is back on the ground. The controller itself is never
+// masked, so the game's landing, auto-jump and jump-height code see the real input; a jump held from the ground
+// still reaches full height.
 static FnStratVmHandler g_orig_strat_read_value = nullptr;
 static void __fastcall Hooked_StratReadValue(void* strat) {
     const int32_t which = **reinterpret_cast<int32_t**>(strat); // argument word, before the handler consumes it
     g_orig_strat_read_value(strat);
-    if ((which == 42 || which == 44 || which == 144) && g_hide_jump_from_croc_script.load(std::memory_order_relaxed) &&
-        strat == *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR)) {
-        uint8_t* sp = static_cast<uint8_t*>(strat);
-        if (*reinterpret_cast<int32_t*>(sp + 0x138) > 0) {
-            *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4) &= ~0x4000;
-        }
+    // Any strat: the controller values are global, and Croc's moves are not all read by his own strat.
+    if ((which != 42 && which != 44 && which != 144) || !g_jump_lock_active.load(std::memory_order_relaxed)) return;
+    uint8_t* croc = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
+    if (!croc) return;
+    uint8_t* sp = static_cast<uint8_t*>(strat);
+    static bool s_held_from_ground = true;
+    static bool s_prev_ground = true, s_prev_hidden = false;
+    const bool on_ground = (*reinterpret_cast<uint32_t*>(croc + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
+    const bool held = (*reinterpret_cast<uint32_t*>(g_exe_base + RVA_HELD_BUTTONS) & 0x4000u) != 0;
+    if (on_ground) s_held_from_ground = true;
+    else if (!held) s_held_from_ground = false;
+    const bool hide = !on_ground && !s_held_from_ground;
+    int32_t* top = nullptr;
+    if (*reinterpret_cast<int32_t*>(sp + 0x138) > 0) top = reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4);
+    if (g_state.debug_watch && which != 144 &&
+        (on_ground != s_prev_ground || hide != s_prev_hidden || (hide && top && (*top & 0x4000)))) {
+        char b[128];
+        const char* nm = *reinterpret_cast<const char**>(sp + 0x30);
+        std::snprintf(b, sizeof(b), "JUMPLOCK %s read %d=0x%X ground=%d held=%d hide=%d", strat == croc ? "croc" : (nm ? nm : "?"),
+                      which, top ? *top : -1, on_ground, held, hide);
+        std::lock_guard<std::mutex> lock(g_mutex);
+        debug_log_locked(b);
     }
+    s_prev_ground = on_ground;
+    s_prev_hidden = hide;
+    if (hide && top) *top &= ~0x4000;
 }
 
 // Strat opcode 173 (0x140066030): GainCrystal. Pops a value; value >> 12 of 1..5 is a coloured crystal of that
@@ -4400,11 +4408,9 @@ static void __fastcall Hooked_SetActionState(void* strat, int32_t action_id) {
             debug_log_locked(buf);
         }
     }
-    if (action_id == 3) {
-        if (g_state.is_mod_enabled_toggle() && !g_state.abilities.butt_stomp) {
-            return; // Reject entering Butt Stomp action state!
-        }
-    }
+    // The original code refused action 3 here as "Butt Stomp" while it was locked. Recordings never showed a stomp
+    // going through this function, and refusing it was the prime suspect for the landing delay and broken
+    // auto-jump, so it's no longer touched. Butt Stomp is locked in Hooked_StratReadValue.
     if (g_orig_set_action_state) {
         g_orig_set_action_state(strat, action_id);
     }
