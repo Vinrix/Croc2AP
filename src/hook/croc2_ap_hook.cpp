@@ -50,6 +50,7 @@ static void apply_crystal_persistence_locked(const MapCoords& cur);
 static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
+static DWORD g_last_map_load_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
 static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
@@ -3331,6 +3332,7 @@ static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t sub
         MapCoords req{tribe, level, submap, map_type};
         MapCoords dest = resolve_map_load_locked(req);
         g_crystals_collecting.clear();
+        g_last_map_load_tick = GetTickCount();
         if (find_stage_index_by_wad(coords_to_wad(dest)) >= 0) clear_coloured_crystal_state(dest);
         debug_log_locked("LoadMap " + coords_to_wad(req) + (coords_to_wad(dest) != coords_to_wad(req) ? " -> " + coords_to_wad(dest) : std::string()) +
                          " (from " + coords_to_wad(g_last_loaded) + ", shuffled_stage=" + (g_in_redirected_stage ? "1" : "0") + ")");
@@ -4135,6 +4137,20 @@ static void set_wallet_patches(bool enable) {
 // current map are removed (the stRemove flags, strat+0xFC |= 6), and shortly after entering a stage its
 // top-right counter is restored to the number remembered for that stage.
 // ============================================================================
+// True if [p, p+size) lies in committed, readable memory (checked fresh every call: memory can be freed between
+// frames, so no caching).
+static bool readable_memory(const void* p, size_t size) {
+    uintptr_t a = reinterpret_cast<uintptr_t>(p);
+    if (a < 0x10000 || a + size < a) return false;
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                           PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if (!(mbi.Protect & readable) || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return false;
+    uintptr_t lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress), hi = lo + mbi.RegionSize;
+    return a >= lo && a + size <= hi;
+}
+
 struct CollectedCrystal { std::string wad; int32_t x, y, z; };
 static std::vector<CollectedCrystal> g_collected_crystals;
 static uint64_t g_collected_crystals_seed = 0;
@@ -4214,15 +4230,21 @@ static void apply_crystal_persistence_locked(const MapCoords& cur) {
     if (g_collected_crystals.empty()) return;
     const std::string wad = coords_to_wad(cur);
 
-    // Remove already-collected crystals in this map.
+    // Remove already-collected crystals in this map. Only during normal play: croc2.exe also calls the input
+    // hook in the middle of a level load (0x14005C9B9 -> 0x140041040) while the strat list is being rebuilt,
+    // and walking it then crashed. Every pointer is also checked before it is read.
     int removed = 0;
-    for (uint8_t* st = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_STRAT_LIST_HEAD); st;
-         st = *reinterpret_cast<uint8_t**>(st + 8)) {
+    const int32_t game_state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+    const bool list_stable = game_state == 0 && GetTickCount() - g_last_map_load_tick > 1500;
+    int guard = 0;
+    for (uint8_t* st = list_stable ? *reinterpret_cast<uint8_t**>(g_exe_base + RVA_STRAT_LIST_HEAD) : nullptr;
+         st && readable_memory(st, 0x140) && ++guard < 4096; st = *reinterpret_cast<uint8_t**>(st + 8)) {
         uint32_t& flags = *reinterpret_cast<uint32_t*>(st + 0xFC);
         if (flags & 4) continue; // already removed
         if (std::find(g_crystals_collecting.begin(), g_crystals_collecting.end(), st) != g_crystals_collecting.end()) continue;
         const char* name = *reinterpret_cast<const char**>(st + 0x30);
-        if (!name || (std::strcmp(name, "crystal") != 0 && std::strcmp(name, "bonus crystal") != 0)) continue;
+        if (!name || !readable_memory(name, 16)) continue;
+        if (std::strcmp(name, "crystal") != 0 && std::strcmp(name, "bonus crystal") != 0) continue;
         const bool is_bonus = name[0] == 'b';
         if (crystal_collected_locked(is_bonus ? wad + "*" : wad, *reinterpret_cast<int32_t*>(st + 0x4C),
                                      *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54))) {
