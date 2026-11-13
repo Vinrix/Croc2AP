@@ -48,6 +48,8 @@ static void debug_log_locked(const std::string& msg);
 struct MapCoords;
 static void apply_crystal_persistence_locked(const MapCoords& cur);
 static void clear_coloured_crystal_state(const MapCoords& m);
+static void set_wallet_patches(bool enable);
+static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
 static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
@@ -3328,6 +3330,7 @@ static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t sub
         std::lock_guard<std::mutex> lock(g_mutex);
         MapCoords req{tribe, level, submap, map_type};
         MapCoords dest = resolve_map_load_locked(req);
+        g_crystals_collecting.clear();
         if (find_stage_index_by_wad(coords_to_wad(dest)) >= 0) clear_coloured_crystal_state(dest);
         debug_log_locked("LoadMap " + coords_to_wad(req) + (coords_to_wad(dest) != coords_to_wad(req) ? " -> " + coords_to_wad(dest) : std::string()) +
                          " (from " + coords_to_wad(g_last_loaded) + ", shuffled_stage=" + (g_in_redirected_stage ? "1" : "0") + ")");
@@ -3484,6 +3487,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             }
         }
         if (!g_state.is_mod_enabled_toggle()) {
+            set_wallet_patches(false); // vanilla save / mod off: original wallet behaviour
             return buttons;
         }
 
@@ -4095,6 +4099,35 @@ static void __fastcall Hooked_HurtOp3(void* s) { log_hurt_op(3, s); g_orig_hurt_
 static void __fastcall Hooked_HurtOp4(void* s) { log_hurt_op(4, s); g_orig_hurt_ops[4](s); }
 
 // ============================================================================
+// Wallet: in vanilla, leaving a level adds that level's crystal counter (0xBA9B3C) to the wallet (0xBA9A9C) in
+// two places: 0x14002BE51 "add eax, [counter]" in OnDoorTransition (wallet = min(9999, wallet + counter)) and
+// 0x14002EFB6 "add [wallet], eax" in the map loader. In randomizer saves crystals are checks, not currency, so
+// both 6-byte instructions are replaced with NOPs; the original bytes are restored for vanilla saves.
+// ============================================================================
+struct CodePatch { uintptr_t rva; uint8_t expect[6]; bool applied; };
+static CodePatch g_wallet_patches[2] = {
+    {0x0002BE51, {0x03, 0x05, 0xE5, 0xDC, 0xB7, 0x00}, false},
+    {0x0002EFB6, {0x01, 0x05, 0xE0, 0xAA, 0xB7, 0x00}, false},
+};
+
+static void set_wallet_patches(bool enable) {
+    for (auto& pt : g_wallet_patches) {
+        if (pt.applied == enable) continue;
+        uint8_t* code = reinterpret_cast<uint8_t*>(g_exe_base + pt.rva);
+        static const uint8_t kNop6[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+        if (std::memcmp(code, enable ? pt.expect : kNop6, 6) != 0) continue; // unexpected bytes: leave alone
+        DWORD old = 0;
+        VirtualProtect(code, 6, PAGE_EXECUTE_READWRITE, &old);
+        std::memcpy(code, enable ? kNop6 : pt.expect, 6);
+        VirtualProtect(code, 6, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), code, 6);
+        pt.applied = enable;
+        debug_log_locked(std::string("WALLET level-crystal transfer ") + (enable ? "disabled" : "restored") +
+                         " at croc2.exe+" + [&] { char b[16]; std::snprintf(b, sizeof(b), "0x%llX", (unsigned long long)pt.rva); return std::string(b); }());
+    }
+}
+
+// ============================================================================
 // White crystal persistence. The remaster remembers coloured crystals per level but white crystals respawn on
 // every visit. In a randomizer save, each white crystal collected is remembered by map and spawn position
 // (white crystal strats are all named "crystal" with the same var 0, but each sits at a fixed position) in
@@ -4174,7 +4207,9 @@ static void clear_coloured_crystal_state(const MapCoords& m) {
 
 // Runs on the game thread every frame (inside the Hooked_ReadInput lock).
 static void apply_crystal_persistence_locked(const MapCoords& cur) {
-    if (!g_state.is_mod_enabled_toggle() || !g_state.is_randomizer_active() || !g_state.save_locked_to_mod) return;
+    const bool rando_save = g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && g_state.save_locked_to_mod;
+    set_wallet_patches(rando_save);
+    if (!rando_save) return;
     ensure_collected_crystals_loaded_locked();
     if (g_collected_crystals.empty()) return;
     const std::string wad = coords_to_wad(cur);
@@ -4185,6 +4220,7 @@ static void apply_crystal_persistence_locked(const MapCoords& cur) {
          st = *reinterpret_cast<uint8_t**>(st + 8)) {
         uint32_t& flags = *reinterpret_cast<uint32_t*>(st + 0xFC);
         if (flags & 4) continue; // already removed
+        if (std::find(g_crystals_collecting.begin(), g_crystals_collecting.end(), st) != g_crystals_collecting.end()) continue;
         const char* name = *reinterpret_cast<const char**>(st + 0x30);
         if (!name || (std::strcmp(name, "crystal") != 0 && std::strcmp(name, "bonus crystal") != 0)) continue;
         const bool is_bonus = name[0] == 'b';
@@ -4259,6 +4295,8 @@ static void __fastcall Hooked_GainCrystal(void* strat) {
             suppress = g_state.colored_crystals_mode == 1;
         }
         if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && g_state.save_locked_to_mod) {
+            g_crystals_collecting.push_back(strat);
+            if (g_crystals_collecting.size() > 256) g_crystals_collecting.erase(g_crystals_collecting.begin());
             remember_crystal_locked(coloured ? g_state.current_wad + "*" : g_state.current_wad, *reinterpret_cast<int32_t*>(sp + 0x4C),
                                     *reinterpret_cast<int32_t*>(sp + 0x50), *reinterpret_cast<int32_t*>(sp + 0x54));
         }
