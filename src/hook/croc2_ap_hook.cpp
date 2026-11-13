@@ -4322,9 +4322,15 @@ static void __fastcall Hooked_StratReadValue(void* strat) {
     static bool s_prev_ground = true, s_prev_hidden = false;
     const bool on_ground = (*reinterpret_cast<uint32_t*>(croc + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
     const bool held = (*reinterpret_cast<uint32_t*>(g_exe_base + RVA_HELD_BUTTONS) & 0x4000u) != 0;
+    // A press that starts in the air stays hidden after landing until Jump is released: Croc's landing code
+    // turns Jump still held at touchdown into the stomp / high jump (seen with X pressed just before a front
+    // flip lands).
+    static bool s_air_press = false;
     if (on_ground) s_held_from_ground = true;
     else if (!held) s_held_from_ground = false;
-    const bool hide = !on_ground && !s_held_from_ground;
+    if (!on_ground && !s_held_from_ground && held) s_air_press = true;
+    if (!held) s_air_press = false;
+    const bool hide = (!on_ground && !s_held_from_ground) || s_air_press;
     int32_t* top = nullptr;
     if (*reinterpret_cast<int32_t*>(sp + 0x138) > 0) top = reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4);
     if (g_state.debug_watch && which != 144 &&
