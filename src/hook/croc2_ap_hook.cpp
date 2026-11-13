@@ -52,6 +52,9 @@ static bool readable_memory(const void* p, size_t size);
 static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
 static std::atomic<bool> g_jump_lock_active{false}; // Butt Stomp locked, in a randomizer save (set in Hooked_ReadInput)
+static std::atomic<bool> g_jump_hidden{false};      // jump lock decision, updated in Hooked_ReadInput from the raw buttons
+static std::atomic<bool> g_jump_raw_held{false};
+static constexpr DWORD JUMP_LOCK_FLIP_GRACE_MS = 300; // see the jump lock in Hooked_ReadInput
 static std::vector<void*> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
 static DWORD g_last_map_load_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
@@ -3640,6 +3643,43 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             } else {
                 g_jump_lock_active.store(!g_state.abilities.butt_stomp);
             }
+            // The decision. Recorded in-game: bit 1 of Croc's strat +0x100 is clear exactly while he is off the
+            // ground. Hidden: Jump while Croc is in the air after it was let go (a mid-air press), and a mid-air press
+            // still held after landing until it is released (Croc's landing code turns Jump held at touchdown into
+            // the stomp / high jump, e.g. X pressed just before a front flip lands). A jump held from the ground still
+            // reaches full height. Applied to both the controller input (the game's own movement code reads the held
+            // buttons directly) and the script's controller reads (Hooked_StratReadValue).
+            {
+                static bool s_held_from_ground = true, s_air_press = false;
+                const bool raw_held = (raw_buttons & 0x4000u) != 0;
+                uint8_t* jp = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
+                const bool on_ground_now = !jp || !readable_memory(jp + PLAYER_GROUND_FLAGS_OFF, 4) ||
+                                           (*reinterpret_cast<uint32_t*>(jp + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
+                bool hide = false;
+                // Front flips and falls: the ground bit comes back slightly before the flip finishes, and a press then
+                // still stomps. After time in the air that didn't start with Jump held, Croc counts as in the air for
+                // JUMP_LOCK_FLIP_GRACE_MS more.
+                static bool s_prev_on_ground = true, s_air_from_jump = false;
+                static DWORD s_grace_until = 0;
+                const DWORD jl_now = GetTickCount();
+                if (g_jump_lock_active.load()) {
+                    if (s_prev_on_ground && !on_ground_now) s_air_from_jump = raw_held;
+                    if (!s_prev_on_ground && on_ground_now && !s_air_from_jump) s_grace_until = jl_now + JUMP_LOCK_FLIP_GRACE_MS;
+                    s_prev_on_ground = on_ground_now;
+                    const bool in_grace = static_cast<int32_t>(s_grace_until - jl_now) > 0;
+                    if (on_ground_now && !in_grace) s_held_from_ground = true;
+                    else if (!raw_held) s_held_from_ground = false;
+                    if ((!on_ground_now || in_grace) && !s_held_from_ground && raw_held) s_air_press = true;
+                    if (!raw_held) s_air_press = false;
+                    hide = ((!on_ground_now || in_grace) && !s_held_from_ground) || s_air_press;
+                } else {
+                    s_held_from_ground = true;
+                    s_air_press = false;
+                }
+                g_jump_raw_held.store(raw_held);
+                g_jump_hidden.store(hide);
+                if (hide) buttons &= ~0x4000u;
+            }
 
             // Long Jump (front flip): L1 + R1 together. L1 or R1 alone stays usable.
             if (!g_state.abilities.long_jump && (buttons & 0x0C00u) == 0x0C00u) {
@@ -4309,28 +4349,22 @@ static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected
 // cleared from these reads for Croc's strat until he is back on the ground. The controller itself is never
 // masked, so the game's landing, auto-jump and jump-height code see the real input; a jump held from the ground
 // still reaches full height.
-static FnStratVmHandler g_orig_strat_read_value = nullptr;
-static void __fastcall Hooked_StratReadValue(void* strat) {
-    const int32_t which = **reinterpret_cast<int32_t**>(strat); // argument word, before the handler consumes it
-    g_orig_strat_read_value(strat);
+// Hooked at the value reader itself (0x140067EA0: rcx = strat whose stack gets the value, rdx = strat read, r8d =
+// N), not just opcode 4: opcodes 9, 144, 193, 195, 199, 205, 219, 257 and 258 call it too, and the stomp out of a
+// front flip got through while every opcode-4 read was hidden.
+using FnStratReadValue = void(__fastcall*)(void*, void*, int32_t);
+static FnStratReadValue g_orig_strat_read_value = nullptr;
+static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t which) {
+    g_orig_strat_read_value(strat, source, which);
     // Any strat: the controller values are global, and Croc's moves are not all read by his own strat.
     if ((which != 42 && which != 44 && which != 144) || !g_jump_lock_active.load(std::memory_order_relaxed)) return;
     uint8_t* croc = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
     if (!croc) return;
     uint8_t* sp = static_cast<uint8_t*>(strat);
-    static bool s_held_from_ground = true;
     static bool s_prev_ground = true, s_prev_hidden = false;
     const bool on_ground = (*reinterpret_cast<uint32_t*>(croc + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
-    const bool held = (*reinterpret_cast<uint32_t*>(g_exe_base + RVA_HELD_BUTTONS) & 0x4000u) != 0;
-    // A press that starts in the air stays hidden after landing until Jump is released: Croc's landing code
-    // turns Jump still held at touchdown into the stomp / high jump (seen with X pressed just before a front
-    // flip lands).
-    static bool s_air_press = false;
-    if (on_ground) s_held_from_ground = true;
-    else if (!held) s_held_from_ground = false;
-    if (!on_ground && !s_held_from_ground && held) s_air_press = true;
-    if (!held) s_air_press = false;
-    const bool hide = (!on_ground && !s_held_from_ground) || s_air_press;
+    const bool held = g_jump_raw_held.load(std::memory_order_relaxed);
+    const bool hide = g_jump_hidden.load(std::memory_order_relaxed);
     int32_t* top = nullptr;
     if (*reinterpret_cast<int32_t*>(sp + 0x138) > 0) top = reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4);
     if (g_state.debug_watch && which != 144 &&
@@ -4649,6 +4683,28 @@ static void install_croc2_engine_hooks() {
         hook_ach(RVA_FN_INCREMENT_ACHIEVEMENT, tramp_mem + 384, reinterpret_cast<const void*>(&Hooked_IncrementAchievement), g_orig_increment_achievement);
     }
 
+    // 5b. Strat value reader (0x140067EA0), for the jump lock. 17-byte prologue; its last instruction loads the
+    // stack cookie RIP-relative (mov rax, [0x140B73540]), so the trampoline loads it through an absolute address.
+    {
+        static const uint8_t kReadValuePrologue[17] = {0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x89, 0xCE,
+                                                       0x48, 0x8B, 0x05, 0x8F, 0xB6, 0xB0, 0x00};
+        uint8_t* fn = reinterpret_cast<uint8_t*>(g_exe_base + RVA_FN_STRAT_READ_VALUE);
+        if (std::memcmp(fn, kReadValuePrologue, sizeof(kReadValuePrologue)) == 0) {
+            uint8_t* tr = tramp_mem + 448;
+            std::memcpy(tr, fn, 10);                       // push rsi/rdi/rbx; sub rsp,0x60; mov rsi,rcx
+            tr[10] = 0x48; tr[11] = 0xB8;                  // mov rax, imm64
+            uint64_t cookie = static_cast<uint64_t>(g_exe_base + 0x00B73540);
+            std::memcpy(tr + 12, &cookie, 8);
+            tr[20] = 0x48; tr[21] = 0x8B; tr[22] = 0x00;   // mov rax, [rax]
+            write_abs_jmp64(tr + 23, fn + 17, 14);
+            g_orig_strat_read_value = reinterpret_cast<FnStratReadValue>(tr);
+            DWORD prot = 0;
+            VirtualProtect(fn, 32, PAGE_EXECUTE_READWRITE, &prot);
+            write_abs_jmp64(fn, reinterpret_cast<const void*>(&Hooked_StratReadValue), 17);
+            VirtualProtect(fn, 32, prot, &prot);
+        }
+    }
+
     // 6. Hook Strat VM Collectable & Inventory Pickup Slots (Opcodes 171, 248, 249, 250, 270)
     auto hook_strat_slot = [](uintptr_t slot_rva, uintptr_t expected_target, uintptr_t hooked_fn, FnStratVmHandler& orig_fn) {
         uintptr_t* p_slot = reinterpret_cast<uintptr_t*>(g_exe_base + slot_rva);
@@ -4679,7 +4735,6 @@ static void install_croc2_engine_hooks() {
     }
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 180 * 8, 0x00069BC0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn180), g_orig_crystal_spawn_180);
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 329 * 8, 0x000227E0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn329), g_orig_crystal_spawn_329);
-    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 4 * 8, 0x00068CA0, reinterpret_cast<uintptr_t>(&Hooked_StratReadValue), g_orig_strat_read_value);
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 173 * 8, 0x00066030, reinterpret_cast<uintptr_t>(&Hooked_GainCrystal), g_orig_gain_crystal);
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);

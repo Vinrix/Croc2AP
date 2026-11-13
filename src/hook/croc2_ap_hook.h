@@ -91,6 +91,7 @@ constexpr uintptr_t RVA_FN_ACH_CHECK_INV_ITEM    = 0x00260DD0; // was RVA_FN_PLA
 constexpr uintptr_t RVA_ACTIVE_SAVE_SLOT         = 0x00B4D5A8; // int32_t save slot index (0..4)
 constexpr uintptr_t RVA_PAUSE_MENU_ACTIVE        = 0x00B8E018;
 constexpr uintptr_t RVA_COLORED_CRYSTAL_PTR      = 0x00B8E028; // Points to int32_t (0x1000 per crystal, 0x5000 = all 5)
+constexpr uintptr_t RVA_FN_STRAT_READ_VALUE      = 0x00067EA0; // push game value N (opcode 4 and 9 others)
 constexpr uintptr_t PLAYER_GROUND_FLAGS_OFF      = 0x100;      // Croc strat flags word; bit 1 set while on the ground (recorded in-game)
 constexpr uint32_t  PLAYER_ON_GROUND_BIT         = 0x2;
 constexpr uintptr_t RVA_TRANSITION_STATE         = 0x00B90D30; // 7 = door transition triggered
