@@ -45,6 +45,9 @@ static void sync_state_to_save_footer_locked();
 static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& footer);
 static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std::string& check_desc);
 static void debug_log_locked(const std::string& msg);
+struct MapCoords;
+static void apply_crystal_persistence_locked(const MapCoords& cur);
+static void clear_coloured_crystal_state(const MapCoords& m);
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
 static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
@@ -1337,6 +1340,7 @@ static void apply_ap_item_by_id_locked(int item_id,
     std::string item_name;
     ItemImportance imp = ItemImportance::PROGRESSION;
     get_ap_item_info(item_id, item_name, imp);
+    debug_log_locked("ITEM " + std::to_string(item_id) + " " + item_name + " from " + sender_name + " @ " + location_name);
 
     if (show_toast && item_id > 0) {
         g_state.pending_events_json.push_back(
@@ -3324,6 +3328,7 @@ static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t sub
         std::lock_guard<std::mutex> lock(g_mutex);
         MapCoords req{tribe, level, submap, map_type};
         MapCoords dest = resolve_map_load_locked(req);
+        if (find_stage_index_by_wad(coords_to_wad(dest)) >= 0) clear_coloured_crystal_state(dest);
         debug_log_locked("LoadMap " + coords_to_wad(req) + (coords_to_wad(dest) != coords_to_wad(req) ? " -> " + coords_to_wad(dest) : std::string()) +
                          " (from " + coords_to_wad(g_last_loaded) + ", shuffled_stage=" + (g_in_redirected_stage ? "1" : "0") + ")");
         if (dest.tribe != req.tribe || dest.level != req.level ||
@@ -3506,6 +3511,8 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             }
             s_prev_state = state;
         }
+
+        apply_crystal_persistence_locked(*curr);
 
         // Only drain pending heart grants while actually in-game (never on the Title Screen),
         // so items received before a save is started/loaded are never silently lost.
@@ -4087,6 +4094,135 @@ static void __fastcall Hooked_HurtOp2(void* s) { log_hurt_op(2, s); g_orig_hurt_
 static void __fastcall Hooked_HurtOp3(void* s) { log_hurt_op(3, s); g_orig_hurt_ops[3](s); }
 static void __fastcall Hooked_HurtOp4(void* s) { log_hurt_op(4, s); g_orig_hurt_ops[4](s); }
 
+// ============================================================================
+// White crystal persistence. The remaster remembers coloured crystals per level but white crystals respawn on
+// every visit. In a randomizer save, each white crystal collected is remembered by map and spawn position
+// (white crystal strats are all named "crystal" with the same var 0, but each sits at a fixed position) in
+// croc2ap_crystals_<seed>.txt next to croc2.exe. On every frame, crystal strats at remembered positions in the
+// current map are removed (the stRemove flags, strat+0xFC |= 6), and shortly after entering a stage its
+// top-right counter is restored to the number remembered for that stage.
+// ============================================================================
+struct CollectedCrystal { std::string wad; int32_t x, y, z; };
+static std::vector<CollectedCrystal> g_collected_crystals;
+static uint64_t g_collected_crystals_seed = 0;
+static bool g_collected_crystals_loaded = false;
+
+static std::string collected_crystals_path(uint64_t seed) {
+    char path[MAX_PATH] = {0};
+    GetModuleFileNameA(nullptr, path, MAX_PATH);
+    std::string p(path);
+    size_t slash = p.find_last_of("\\/");
+    char name[64];
+    std::snprintf(name, sizeof(name), "croc2ap_crystals_%016llX.txt", static_cast<unsigned long long>(seed));
+    return (slash == std::string::npos ? std::string() : p.substr(0, slash + 1)) + name;
+}
+
+static void ensure_collected_crystals_loaded_locked() {
+    uint64_t seed = g_state.current_save_seed;
+    if (g_collected_crystals_loaded && seed == g_collected_crystals_seed) return;
+    g_collected_crystals.clear();
+    g_collected_crystals_seed = seed;
+    g_collected_crystals_loaded = true;
+    if (seed == 0) return;
+    FILE* f = std::fopen(collected_crystals_path(seed).c_str(), "r");
+    if (!f) return;
+    char wad[16];
+    CollectedCrystal c;
+    while (std::fscanf(f, "%15s %d %d %d", wad, &c.x, &c.y, &c.z) == 4) {
+        c.wad = wad;
+        g_collected_crystals.push_back(c);
+    }
+    std::fclose(f);
+}
+
+static bool crystal_collected_locked(const std::string& wad, int32_t x, int32_t y, int32_t z) {
+    for (const auto& c : g_collected_crystals) {
+        if (c.x == x && c.y == y && c.z == z && c.wad == wad) return true;
+    }
+    return false;
+}
+
+static void remember_crystal_locked(const std::string& wad, int32_t x, int32_t y, int32_t z) {
+    ensure_collected_crystals_loaded_locked();
+    if (g_collected_crystals_seed == 0 || crystal_collected_locked(wad, x, y, z)) return;
+    g_collected_crystals.push_back({wad, x, y, z});
+    if (FILE* f = std::fopen(collected_crystals_path(g_collected_crystals_seed).c_str(), "a")) {
+        std::fprintf(f, "%s %d %d %d\n", wad.c_str(), x, y, z);
+        std::fclose(f);
+    }
+}
+
+// Number of white crystals remembered for every sub-area of the given stage (same 4-char prefix, e.g. "T1L6").
+static int collected_crystals_in_stage_locked(const std::string& stage_wad) {
+    int n = 0;
+    for (const auto& c : g_collected_crystals) {
+        if (c.wad.compare(0, 4, stage_wad, 0, 4) == 0 && c.wad.back() != '*') ++n; // '*' = coloured
+    }
+    return n;
+}
+
+// Coloured crystals: the remaster's saved crystal state (save table +0x4F8 + map_index * 0x3C, first 5 ints =
+// Red..Purple) both shows the crystal in the HUD and stops it spawning, including crystals that spawn mid-level
+// (from a smashed box). With crystals shuffled, keep it cleared so every coloured crystal can spawn, and let the
+// mod remove the collected ones by position. Cleared before a stage loads (resolve_map_load_locked) and every
+// frame while in it. Side effect: the HUD shows no coloured crystals.
+static void clear_coloured_crystal_state(const MapCoords& m) {
+    if (g_state.colored_crystals_mode != 1 || !g_state.is_randomizer_active() || !g_state.save_locked_to_mod) return;
+    int32_t* gem_state = reinterpret_cast<int32_t*>(g_exe_base + RVA_SAVE_DATA_TABLE + 0x4F8 + map_flag_index(m) * 0x3C);
+    for (int g = 0; g < 5; ++g) gem_state[g] = 0;
+}
+
+// Runs on the game thread every frame (inside the Hooked_ReadInput lock).
+static void apply_crystal_persistence_locked(const MapCoords& cur) {
+    if (!g_state.is_mod_enabled_toggle() || !g_state.is_randomizer_active() || !g_state.save_locked_to_mod) return;
+    ensure_collected_crystals_loaded_locked();
+    if (g_collected_crystals.empty()) return;
+    const std::string wad = coords_to_wad(cur);
+
+    // Remove already-collected crystals in this map.
+    int removed = 0;
+    for (uint8_t* st = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_STRAT_LIST_HEAD); st;
+         st = *reinterpret_cast<uint8_t**>(st + 8)) {
+        uint32_t& flags = *reinterpret_cast<uint32_t*>(st + 0xFC);
+        if (flags & 4) continue; // already removed
+        const char* name = *reinterpret_cast<const char**>(st + 0x30);
+        if (!name || (std::strcmp(name, "crystal") != 0 && std::strcmp(name, "bonus crystal") != 0)) continue;
+        const bool is_bonus = name[0] == 'b';
+        if (crystal_collected_locked(is_bonus ? wad + "*" : wad, *reinterpret_cast<int32_t*>(st + 0x4C),
+                                     *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54))) {
+            flags |= 6;
+            ++removed;
+        }
+    }
+    if (removed && g_state.debug_watch) {
+        debug_log_locked("CRYSTALS removed " + std::to_string(removed) + " already-collected crystal(s) in " + wad);
+    }
+
+    // Restore the stage's top-right counter once, about a second after entering it.
+    static std::string s_counter_stage;
+    static DWORD s_entered = 0;
+    int stage_idx = find_stage_index_by_wad(wad);
+    std::string stage_key = stage_idx >= 0 ? std::string(kStageDoors[stage_idx].vanilla_wad) : std::string();
+    if (stage_key != s_counter_stage) {
+        s_counter_stage = stage_key;
+        s_entered = GetTickCount();
+    }
+    if (!stage_key.empty() && s_entered && GetTickCount() - s_entered > 1000) {
+        int remembered = collected_crystals_in_stage_locked(stage_key);
+        int32_t& counter = *reinterpret_cast<int32_t*>(g_exe_base + RVA_LEVEL_CRYSTALS);
+        if (counter < remembered) {
+            if (g_state.debug_watch) {
+                debug_log_locked("CRYSTALS counter " + std::to_string(counter) + " -> " + std::to_string(remembered) +
+                                 " for " + stage_key);
+            }
+            counter = remembered;
+        }
+        s_entered = 0; // once per stage entry
+    }
+
+    if (stage_idx >= 0) clear_coloured_crystal_state(cur);
+}
+
 // Strat opcode 173 (0x140066030): GainCrystal. Pops a value; value >> 12 of 1..5 is a coloured crystal of that
 // colour (AddColoredCrystal), anything else is a white crystal (top-right counter 0xBA9B3C += 1, plus the
 // 50/100 crystal bonuses). The opcode runs on the crystal's own strat.
@@ -4121,6 +4257,10 @@ static void __fastcall Hooked_GainCrystal(void* strat) {
                     std::string(kStageDoors[stage_idx].level_name) + " - " + kGemColors[colour - 1] + " Crystal");
             }
             suppress = g_state.colored_crystals_mode == 1;
+        }
+        if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && g_state.save_locked_to_mod) {
+            remember_crystal_locked(coloured ? g_state.current_wad + "*" : g_state.current_wad, *reinterpret_cast<int32_t*>(sp + 0x4C),
+                                    *reinterpret_cast<int32_t*>(sp + 0x50), *reinterpret_cast<int32_t*>(sp + 0x54));
         }
     }
     if (suppress && stack_count > 0) {

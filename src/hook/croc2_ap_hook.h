@@ -132,6 +132,7 @@ constexpr uintptr_t RVA_INV_WHEEL_STATE          = 0x00BC4E9C; // int32_t 2 = in
 constexpr uintptr_t RVA_INV_WHEEL_SEL_INDEX      = 0x00BC4EA4; // int32_t selected slot index in wheel
 constexpr uintptr_t RVA_INV_WHEEL_SLOTS_ARRAY    = 0x00BC4EB0; // 0x1C-byte slot entries in live inventory wheel
 constexpr uintptr_t RVA_PLAYER_PTR               = 0x00BC7CE8; // Pointer to active PlayerStrat instance
+constexpr uintptr_t RVA_STRAT_LIST_HEAD          = 0x00BC7D20; // First live strat; next = *(strat + 8) (interpreter loop at 0x14005E7F0)
 constexpr uintptr_t RVA_MAP_FILENAME_STR         = 0x00BC8710;
 constexpr uintptr_t RVA_CROC_STRAT_DEF           = 0x00BD1540; // Pointer to Croc's on-foot Strat definition
 constexpr uintptr_t RVA_WAD_BUFFER_BASE          = 0x00BD25C0;
