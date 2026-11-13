@@ -4235,7 +4235,13 @@ static void apply_crystal_persistence_locked(const MapCoords& cur) {
     // and walking it then crashed. Every pointer is also checked before it is read.
     int removed = 0;
     const int32_t game_state = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
-    const bool list_stable = game_state == 0 && GetTickCount() - g_last_map_load_tick > 1500;
+    // Throttled: the input hook runs many times per frame, and checking every strat each time (with VirtualQuery)
+    // dropped the game to ~5 fps in testing. Sweep at most every 200 ms.
+    static DWORD s_last_sweep = 0;
+    const DWORD now_tick = GetTickCount();
+    const bool sweep_due = now_tick - s_last_sweep >= 200;
+    if (sweep_due) s_last_sweep = now_tick;
+    const bool list_stable = sweep_due && game_state == 0 && now_tick - g_last_map_load_tick > 1500;
     int guard = 0;
     for (uint8_t* st = list_stable ? *reinterpret_cast<uint8_t**>(g_exe_base + RVA_STRAT_LIST_HEAD) : nullptr;
          st && readable_memory(st, 0x140) && ++guard < 4096; st = *reinterpret_cast<uint8_t**>(st + 8)) {
@@ -4379,6 +4385,31 @@ static void log_script_trace_entry(const char* tag, const ScriptTraceEntry& e) {
 }
 
 static void __fastcall TraceOpcode(void* strat, int32_t op, uintptr_t original) {
+    // Spawn-hook research: log the first 24 opcodes the first few crystal strats run after a map load.
+    {
+        static void* s_seen[6] = {nullptr};
+        static int s_counts[6] = {0};
+        static DWORD s_epoch = 0;
+        if (s_epoch != g_last_map_load_tick) {
+            s_epoch = g_last_map_load_tick;
+            for (int i = 0; i < 6; ++i) { s_seen[i] = nullptr; s_counts[i] = 0; }
+        }
+        const char* nm = strat ? *reinterpret_cast<const char**>(static_cast<uint8_t*>(strat) + 0x30) : nullptr;
+        if (nm && (nm[0] == 'c' || nm[0] == 'b') && (std::strcmp(nm, "crystal") == 0 || std::strcmp(nm, "bonus crystal") == 0)) {
+            for (int i = 0; i < 6; ++i) {
+                if (s_seen[i] == strat || !s_seen[i]) {
+                    s_seen[i] = strat;
+                    if (s_counts[i]++ < 24) {
+                        char b[128];
+                        const int32_t* a = *reinterpret_cast<int32_t**>(strat);
+                        std::snprintf(b, sizeof(b), "SPAWNTRACE %s %p #%d op=%d args=%d,%d,%d", nm, strat, s_counts[i], op, a[0], a[1], a[2]);
+                        debug_log_locked(b);
+                    }
+                    break;
+                }
+            }
+        }
+    }
     if (strat && strat == *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR)) {
         const int32_t* args = *reinterpret_cast<int32_t**>(strat); // stream already points past the opcode
         ScriptTraceEntry e{GetTickCount(), op, reinterpret_cast<uintptr_t>(args) - 4, args[0], args[1], args[2], args[3]};
