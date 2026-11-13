@@ -3636,7 +3636,10 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             // Without Butt Stomp: a Jump press on the ground starts a jump; from then until the landing pulse
             // (or 4 s, or a death/checkpoint reset), Jump is masked once it has been released, so pressing it
             // again in the air does nothing. Holding it from take-off still gives the full-height jump.
-            enum { JUMP_GROUND, JUMP_AIR_HELD, JUMP_AIR_LOCKED };
+            // Mashing: if Jump is held at the landing pulse, the game would read it as a fresh press, so Jump stays
+            // masked until it's released (JUMP_GROUND_WAIT). And if 0xBA8970 (set while Croc rises after a jump)
+            // shows a jump the lock didn't see, the lock switches to "in the air" so it can't fall out of step.
+            enum { JUMP_GROUND, JUMP_GROUND_WAIT, JUMP_AIR_HELD, JUMP_AIR_LOCKED };
             static int s_jump_phase = JUMP_GROUND;
             static DWORD s_takeoff_tick = 0;
             const DWORD jump_now = GetTickCount();
@@ -3646,11 +3649,19 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
                 s_jump_phase = JUMP_GROUND;
             } else if (!g_state.abilities.butt_stomp) {
-                if (s_jump_phase != JUMP_GROUND &&
+                const bool rising = *reinterpret_cast<int32_t*>(g_exe_base + RVA_CROC_RISING) != 0;
+                if ((s_jump_phase == JUMP_AIR_HELD || s_jump_phase == JUMP_AIR_LOCKED) &&
                     ((landed && jump_now - s_takeoff_tick > 150) || game_state_now != 0 || jump_now - s_takeoff_tick > 4000)) {
-                    s_jump_phase = JUMP_GROUND;
+                    s_jump_phase = (raw_buttons & 0x4000u) ? JUMP_GROUND_WAIT : JUMP_GROUND;
                 }
-                if (s_jump_phase == JUMP_GROUND) {
+                if (s_jump_phase == JUMP_GROUND_WAIT && !(raw_buttons & 0x4000u)) s_jump_phase = JUMP_GROUND;
+                if (s_jump_phase != JUMP_AIR_HELD && s_jump_phase != JUMP_AIR_LOCKED && rising && game_state_now == 0) {
+                    s_jump_phase = (raw_buttons & 0x4000u) ? JUMP_AIR_HELD : JUMP_AIR_LOCKED; // a jump the lock missed
+                    s_takeoff_tick = jump_now;
+                }
+                if (s_jump_phase == JUMP_GROUND_WAIT) {
+                    buttons &= ~0x4000u;
+                } else if (s_jump_phase == JUMP_GROUND) {
                     if (newly_pressed & 0x4000u) { s_jump_phase = JUMP_AIR_HELD; s_takeoff_tick = jump_now; }
                 } else if (s_jump_phase == JUMP_AIR_HELD && !(raw_buttons & 0x4000u)) {
                     s_jump_phase = JUMP_AIR_LOCKED;
