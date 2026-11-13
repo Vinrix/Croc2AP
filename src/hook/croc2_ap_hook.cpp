@@ -51,6 +51,7 @@ static void check_crystal_spawn_queue_locked();
 static bool readable_memory(const void* p, size_t size);
 static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
+static std::atomic<bool> g_hide_jump_from_croc_script{false}; // set by the jump lock in Hooked_ReadInput
 static std::vector<void*> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
 static DWORD g_last_map_load_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
@@ -3642,12 +3643,16 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
                 s_jump_held_from_ground = true;
+                g_hide_jump_from_croc_script.store(false);
             } else if (!g_state.abilities.butt_stomp) {
                 if (on_ground) s_jump_held_from_ground = true;
                 else if (!(raw_buttons & 0x4000u)) s_jump_held_from_ground = false;
-                if (!on_ground && !s_jump_held_from_ground) buttons &= ~0x4000u;
+                // The controller itself is left alone (masking it confused the game's landing and auto-jump code);
+                // Hooked_StratReadValue hides Jump from Croc's script instead.
+                g_hide_jump_from_croc_script.store(!on_ground && !s_jump_held_from_ground);
             } else {
                 s_jump_held_from_ground = true;
+                g_hide_jump_from_croc_script.store(false);
             }
 
             // Long Jump (front flip): L1 + R1 together. L1 or R1 alone stays usable.
@@ -4311,6 +4316,23 @@ static void check_crystal_spawn_queue_locked() {
 static void __fastcall Hooked_CrystalSpawn180(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_180(strat); }
 static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_329(strat); }
 
+// Strat opcode 4 (0x140068CA0): push game value N (0x140067EA0). Croc's script reads the controller through it
+// (values 42, 44 and 144, tested against Jump = 16384 in every on-foot state, including the stomp checks). While
+// Butt Stomp is locked and Croc is in the air after letting go of Jump, the Jump bit is cleared from those values
+// for Croc's strat only, so his script never sees a mid-air press. See g_hide_jump_from_croc_script.
+static FnStratVmHandler g_orig_strat_read_value = nullptr;
+static void __fastcall Hooked_StratReadValue(void* strat) {
+    const int32_t which = **reinterpret_cast<int32_t**>(strat); // argument word, before the handler consumes it
+    g_orig_strat_read_value(strat);
+    if ((which == 42 || which == 44 || which == 144) && g_hide_jump_from_croc_script.load(std::memory_order_relaxed) &&
+        strat == *reinterpret_cast<void**>(g_exe_base + RVA_PLAYER_PTR)) {
+        uint8_t* sp = static_cast<uint8_t*>(strat);
+        if (*reinterpret_cast<int32_t*>(sp + 0x138) > 0) {
+            *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4) &= ~0x4000;
+        }
+    }
+}
+
 // Strat opcode 173 (0x140066030): GainCrystal. Pops a value; value >> 12 of 1..5 is a coloured crystal of that
 // colour (AddColoredCrystal), anything else is a white crystal (top-right counter 0xBA9B3C += 1, plus the
 // 50/100 crystal bonuses). The opcode runs on the crystal's own strat.
@@ -4645,6 +4667,7 @@ static void install_croc2_engine_hooks() {
     }
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 180 * 8, 0x00069BC0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn180), g_orig_crystal_spawn_180);
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 329 * 8, 0x000227E0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn329), g_orig_crystal_spawn_329);
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 4 * 8, 0x00068CA0, reinterpret_cast<uintptr_t>(&Hooked_StratReadValue), g_orig_strat_read_value);
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 173 * 8, 0x00066030, reinterpret_cast<uintptr_t>(&Hooked_GainCrystal), g_orig_gain_crystal);
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
