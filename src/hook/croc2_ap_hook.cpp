@@ -47,8 +47,10 @@ static void claim_solo_check_locked(int stage_idx, int sub_check_idx, const std:
 static void debug_log_locked(const std::string& msg);
 struct MapCoords;
 static void apply_crystal_persistence_locked(const MapCoords& cur);
+static void check_crystal_spawn_queue_locked();
 static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
+static std::vector<void*> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
 static DWORD g_last_map_load_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
@@ -3332,6 +3334,7 @@ static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t sub
         MapCoords req{tribe, level, submap, map_type};
         MapCoords dest = resolve_map_load_locked(req);
         g_crystals_collecting.clear();
+        g_crystal_spawn_queue.clear();
         g_last_map_load_tick = GetTickCount();
         if (find_stage_index_by_wad(coords_to_wad(dest)) >= 0) clear_coloured_crystal_state(dest);
         debug_log_locked("LoadMap " + coords_to_wad(req) + (coords_to_wad(dest) != coords_to_wad(req) ? " -> " + coords_to_wad(dest) : std::string()) +
@@ -4238,6 +4241,7 @@ static void apply_crystal_persistence_locked(const MapCoords& cur) {
     static bool s_restore_pending = false;
     const bool map_changed = std::memcmp(&s_last, &cur, sizeof(MapCoords)) != 0;
     if (map_changed) { s_last = cur; s_restore_pending = true; g_crystal_wad = coords_to_wad(cur); }
+    check_crystal_spawn_queue_locked();
     if (!map_changed && !s_restore_pending) { clear_coloured_crystal_state_fast(); return; }
     if (g_collected_crystals.empty()) return;
     const std::string& wad = g_crystal_wad;
@@ -4277,19 +4281,43 @@ static void apply_crystal_persistence_locked(const MapCoords& cur) {
 // for other strats, and nothing per frame.
 static FnStratVmHandler g_orig_crystal_spawn_180 = nullptr;
 static FnStratVmHandler g_orig_crystal_spawn_329 = nullptr;
+// 0 = not a crystal, 1 = white, 2 = coloured
+static int crystal_kind(const uint8_t* st) {
+    const char* name = *reinterpret_cast<const char* const*>(st + 0x30);
+    if (!name || (name[0] != 'c' && name[0] != 'b')) return 0;
+    if (std::strcmp(name, "crystal") == 0) return 1;
+    return std::strcmp(name, "bonus crystal") == 0 ? 2 : 0;
+}
+static bool remove_crystal_if_collected_locked(uint8_t* st, int kind) {
+    if (g_collected_crystals.empty() || g_crystal_wad.empty()) return false;
+    if (!crystal_collected_locked(kind == 2 ? g_crystal_wad + "*" : g_crystal_wad, *reinterpret_cast<int32_t*>(st + 0x4C),
+                                  *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54))) return false;
+    *reinterpret_cast<uint32_t*>(st + 0xFC) |= 6;
+    if (g_state.debug_watch) debug_log_locked(std::string("CRYSTALS removed collected ") + (kind == 2 ? "bonus crystal" : "crystal") + " in " + g_crystal_wad);
+    return true;
+}
+// White crystals run opcode 180 before their position / the current map is final, so each one is also queued
+// and checked again from the input hook once the map has settled (only the queued strats, no list walk).
 static void remove_if_collected(void* strat) {
     uint8_t* st = static_cast<uint8_t*>(strat);
-    const char* name = *reinterpret_cast<const char**>(st + 0x30);
-    if (!name || (name[0] != 'c' && name[0] != 'b')) return;
-    const bool is_bonus = std::strcmp(name, "bonus crystal") == 0;
-    if (!is_bonus && std::strcmp(name, "crystal") != 0) return;
+    const int kind = crystal_kind(st);
+    if (!kind) return;
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_collected_crystals.empty() || g_crystal_wad.empty()) return;
-    if (crystal_collected_locked(is_bonus ? g_crystal_wad + "*" : g_crystal_wad, *reinterpret_cast<int32_t*>(st + 0x4C),
-                                 *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54))) {
-        *reinterpret_cast<uint32_t*>(st + 0xFC) |= 6;
-        if (g_state.debug_watch) debug_log_locked(std::string("CRYSTALS removed collected ") + name + " in " + g_crystal_wad);
+    if (remove_crystal_if_collected_locked(st, kind)) return;
+    if (g_crystal_spawn_queue.size() < 512 &&
+        std::find(g_crystal_spawn_queue.begin(), g_crystal_spawn_queue.end(), strat) == g_crystal_spawn_queue.end())
+        g_crystal_spawn_queue.push_back(strat);
+}
+static void check_crystal_spawn_queue_locked() {
+    if (g_crystal_spawn_queue.empty()) return;
+    if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE) != 0 || GetTickCount() - g_last_map_load_tick < 500) return;
+    for (void* p : g_crystal_spawn_queue) {
+        uint8_t* st = static_cast<uint8_t*>(p);
+        if (std::find(g_crystals_collecting.begin(), g_crystals_collecting.end(), p) != g_crystals_collecting.end()) continue;
+        if (*reinterpret_cast<uint32_t*>(st + 0xFC) & 4) continue;
+        if (int kind = crystal_kind(st)) remove_crystal_if_collected_locked(st, kind);
     }
+    g_crystal_spawn_queue.clear();
 }
 static void __fastcall Hooked_CrystalSpawn180(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_180(strat); }
 static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_329(strat); }
