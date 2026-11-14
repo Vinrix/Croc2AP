@@ -10,7 +10,7 @@ from .regions import VEHICLE_STAGE_WADS
 
 def has_ability(state: CollectionState, player: int, options: Croc2Options, ability_name: str) -> bool:
     """Checks whether the player has unlocked a specific movement or interaction ability."""
-    if ability_name in ("Tail Whack", "Butt Stomp", "Climbing Claws", "Power Gloves"):
+    if ability_name in ("Tail Whack", "Butt Stomp", "Long Jump", "Climbing Claws", "Power Gloves"):
         return not options.shuffle_abilities.value or state.has(ability_name, player)
     if ability_name == "Lever Wrench":
         return not options.shuffle_levers.value or state.has("Lever Wrench", player)
