@@ -48,12 +48,12 @@ def find_base(d, types):
     return votes.most_common(1)[0][0] if votes else None
 
 
-def script_name(d, entry):
+def script_name(d, entry, words=12):
     """Name a script gives itself (176, 212 <byte offset, from the word after>), or None.
 
-    Most scripts open with it; some set a few variables first, so the first 12 words are checked.
+    Most scripts open with it; some set variables first, so the first `words` words are checked.
     """
-    for k in range(12):
+    for k in range(words):
         q = entry + 4 * k
         if q < 0 or q + 12 > len(d):
             return None
@@ -101,7 +101,12 @@ def load(path):
     placed = sorted({r[12] for r in recs})
     base = find_base(d, placed)
     ents = entries(d, base, placed)
-    return d, base, recs, ents, {t: script_name(d, base + t) or '?' for t in ents}
+    names = {}
+    for k, t in enumerate(ents):
+        # Look further in for a late "set name", but never past the next script's entry.
+        room = (ents[k + 1] - t) // 4 if k + 1 < len(ents) else 80
+        names[t] = script_name(d, base + t, max(12, min(80, room))) or '?'
+    return d, base, recs, ents, names
 
 
 def main():

@@ -111,15 +111,75 @@ objects. The level title and guides give 30.
 Source for the guide checks: Robshi's Croc 2 FAQ (PlayStation),
 https://www.video-games-museum.com/en/faqs/Playstation/26124-Croc-2.pdf
 
-## Other collectables (placed records)
+## Other collectables
 
-| Name | Records |
+Counted from the placed records of every map, named by each object's own script (`tools/strat_disasm.py`).
+The demo copies (`T0L1`) are left out.
+
+| Map | Level | Coloured crystals | Hearts | Keys | Golden Gobbo | Clockwork Gobbo | Other |
+|---|---|---|---|---|---|---|---|
+| T1L2 | Find the Key! Save the Gobbo! | 5 | 4 | 1 | 1 | 1 | |
+| T1L3 | Find 5 Lost Treasure Chests | 5 | 4 | | 1 | 1 | |
+| T1L4 | Get the Gobbo's Sandwich! | 5 (`Gobbo bonus crystal`) | 4 | 1 | 1 | 1 | |
+| T1L5 | Croc Vs Dantini Boat Race | 5 (seen in-game; not in the placement table) | | | 1 special | | |
+| T1L6 | Save the Bird from the Thief | 5 | 3 | | 1 | 1 | 1 `Heart Pot` |
+| T2L2 | Save the Ice Trapped Gobbos! | 5 | 2 | | 1 | 1 | |
+| T2L3 | Chase the Choo Choo Train | 5 | 3 | 1 | 1 | 1 | |
+| T2L5 | It's just Snowball Madness! | 5 | 2 (`Snow Heart`) | | 1 special | | |
+| T2L6 | Hang Glider Valley | 5 | | | 1 special | | |
+| T2L7 | KaBooom! It's Roger Red Ant | 5 | 1 | | 1 | 1 | |
+| T3L2 | Find the Wheels in the Jungle! | 5 | 2 | 2 | 1 | 1 | 2 `Wheel` |
+| T3L3 | Find the Wheels in the Mine! | 5 | 3 | | 1 | 1 | |
+| T3L4 | Race Day at Goldrock | 5 (seen in-game; not in the placement table) | | | 1 special | | |
+| T3L5 | Climb The Devil's Tower | 5 | 4 | | 1 | 1 | |
+| T3L7 | Save 50 Trapped Gobbos! | 5 | 3 | 1 | 1 | 1 | |
+| T4L2 | Save 30 Gobbo babies! | 5 | 3 | 3 | 1 | 1 | |
+| T4L3 | Up the Waterfall | 5 | 2 | | 1 | 1 | |
+| T1S1 | Sailor Tribe - Secret Mine | | 2 | 1 | | | 1 `JigsawPiece` |
+| T2S1 | Cossack Tribe - Secret Ice Cap | | | 1 | | | 1 `JigsawPiece` |
+| T3S1 | Caveman Tribe - Secret Mine | | 1 | | | | 1 `JigsawPiece` |
+| T4S1 | Inca Tribe - Secret Maze | | | | | | 1 `JigsawPiece` |
+| T1B1M002 | Soveena The Squid | | 1 | | | | |
+
+Totals: 85 coloured crystals (17 levels x 5), 17 Golden Gobbos (13 `Golden Gobbo`, 2 `Special Golden Gobbo` placed,
+plus the two race levels), 13 Clockwork Gobbos, 44 hearts, 18 keys in the main game, 4 jigsaw pieces, 1 placed
+heart pot. Bride of the Dungeon of Defright, Goo Man Chu's Tower and the bosses have no coloured crystals. This
+matches the FAQ: five coloured crystals in a level give its Golden Gobbo, all of a village's Golden Gobbos open its
+Golden Gobbo door, and the secret level behind it holds the village's jigsaw piece (4 in the game).
+
+The two race maps keep most of their objects outside the placement table, so their coloured crystals and Golden
+Gobbo are known from the debug map tour (5 `bonus crystal` and 1 `Special Golden Gobbo` each) and the FAQ, not
+from records.
+
+### Lost levels
+
+| Map | Title | `secret bonus crystal` | Keys | Other |
+|---|---|---|---|---|
+| T5L2M001 | Secret Sailor Village | | | 1 `secretbonusegg` |
+| T5L2M002-M006 | Sailor Secret 1-5 | 1 each | 1 in Secret 1 | |
+| T5L3M001 | Secret Cossack Village | | | 1 `secretbonusegg` |
+| T5L3M002-M006 | Cossack Secret 1-5 | 1 each, except Secret 3 which has 2 placed | 1 each in Secret 1, 2, 4, 5 | |
+| T5L4M001 | Secret Caveman Village | | | 1 `secretbonusegg` |
+| T5L4M002-M006 | Caveman Secret 1-5 | 1 each | 1 each in Secret 1 and 3 | |
+
+16 `secret bonus crystal` records for 15 levels: Cossack Secret 3 has two, at different positions with their own
+save slots. Which one a player can reach (or whether both exist in play) isn't settled.
+
+### Village hubs
+
+| Map | Objects of interest |
 |---|---|
-| `Heart` | 47 |
-| `Key` | 19 |
-| `Golden Gobbo` / `Special Golden Gobbo` | 16 / 2 |
-| Coloured crystals (`bonus crystal`, from the map tour) | 86, plus 7 `Gobbo bonus crystal` and 13 `secret bonus crystal` |
-| `ClockworkGobbo` (from the map tour) | 15 |
+| T1L1M001 Sailor Village | `Hub 1 Heart Pot`, `trampoline`, `Gobbo Says`, `Reward Gobbo`, `Throwable Gobbo Pickup`, 1 `Smash Box toolbox` |
+| T2L1M001 Cossack Village | Snowman parts: `Hub2Snowmanarm` x2, `Hub2SnowmanCarrot`, `Hub2SnowmanHat` (FAQ: 100 crystals for all four) |
+| T3L1M001 Caveman Village | Ginger soda parts: `Hub3FizzBox`, `Hub3GingerRoot`, `Hub3SugarBox`, `Hub3Bucket` |
+| T4L1M001 Inca Village | `BurpingGobbo`, `Hub4Bowl` (FAQ: win the burping contest for 100 crystals) |
 
-The coloured-crystal and Clockwork Gobbo scripts set their names in a way the tools don't read yet, so those two
-rows come from the debug map tour's dump rather than the files.
+### Which collectables have a save slot
+
+A save slot (record field 14) is the game's own per-object memory and makes a ready ID.
+
+| Has a save slot | No save slot (tracked some other way) |
+|---|---|
+| `crystal` (1 slot), Smash Boxes (2), `ring of crystals` (2), coloured crystals (2; `secret bonus crystal` 1), `Heart` / `Snow Heart` (1), `Heart Pot` (1), `ClockworkGobbo` (1), `Wheel` (1) | `Key`, `Golden Gobbo`, `Special Golden Gobbo`, `JigsawPiece`, `secretbonusegg`, `Hub 1 Heart Pot` |
+
+For the ones without a slot, the record's position in the table (or its map and position) can serve as the ID.
