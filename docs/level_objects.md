@@ -220,6 +220,91 @@ Gobbo, 270 binoculars) and for a save slot. What turned up:
 - Everything else is scenery: static models, falling-platform spawners, and the three item slots in Swap Meet
   Pete's shop maps (`T1L1M004` and the other villages' `L1M004`).
 
-Not done: a full control-flow disassembly. Scripts also call through tables (opcodes 79 and 137), which the tools
-don't follow, so "which script gives what" is read from each script's own code and the shared routines next to it,
-not traced end to end.
+## Every pickup, traced
+
+`strat_disasm.trace()` follows a script's control flow: jumps (132, 54), conditional jumps (130, 128, 131, 129),
+calls and returns (126, 125, 127), the end of a script (133), switch tables (137) and registered event handlers
+(79). The opcode set comes from scanning all 468 handlers in `croc2.exe` for code that moves the script position.
+Argument counts come from `tools/opcode_args.py`, which also looks inside helpers that are handed the script
+(19 opcodes read their inline words that way), and opcode 9 (a debug print) is decoded as variable-length.
+
+Running it from every placed object and everything those objects spawn reaches 401 pickup instructions. What
+the pickup opcodes really do, read from their handlers:
+
+| Opcode | Effect | The hook's header calls it |
+|---|---|---|
+| 171 | add a heart pot | heart pot |
+| 172 `<type>` | give an inventory item of that type | inventory item |
+| 173 | gain crystals: the value pushed before it is the amount (0 = one white crystal; 1-5 = that coloured crystal; larger = that many) | gain crystal |
+| 248 | add 1 to the counter at `0xBA9B38`; run only by `JigsawPiece` | "clockwork" |
+| 249 | add 1 to the counter at `0xBA9B30`, then the first-Golden-Gobbo achievement check; run only by `Golden Gobbo` and `Special Golden Gobbo` | "key" |
+| 250 | add 1 to the counter at `0xBA9B34`; no traced script runs it | "gobbo" |
+| 270 | add 100 crystals to the wallet (`0xBA9A9C`) if `0xBA9B7C` is set; run by hub reward characters | "binoculars" |
+
+Inventory item types given by opcode 172:
+
+| Type | Given by | Item |
+|---|---|---|
+| 2 | an object in Sailor Village (`T1L1M001`) | binoculars (seen in-game from the crate) |
+| 3 | `Key` (19 placed) | key |
+| 5, 6, 7, 8 | Swap Meet Pete | strawberry, lime and orange jelly; Clockwork Gobbo |
+| 10 | `Wheel` (2 in `T3L2`) and the object the two mine wheel blocks spawn (`T3L3`) | racer wheel |
+| 12 | `throwable gobbo 2` in `T1L4` | not identified |
+| 14 | `FFRefill`, `Forest Fire Setup` (fire levels) | water |
+
+### Who gives what
+
+| Script | Gives | Placed |
+|---|---|---|
+| `crystal` | 1 white crystal | 730 |
+| crystal holder (unnamed; spawned by Smash Boxes, rings, hoops) | 1 white crystal | spawned |
+| `bonus crystal`, `Gobbo bonus crystal`, `secret bonus crystal` | the coloured crystal of its colour | 80, 5, 16 |
+| `inca baby` | 2 white crystals on each of its five exits | 9 placed, the rest spawned |
+| chest object spawned by `SeeSaw Chest Count` (`T1L3`) | 10 white crystals | spawned |
+| `F-Fire gobbo`, `F-Fire rescue me gobbo` | 1 white crystal | 45, 5 |
+| `ForestFireGobboCheck` | 50 white crystals | 1 |
+| `Talking Gobbo 1` (`T4L5`) | its reward variable, 20 | 5 |
+| `HangGlider` | landing bonus, 10 or 5 | 1 |
+| race-finish script (unnamed, `T1L5`, `T3L4`) | 100, 70 or 50 | 1 each |
+| `Soveena`, `CBKHimself`, `VMMonster` | 50 | bosses |
+| `IceCube` (Lava Lamp Larry) | 100 | boss |
+| `FlavioSandBag` | 50 or 25 | boss |
+| `VenusVonFlyTrappe`, and an unnamed object in `T3B1M002` | 10, and 20 | boss |
+| `Key` | item 3 | 19 |
+| `Wheel`, mine wheel blocks | item 10 | 2 + 2 |
+| `Heart Pot` (`T1L6`), `Hub 1 Heart Pot` (`T1L1`) | a heart pot | 1, 1 |
+| `JigsawPiece` | opcode 248 | 4 |
+| `Golden Gobbo`, `Special Golden Gobbo` | opcode 249 | 13, 4 |
+| `Reward Gobbo`, `Trampoline Gobbo` (Sailor Village) | 100 crystals to the wallet | hub |
+| `Hub Snowman Kids` (Cossack Village) | 100 crystals to the wallet | hub |
+| `Gobbo King 3` (Caveman Village) | 100 crystals to the wallet | hub |
+| `BurpingGobbo` (Inca Village) | 100 crystals to the wallet | hub |
+| `Inca Baby Bouncer` (`T4L2`) | 100 crystals to the wallet | spawned |
+| `SMP Croc` (Swap Meet Pete, all four shops) | see below | 1 per shop |
+
+Hearts (`Heart`, `Snow Heart`) and Clockwork Gobbos (`ClockworkGobbo`) run none of these opcodes: a heart heals and
+a Clockwork Gobbo marker starts its section, so they are found by name, not by pickup code.
+
+### Swap Meet Pete's shop
+
+The same script runs in all four shop maps (`T1L1M004`, `T2L1M004`, `T3L1M004`, `T4L1M004`). For each item it
+checks how many Croc holds (the cap is 9), compares the wallet with the price, then gives the item:
+
+| Item | How it's given | Price in the script | FAQ |
+|---|---|---|---|
+| Orange jelly | item 7 | 40 | 40 |
+| Lime jelly | item 6 | 60 | 60 |
+| Strawberry jelly | item 5 | 80 | 80 |
+| Clockwork Gobbo | item 8 | 50 | 50 |
+| Heart pot | opcode 171 | 250 | 250 |
+
+Each shop map also has three unnamed objects that are the item display slots.
+
+### What the tracer doesn't reach
+
+A scan for pickup opcodes that no trace reaches finds two kinds of thing, neither a missed collectable:
+
+- Dead copies of shared code. The coloured-crystal collector and the crystal holder are compiled into every map,
+  including bosses and secret levels that have no coloured crystals or boxes.
+- Coincidences: a jump offset or variable index that happens to equal an opcode number (four were checked by hand).
+

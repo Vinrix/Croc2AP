@@ -9,10 +9,11 @@ How the pieces fit (all confirmed against the running game):
   that puts the most types on that pair.
 - A script is a stream of int32 words: an opcode (0..467) followed by its inline arguments. Argument counts are in
   opcode_args.json (tools/opcode_args.py, checked against in-game traces).
-- A script names itself: it opens with 176, then 212 <byte offset to its name string, from the word after>.
+- A script names itself: opcode 176 takes two inline words, 212 and a byte offset to its name string (measured
+  from the word after).
 - Scripts that are only ever spawned (never placed) are found through opcode 124 (push type), which other scripts
   use just before a spawn (94 or 192).
-- Jumps (130 jump-if-zero, 132 jump, 137) take a word offset from the word after their argument.
+- Jumps, calls, switches (137) and event handlers (79) are described next to JUMPS below; trace() follows them all.
 - Values are 20.12 fixed point where they are numbers: 4096 = 1.
 """
 import collections
@@ -26,13 +27,25 @@ import wad_objects  # noqa: E402
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ARGS = {int(k): v for k, v in json.load(open(os.path.join(_HERE, 'opcode_args.json'))).items()}
-JUMPS = {130: 'jz', 132: 'jmp', 137: 'j137'}
+JUMPS = {130: 'jz', 132: 'jmp', 128: 'jz+yield', 131: 'jnz', 129: 'jnz+yield', 54: 'jmp+yield', 126: 'call',
+         125: 'call+yield'}
+# How the script position moves (read from the opcode handlers in croc2.exe). A = address of the argument word.
+#   132, 54        jump to A + 4 + arg*4 (54 also yields for the frame)
+#   130, 128       pop; jump if zero        131, 129   pop; jump if not zero
+#   126, 125       call (push return address), 127 return, 133 end the script
+#   137            switch: pop v; table T = A + arg*4; count at T+8; entries of 12 bytes from T+16:
+#                  value, offset; on a match go to A + 4 + offset*4, otherwise fall through
+#   79 <arg> <slot> register an event handler: descriptor D = A + 4 + arg*4 holds event, parameter, offset;
+#                  the handler code is at A + 4 + offset*4
+COND = {130, 128, 131, 129}
+GOTO = {132, 54}
+CALL = {126, 125}
 NAMES = {
     1: 'push var', 3: 'push gvar?', 4: 'push value', 5: 'push &var', 7: 'push &gvar?', 10: 'push', 12: 'inc',
     14: 'add?', 15: 'sub?', 16: 'mul?', 18: 'store', 19: 'eq', 20: 'ne?', 21: 'lt?', 88: 'remove self', 94: 'spawn',
     121: 'not', 124: 'push type', 126: 'call', 127: 'return', 135: 'or?', 136: 'and?', 138: 'bit and',
     154: 'hurt croc', 155: 'reset to checkpoint', 172: 'give inventory item', 173: 'gain crystal',
-    176: 'begin', 192: 'spawn (args)', 212: 'set name', 329: 'crystal saved?', 330: 'save crystal',
+    176: 'set name', 192: 'spawn (args)', 329: 'crystal saved?', 330: 'save crystal',
 }
 
 
@@ -79,6 +92,28 @@ def entries(d, base, placed):
     return sorted(ents)
 
 
+def arg_words(d, p, op):
+    """Number of inline argument words of the instruction at p.
+
+    Opcode 9 (a debug print) is the one variable-length instruction: a count, then that many operands; an operand
+    is one word, plus one more when it is 1-4 (a value with an index), 0x45, 0xD4 (string marker) or 0xEA.
+    """
+    if op != 9:
+        return ARGS.get(op) or 0
+    if p + 8 > len(d):
+        return 1
+    count = struct.unpack_from('<i', d, p + 4)[0]
+    n = 1
+    if 0 <= count < 16:
+        for _ in range(count):
+            q = p + 4 + 4 * n
+            if q + 4 > len(d):
+                break
+            code = struct.unpack_from('<i', d, q)[0] & 0xFFFF
+            n += 2 if code in (1, 2, 3, 4, 0x45, 0xD4, 0xEA) else 1
+    return n
+
+
 def disassemble(d, start, end):
     """Yield (offset, opcode, args) from start up to end."""
     p = start
@@ -88,10 +123,52 @@ def disassemble(d, start, end):
             yield p, None, [op]
             p += 4
             continue
-        n = ARGS.get(op) or 0
-        args = list(struct.unpack_from('<%di' % n, d, p + 4)) if n else []
+        n = arg_words(d, p, op)
+        args = list(struct.unpack_from('<%di' % n, d, p + 4)) if n and p + 4 + 4 * n <= len(d) else []
         yield p, op, args
         p += 4 + 4 * n
+
+
+def trace(d, entry, lo=0, hi=None):
+    """Every instruction reachable from entry, as {address: (opcode, args)}, following jumps, calls, switch
+    tables and registered event handlers. Stops at return (127), end (133) and anything that isn't an opcode."""
+    hi = len(d) if hi is None else hi
+    seen = {}
+    todo = [entry]
+    while todo:
+        p = todo.pop()
+        while lo <= p <= hi - 4 and p not in seen:
+            op = struct.unpack_from('<i', d, p)[0]
+            if not 0 <= op < 468:
+                break
+            n = arg_words(d, p, op)
+            if p + 4 + 4 * n > hi:
+                break
+            a = struct.unpack_from('<%di' % n, d, p + 4) if n else ()
+            seen[p] = (op, a)
+            A = p + 4
+            if op in COND or op in CALL:
+                todo.append(A + 4 + a[0] * 4)
+            elif op in GOTO:
+                todo.append(A + 4 + a[0] * 4)
+                break
+            elif op == 137:
+                T = A + a[0] * 4
+                if lo <= T and T + 12 <= hi:
+                    count = struct.unpack_from('<i', d, T + 8)[0]
+                    if 0 <= count < 256:
+                        for k in range(count):
+                            e = T + 16 + 12 * k
+                            if e + 8 <= hi:
+                                todo.append(A + 4 + struct.unpack_from('<i', d, e + 4)[0] * 4)
+            elif op == 79:
+                D = A + 4 + a[0] * 4
+                if lo <= D and D + 12 <= hi:
+                    todo.append(A + 4 + struct.unpack_from('<i', d, D + 8)[0] * 4)
+            elif op in (127, 133):
+                break
+            p += 4 + 4 * n
+    return seen
 
 
 def load(path):

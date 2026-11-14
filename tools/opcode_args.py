@@ -15,8 +15,8 @@ import pefile
 TABLE_RVA, COUNT = 0x7F9420, 468
 
 
-def analyse(pe, md, base, rva, depth=0):
-    strat = {'rcx'}          # registers holding the strat pointer
+def analyse(pe, md, base, rva, depth=0, strat_regs=('rcx',)):
+    strat = set(strat_regs)  # registers holding the strat pointer
     val = {}                 # register -> bytes past the original position
     consumed = 0
     data = pe.get_data(rva, 600)
@@ -52,10 +52,21 @@ def analyse(pe, md, base, rva, depth=0):
                 consumed += int(src, 0)
             elif dst in val and re.fullmatch(r'0x[0-9a-f]+|\d+', src):
                 val[dst] += int(src, 0)
+        elif m == 'call':
+            # A helper that is handed the strat can read inline arguments itself (opcode 218 does).
+            mm = re.fullmatch(r'0x([0-9a-f]+)', ops)
+            passed = tuple(r for r in ('rcx', 'rdx', 'r8', 'r9') if r in strat)
+            if mm and passed and depth < 2:
+                target = int(mm.group(1), 16) - base
+                if target not in (0x5DA70, 0x5D8A0, 0x5DB50, 0x5DB80, 0x26080):   # pop / push helpers, logging
+                    consumed += 4 * analyse(pe, md, base, target, depth + 1, passed)
+            for r in ('rax', 'rcx', 'rdx', 'r8', 'r9', 'r10', 'r11'):                # clobbered by the call
+                val.pop(r, None)
+                strat.discard(r)
         elif m == 'jmp':
             mm = re.fullmatch(r'0x([0-9a-f]+)', ops)
             if mm and n <= 12 and depth < 2 and consumed == 0:   # thunk into another handler body
-                return analyse(pe, md, base, int(mm.group(1), 16) - base, depth + 1)
+                return analyse(pe, md, base, int(mm.group(1), 16) - base, depth + 1, tuple(strat) or ('rcx',))
             break
         elif m == 'ret':
             break
