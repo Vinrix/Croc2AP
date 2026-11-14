@@ -39,11 +39,11 @@ Field 14 is a ready-made permanent ID for a collectable: it's unique in the leve
 | Treasure chest (`SeeSaw Chest Count`, T1L3) | 10 | The chest script loops "gain crystal" 10 times; 5 chests |
 | `inca baby` (T4L2) | 2 per rescue, 0 if it cried | Each of the baby script's five exits gives 2; 30 babies |
 | `HGCrystalHoop` (T2L6) | 10 | 9 hoops; the FAQ lists the same groups of 10 |
-| Hang glider landing (T2L6) | 10, or 5 | The `HangGlider` script gives 10 in one case and 5 in the other at the end of the flight |
+| Hang glider landing (T2L6) | 10 / 5 / 0 | On touchdown the `HangGlider` script stores which ring of the target Croc is on (0-3): the bullseye gives 10, the two middle rings 5, the outer ring 0 |
 | Race result (T1L5, T3L4) | 100 / 70 / 50 | The finish script gives one of the three by position; the FAQ says 100 for winning |
 | `F-Fire gobbo`, `F-Fire rescue me gobbo` | 1 per rescue | One "gain crystal" in each script's rescue path |
-| `ForestFireGobboCheck` | 50 | Loops "gain crystal" 50 times once its condition is met (all Gobbos rescued) |
-| `Talking Gobbo 1` puzzle (T4L5) | up to 20 each | Loops "gain crystal" up to its variable 9; the FAQ says 20 per puzzle if solved quickly; 5 puzzles |
+| `ForestFireGobboCheck` | 50 | Waits until the rescued count reaches 50, then loops "gain crystal" 50 times |
+| `Talking Gobbo 1` puzzle (T4L5) | 20 each | Each of the 5 puzzle Gobbos sets its reward (variable 9) to 20 and loops "gain crystal" that many times; the FAQ says the puzzle must be solved quickly enough |
 
 A box's holder objects are the ones named "Blank" in debug logs; they are what runs "gain crystal" for a box.
 
@@ -62,7 +62,7 @@ the secret levels and the lost levels.
 | T1L4 | Get the Gobbo's Sandwich! | 60 | 8 | | 100 |
 | T2L2 | Save the Ice Trapped Gobbos! | 5 | 19 | | 100 |
 | T2L3 | Chase the Choo Choo Train | 32 | 12 | 1 ring x 8 | 100 |
-| T2L6 | Hang Glider Valley | 0 | 0 | 9 hoops x 10, landing bonus 10 | 100 |
+| T2L6 | Hang Glider Valley | 0 | 0 | 9 hoops x 10, bullseye landing 10 | 100 |
 | T2L5 | It's just Snowball Madness! | 60 | 8 | | 100 |
 | T2L7 | KaBooom! It's Roger Red Ant | 35 | 13 | | 100 |
 | T3L2 | Find the Wheels in the Jungle! | 35 | 13 | | 100 |
@@ -87,22 +87,22 @@ the secret levels and the lost levels.
 Not every award is certain to be collected: a baby that cries pays 0, a race pays less for 2nd or 3rd, the
 glider landing can pay 5, and a dungeon puzzle pays less (or nothing) when slow. Those stay replayable.
 
-### Lost levels (`T0L1M00x`)
+### Lost levels (`T5L2`, `T5L3`, `T5L4`)
 
-These are separate maps, harder remixes of earlier levels, played for their coloured crystals. They are not
-100-crystal stages.
+"Secret Sailor Village", "Secret Cossack Village" and "Secret Caveman Village": a hub map (`M001`) and five levels
+each (`M002`-`M006`, titled "Sailor Secret 1" and so on). They have no white crystals. Each level holds one
+coloured crystal (`secret bonus crystal`); five in a village free its Croc egg.
 
-| Map | Title | White crystals |
-|---|---|---|
-| T0L1M003 | Burning Down the Forest | 14 Gobbos x 1; the same 50-crystal bonus script is present |
-| T0L1M004 | ...the Wheels in the Jungle! | 7 placed + 1 box = 12 |
-| T0L1M005 | He Stole my lunch! | 12 placed + 2 boxes = 22 |
-| T0L1M006 | ...the Ice Trapped Gobbos! | 4 placed + 11 boxes = 59 |
-| T0L1M007 | 3 Lost Treasure Chests | 12 placed, plus the chest script (10 per chest) |
+### Demo copies (`T0L1M00x`)
 
-Note for the mod: `T0L1M003` is in the hook's stage-door table as "Inca Door 5", but the FAQ lists Inca Village
-as Save 30 Gobbo Babies, Up the Waterfall, Dante's Peak, Bride of the Dungeon of Defright and Goo Man Chu's Tower.
-"Burning Down the Forest" is the lost-level remix of the fire level.
+`T0L1M001`-`M007` carry the titles of real levels but are small copies ("Find 3 Lost Treasure Chests", "He Stole my
+lunch!", "Burning Down the Forest", "Village Masher", "Bride of the Dungeon of Defright" ...). The Cutting Room
+Floor lists demo/attract-mode levels that use earlier versions of levels. They are not stages: in
+`T0L1M003` the 50-Gobbo bonus script is present but only 14 Gobbos exist.
+
+Note for the mod: `T0L1M003` is in the hook's stage-door table as "Inca Door 5". Inca Village's levels are Save 30
+Gobbo Babies (`T4L2`), Up the Waterfall (`T4L3`), Dante's Peak (`T4B1`), Bride of the Dungeon of Defright (`T4L5`)
+and Goo Man Chu's Tower (`T4L6`), so that entry is a mis-mapping.
 
 T4L2 babies found in the scripts: 9 placed, 5 in Inca Pots (pots whose variable 0 is set), 4 on the carousel, 2 on
 swings, 1 on a block stack, plus those carried by the 6 "Inca Dantini with Baby" and thrown along the 4 baby-chain
