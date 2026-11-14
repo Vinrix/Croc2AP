@@ -10,12 +10,26 @@ Each level file has one table of 64-byte records, one per placed object (16 litt
 
 | Field | Meaning |
 |---|---|
-| 8, 9, 10 | x, y, z position |
-| 12 | type: offset of the object's script entry point from the file's script base |
-| 13 | number of saved-state slots |
-| 14 | offset of the object's saved state in the level (4 x field 13 apart; -1 = no saved state) |
+| 0, 1 | usually 0 |
+| 2 | flags |
+| 4, 5, 6 | x, y, z position |
+| 8 | type: offset of the object's script entry point from the file's script base |
+| 9 | number of saved-state slots |
+| 10 | offset of the object's saved state in the level (4 x field 9 apart; -1 = no saved state) |
+| 11 | number of script variables |
+| 12 | small number |
+| 13 | flags |
+| 15 | offset of the object's parameter block (-1 = none) |
 
-Field 14 is a ready-made permanent ID for a collectable: it's unique in the level and the game uses it itself.
+Field 10 is a ready-made permanent ID for a collectable: it's unique in the level and the game uses it itself.
+
+`tools/wad_objects.py` finds the table as the longest run of records that pass range checks on these fields (it
+returns them in an older frame that starts 16 bytes earlier; see the file). The remaster builds its map header in
+memory, so there is no count to read from the file. The result was audited on every map: 3,094 records in total,
+and in no gameplay map does the record just before or just after the table look like a placement record. Three
+earlier versions of the check each dropped real records (a "field 5 is zero" rule cut the train level's table
+short, a lower limit on the type hid the two race maps' tables, and a "field 0 is zero" rule dropped the first
+record of two maps).
 
 ## Scripts
 
@@ -78,11 +92,13 @@ the secret levels and the lost levels.
 | T2S1 | Cossack Tribe - Secret Ice Cap | 25 | 15 | | 100 |
 | T3S1 | Caveman Tribe - Secret Mine | 100 | 0 | | 100 |
 | T4S1 | Inca Tribe - Secret Maze | 0 | 20 | | 100 |
-| T1B1 | Soveena The Squid | 20 | 6 | | 50 |
-| T1B2 | Cannon Boat Keith | 35 | 3 | | 50 |
-| T3B1 | Venus Fly Von-Trappe | 0 | 10 | | 50 |
-| T3B2 | The Village Masher | 0 | 10 | | 50 |
-| T2B1, T2B2, T4B1, T4B2 | Flavio, Lava Lamp Larry, Dante's Peak, Dante's Final Fight | 0 | 0 | none found | 0 |
+| T1B1 | Soveena The Squid | 20 | 6 | 50 when Soveena is beaten | 100 |
+| T1B2 | Cannon Boat Keith | 35 | 3 | 50 when Keith is beaten | 100 |
+| T3B1 | Venus Fly Von-Trappe | 0 | 10 | In the fight: 10 from Venus's script per stage and 20 from a second object (amounts from the scripts; 3 stages + 20 = 50 is inferred) | 100? |
+| T3B2 | The Village Masher | 0 | 10 | 50 when the Masher is beaten | 100 |
+| T2B1 | Flavio the Thermal Fish | 0 | 0 | 50 when game value 91 is 0, otherwise 25, each time the award runs (50 + 25 + 25 over three hits is inferred) | 100? |
+| T2B2 | Lava Lamp Larry | 0 | 0 | 100 when Larry is beaten | 100 |
+| T4B1, T4B2 | Dante's Peak, Dante's Final Fight | 0 | 0 | no crystal award in their scripts | 0 |
 
 Not every award is certain to be collected: a baby that cries pays 0, a race pays less for 2nd or 3rd, the
 glider landing can pay 5, and a dungeon puzzle pays less (or nothing) when slow. Those stay replayable.
@@ -132,6 +148,7 @@ The demo copies (`T0L1`) are left out.
 | T3L3 | Find the Wheels in the Mine! | 5 | 3 | | 1 | 1 | 2 wheels: `Pushable Wheel Block`, `Dan Cart Wheel Block` |
 | T3L4 | Race Day at Goldrock | 5 | | | 1 special (seen in-game; its record's script isn't named) | | |
 | T3L5 | Climb The Devil's Tower | 5 | 4 | | 1 | 1 | |
+| T4L5 | Bride of the Dungeon of Defright | | | 1 | | | |
 | T3L7 | Save 50 Trapped Gobbos! | 5 | 3 | 1 | 1 | 1 | |
 | T4L2 | Save 30 Gobbo babies! | 5 | 3 | 3 | 1 | 1 | |
 | T4L3 | Up the Waterfall | 5 | 2 | | 1 | 1 | |
@@ -141,7 +158,7 @@ The demo copies (`T0L1`) are left out.
 | T4S1 | Inca Tribe - Secret Maze | | | | | | 1 `JigsawPiece` |
 | T1B1M002 | Soveena The Squid | | 1 | | | | |
 
-Totals: 85 coloured crystals (17 levels x 5), 17 Golden Gobbos (13 `Golden Gobbo` and 4 `Special Golden Gobbo`, the
+Totals: 85 coloured crystals (17 levels x 5), 12 keys (plus 7 in the lost levels), 17 Golden Gobbos (13 `Golden Gobbo` and 4 `Special Golden Gobbo`, the
 special ones being in the two races, the snowball level and the hang glider level), 13 Clockwork Gobbos, 44
 hearts, 4 wheels, 4 jigsaw pieces, 1 placed heart pot. Bride of the Dungeon of Defright, Goo Man Chu's Tower and
 the bosses have no coloured crystals. This matches the FAQ: five coloured crystals in a level give its Golden
@@ -188,3 +205,21 @@ A save slot (record field 14) is the game's own per-object memory and makes a re
 | `crystal` (1 slot), Smash Boxes (2), `ring of crystals` (2), coloured crystals (2; `secret bonus crystal` 1), `Heart` / `Snow Heart` (1), `Heart Pot` (1), `ClockworkGobbo` (1), `Wheel` (1) | `Key`, `Golden Gobbo`, `Special Golden Gobbo`, `JigsawPiece`, `secretbonusegg`, `Hub 1 Heart Pot` |
 
 For the ones without a slot, the record's position in the table (or its map and position) can serve as the ID.
+
+### Is anything missing?
+
+Named objects come straight from each script's own name, so the only place a collectable could hide is among
+the objects whose scripts don't name themselves (258 of 3,084 in the maps that load). Each of those was checked
+for pickup opcodes (171 heart pot, 172 give inventory item, 173 gain crystal, 248 Clockwork Gobbo, 249 key, 250
+Gobbo, 270 binoculars) and for a save slot. What turned up:
+
+- The race-finish script (100 / 70 / 50) in both race maps, and the boss award in Venus's second map.
+- The lost levels' cage object, which handles the coloured-crystal pickup.
+- Objects with a save slot but no pickup code: hub level doors, save gongs, the race maps' track markers, and
+  level machinery (train, mine and fire-level pieces).
+- Everything else is scenery: static models, falling-platform spawners, and the three item slots in Swap Meet
+  Pete's shop maps (`T1L1M004` and the other villages' `L1M004`).
+
+Not done: a full control-flow disassembly. Scripts also call through tables (opcodes 79 and 137), which the tools
+don't follow, so "which script gives what" is read from each script's own code and the shared routines next to it,
+not traced end to end.
