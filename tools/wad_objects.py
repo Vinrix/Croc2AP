@@ -14,7 +14,9 @@ import sys
 
 def _record(d, q):
     w = struct.unpack_from('<16i', d, q)
-    if (w[4] == 0 and w[7] == 0 and w[11] == 0 and 100000 < w[12] < 3000000
+    # The type can be small in small files (the two race maps), so the save-slot fields are checked as well.
+    if (w[4] == 0 and w[7] == 0 and w[11] == 0 and 1000 < w[12] < 3000000 and 0 <= w[13] < 64
+            and -1 <= w[14] < 100000
             and abs(w[8]) < 4_000_000 and abs(w[9]) < 1_000_000 and abs(w[10]) < 4_000_000):
         return w
     return None

@@ -121,7 +121,7 @@ The demo copies (`T0L1`) are left out.
 | T1L2 | Find the Key! Save the Gobbo! | 5 | 4 | 1 | 1 | 1 | |
 | T1L3 | Find 5 Lost Treasure Chests | 5 | 4 | | 1 | 1 | |
 | T1L4 | Get the Gobbo's Sandwich! | 5 (`Gobbo bonus crystal`) | 4 | 1 | 1 | 1 | |
-| T1L5 | Croc Vs Dantini Boat Race | 5 (seen in-game; not in the placement table) | | | 1 special | | |
+| T1L5 | Croc Vs Dantini Boat Race | 5 | | | 1 special | | |
 | T1L6 | Save the Bird from the Thief | 5 | 3 | | 1 | 1 | 1 `Heart Pot` |
 | T2L2 | Save the Ice Trapped Gobbos! | 5 | 2 | | 1 | 1 | |
 | T2L3 | Chase the Choo Choo Train | 5 | 3 | 1 | 1 | 1 | |
@@ -129,8 +129,8 @@ The demo copies (`T0L1`) are left out.
 | T2L6 | Hang Glider Valley | 5 | | | 1 special | | |
 | T2L7 | KaBooom! It's Roger Red Ant | 5 | 1 | | 1 | 1 | |
 | T3L2 | Find the Wheels in the Jungle! | 5 | 2 | 2 | 1 | 1 | 2 `Wheel` |
-| T3L3 | Find the Wheels in the Mine! | 5 | 3 | | 1 | 1 | |
-| T3L4 | Race Day at Goldrock | 5 (seen in-game; not in the placement table) | | | 1 special | | |
+| T3L3 | Find the Wheels in the Mine! | 5 | 3 | | 1 | 1 | 2 wheels: `Pushable Wheel Block`, `Dan Cart Wheel Block` |
+| T3L4 | Race Day at Goldrock | 5 | | | 1 special (seen in-game; its record's script isn't named) | | |
 | T3L5 | Climb The Devil's Tower | 5 | 4 | | 1 | 1 | |
 | T3L7 | Save 50 Trapped Gobbos! | 5 | 3 | 1 | 1 | 1 | |
 | T4L2 | Save 30 Gobbo babies! | 5 | 3 | 3 | 1 | 1 | |
@@ -141,15 +141,18 @@ The demo copies (`T0L1`) are left out.
 | T4S1 | Inca Tribe - Secret Maze | | | | | | 1 `JigsawPiece` |
 | T1B1M002 | Soveena The Squid | | 1 | | | | |
 
-Totals: 85 coloured crystals (17 levels x 5), 17 Golden Gobbos (13 `Golden Gobbo`, 2 `Special Golden Gobbo` placed,
-plus the two race levels), 13 Clockwork Gobbos, 44 hearts, 18 keys in the main game, 4 jigsaw pieces, 1 placed
-heart pot. Bride of the Dungeon of Defright, Goo Man Chu's Tower and the bosses have no coloured crystals. This
-matches the FAQ: five coloured crystals in a level give its Golden Gobbo, all of a village's Golden Gobbos open its
-Golden Gobbo door, and the secret level behind it holds the village's jigsaw piece (4 in the game).
+Totals: 85 coloured crystals (17 levels x 5), 17 Golden Gobbos (13 `Golden Gobbo` and 4 `Special Golden Gobbo`, the
+special ones being in the two races, the snowball level and the hang glider level), 13 Clockwork Gobbos, 44
+hearts, 4 wheels, 4 jigsaw pieces, 1 placed heart pot. Bride of the Dungeon of Defright, Goo Man Chu's Tower and
+the bosses have no coloured crystals. This matches the FAQ: five coloured crystals in a level give its Golden
+Gobbo, all of a village's Golden Gobbos open its Golden Gobbo door, and the secret level behind it holds the
+village's jigsaw piece (4 in the game).
 
-The two race maps keep most of their objects outside the placement table, so their coloured crystals and Golden
-Gobbo are known from the debug map tour (5 `bonus crystal` and 1 `Special Golden Gobbo` each) and the FAQ, not
-from records.
+The wheels: the jungle level has two `Wheel` objects; in the mine the two wheel blocks each run "give inventory
+item" (opcode 172) when opened.
+
+The two race maps are small files, so their script offsets are small; the parser's lower limit on the type field
+had been hiding their tables.
 
 ### Lost levels
 
@@ -158,12 +161,14 @@ from records.
 | T5L2M001 | Secret Sailor Village | | | 1 `secretbonusegg` |
 | T5L2M002-M006 | Sailor Secret 1-5 | 1 each | 1 in Secret 1 | |
 | T5L3M001 | Secret Cossack Village | | | 1 `secretbonusegg` |
-| T5L3M002-M006 | Cossack Secret 1-5 | 1 each, except Secret 3 which has 2 placed | 1 each in Secret 1, 2, 4, 5 | |
+| T5L3M002-M006 | Cossack Secret 1-5 | 1 each (Secret 3 has it placed twice) | 1 each in Secret 1, 2, 4, 5 | |
 | T5L4M001 | Secret Caveman Village | | | 1 `secretbonusegg` |
 | T5L4M002-M006 | Caveman Secret 1-5 | 1 each | 1 each in Secret 1 and 3 | |
 
-16 `secret bonus crystal` records for 15 levels: Cossack Secret 3 has two, at different positions with their own
-save slots. Which one a player can reach (or whether both exist in play) isn't settled.
+16 `secret bonus crystal` records for 15 levels. A crystal's colour is its variable 0, and the five levels of a
+village use colours 0-4 in order. Cossack Secret 3 has two records, both colour 2: one inside a glass cage
+(`DODGlassCage1`) and one among the crates. Either one gives the level's crystal, so it is one crystal with two
+placements; the FAQ describes a single crystal at the end of that level.
 
 ### Village hubs
 
