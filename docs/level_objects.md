@@ -46,7 +46,6 @@ All sub-maps of a stage added together.
 
 | Stage | Placed | Boxes | Rings | Other | Total |
 |---|---|---|---|---|---|
-| T0L1 | 35 | 14 | 0 | | 105 |
 | T1L2 | 55 | 9 | 0 | | 100 |
 | T1L3 | 40 | 2 | 0 | 5 chests x 10 | 100 |
 | T1L4 | 60 | 8 | 0 | | 100 |
@@ -61,7 +60,7 @@ All sub-maps of a stage added together.
 | T3L3 | 25 | 15 | 0 | | 100 |
 | T3L5 | 12 | 16 | 1 | | 100 |
 | T3S1 | 100 | 0 | 0 | | 100 |
-| T4L2 | 40 | 0 | 0 | 2 per Inca baby; 30 babies would make 60 (baby count not confirmed) | 100? |
+| T4L2 "Save 30 Gobbo babies!" | 40 | 0 | 0 | 30 babies x 2 = 60. A baby that cries gives 0, so the level must stay replayable until every baby has paid out | 100 |
 | T4L3 | 35 | 13 | 0 | | 100 |
 | T4L6 | 1 | 15 | 3 | | 100 |
 | T4S1 | 0 | 20 | 0 | | 100 |
@@ -69,6 +68,25 @@ All sub-maps of a stage added together.
 | T1B2 | 35 | 3 | 0 | | 50 |
 | T3B1 | 0 | 10 | 0 | | 50 |
 | T3B2 | 0 | 10 | 0 | | 50 |
+
+`T0L1` is not one stage: `T0L1M001`..`M007` are separate maps (shorter replays of earlier levels and two boss
+arenas), so they are listed on their own below. The boss totals are placed crystals and boxes in the arena, not a
+script bonus (Soveena The Squid: 20 crystals + 6 boxes).
+
+### Stages that don't use placed crystals
+
+| Map | Title | What the files show | Status |
+|---|---|---|---|
+| T1L5M001 | Croc Vs Dantini Boat Race | 20 crystal holders ("Blank") live, none placed | count not verified |
+| T2L6M001 | Hang Glider Valley | 100 crystal holders live, 9 `HGCrystalHoop` placed | matches 100 |
+| T3L4M001 | Race Day at Goldrock | 50 crystal holders live | count not verified |
+| T3L7M001 | Save 50 Trapped Gobbos! | 45 `F-Fire gobbo` + 5 `F-Fire rescue me gobbo` | crystals per rescue not read yet |
+| T0L1M003 | Burning Down the Forest | 10 `F-Fire gobbo` + 4 `F-Fire rescue me gobbo` | crystals per rescue not read yet |
+| T0L1M004 | ...the Wheels in the Jungle! | 7 crystals + 1 box = 12 | |
+| T0L1M005 | He Stole my lunch! | 12 crystals + 2 boxes = 22 | |
+| T0L1M006 | ...the Ice Trapped Gobbos! | 4 crystals + 11 boxes = 59 | |
+| T0L1M007 | 3 Lost Treasure Chests | 12 crystals, chests not counted yet | |
+| T4L5M001 | Bride of the Dungeon of Defright | no crystal objects found | |
 
 T4L2 babies found so far: 9 placed, 5 in Inca Pots (pots whose variable 0 is set), 4 on the carousel, 2 on swings,
 1 on a block stack, plus those carried by the 6 "Inca Dantini with Baby" and thrown along the 4 baby-chain
