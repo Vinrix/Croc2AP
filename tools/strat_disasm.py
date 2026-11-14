@@ -9,9 +9,11 @@ How the pieces fit (all confirmed against the running game):
   that puts the most types on that pair.
 - A script is a stream of int32 words: an opcode (0..467) followed by its inline arguments. Argument counts are in
   opcode_args.json (tools/opcode_args.py, checked against in-game traces).
+- A script names itself: it opens with 176, then 212 <byte offset to its name string, from the word after>.
+- Scripts that are only ever spawned (never placed) are found through opcode 124 (push type), which other scripts
+  use just before a spawn (94 or 192).
 - Jumps (130 jump-if-zero, 132 jump, 137) take a word offset from the word after their argument.
 - Values are 20.12 fixed point where they are numbers: 4096 = 1.
-Names for types come from an optional tab-separated file (map, name, x, y, z ...) made by the debug map tour.
 """
 import collections
 import json
@@ -22,18 +24,20 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wad_objects  # noqa: E402
 
-ARGS = {int(k): v for k, v in json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'opcode_args.json'))).items()}
+_HERE = os.path.dirname(os.path.abspath(__file__))
+ARGS = {int(k): v for k, v in json.load(open(os.path.join(_HERE, 'opcode_args.json'))).items()}
 JUMPS = {130: 'jz', 132: 'jmp', 137: 'j137'}
 NAMES = {
     1: 'push var', 3: 'push gvar?', 4: 'push value', 5: 'push &var', 7: 'push &gvar?', 10: 'push', 12: 'inc',
     14: 'add?', 15: 'sub?', 16: 'mul?', 18: 'store', 19: 'eq', 20: 'ne?', 21: 'lt?', 88: 'remove self', 94: 'spawn',
     121: 'not', 124: 'push type', 126: 'call', 127: 'return', 135: 'or?', 136: 'and?', 138: 'bit and',
     154: 'hurt croc', 155: 'reset to checkpoint', 172: 'give inventory item', 173: 'gain crystal',
-    329: 'crystal saved?', 330: 'save crystal',
+    176: 'begin', 192: 'spawn (args)', 212: 'set name', 329: 'crystal saved?', 330: 'save crystal',
 }
 
 
 def find_base(d, types):
+    """File offset that a type is added to, to get its script's entry point."""
     pat = struct.pack('<2i', 176, 212)
     votes = collections.Counter()
     i = d.find(pat)
@@ -44,14 +48,35 @@ def find_base(d, types):
     return votes.most_common(1)[0][0] if votes else None
 
 
-def load_names(tsv, level):
-    by_pos = []
-    if tsv and os.path.exists(tsv):
-        for line in open(tsv, encoding='latin1'):
-            f = line.rstrip('\n').split('\t')
-            if f[0] == level:
-                by_pos.append((f[1], int(f[2]), int(f[4])))
-    return by_pos
+def script_name(d, entry):
+    """Name a script gives itself (176, 212 <byte offset, from the word after>), or None.
+
+    Most scripts open with it; some set a few variables first, so the first 12 words are checked.
+    """
+    for k in range(12):
+        q = entry + 4 * k
+        if q < 0 or q + 12 > len(d):
+            return None
+        a, b, c = struct.unpack_from('<3i', d, q)
+        if a != 176 or b != 212:
+            continue
+        p = q + 12 + c
+        if p < 0 or p >= len(d):
+            return None
+        e = d.find(bytes(1), p)
+        s = d[p:e]
+        return s.decode('latin1') if 0 < len(s) < 48 and all(32 <= ch < 127 for ch in s) else None
+    return None
+
+
+def entries(d, base, placed):
+    """Every script entry: placed types plus any type pushed by opcode 124 that opens like a script."""
+    ents = set(placed)
+    for p in range(base + min(placed), min(base + max(placed) + 8000, len(d) - 12), 4):
+        a, x = struct.unpack_from('<2i', d, p)
+        if a == 124 and 0 < x < 3000000 and script_name(d, base + x):
+            ents.add(x)
+    return sorted(ents)
 
 
 def disassemble(d, start, end):
@@ -69,29 +94,23 @@ def disassemble(d, start, end):
         p += 4 + 4 * n
 
 
+def load(path):
+    """(data, base, placement records, sorted script entries, {entry: name})."""
+    d = open(path, 'rb').read()
+    recs = wad_objects.placements(path)
+    placed = sorted({r[12] for r in recs})
+    base = find_base(d, placed)
+    ents = entries(d, base, placed)
+    return d, base, recs, ents, {t: script_name(d, base + t) or '?' for t in ents}
+
+
 def main():
     path = sys.argv[1]
     want = sys.argv[2:]
-    level = os.path.basename(path)[:-4]
-    d = open(path, 'rb').read()
-    recs = wad_objects.placements(path)
-    types = sorted({r[12] for r in recs})
-    base = find_base(d, types)
-    tsv = os.environ.get('CROC2_OBJECTS_TSV')
-    live = load_names(tsv, level)
-    tname = {}
-    for r in recs:
-        best, bd = None, 4096 ** 2
-        for n, x, z in live:
-            dd = (x - r[8]) ** 2 + (z - r[10]) ** 2
-            if dd <= bd:
-                best, bd = n, dd
-        if best:
-            tname.setdefault(r[12], collections.Counter())[best] += 1
-    tname = {t: c.most_common(1)[0][0] for t, c in tname.items()}
-    print('# %s  script base 0x%X  %d object types' % (level, base, len(types)))
+    d, base, recs, types, tname = load(path)
+    print('# %s  script base 0x%X  %d scripts' % (os.path.basename(path)[:-4], base, len(types)))
     for k, t in enumerate(types):
-        name = tname.get(t, '?')
+        name = tname[t]
         if want and not any(w == str(t) or w.lower() == name.lower() for w in want):
             continue
         end = base + (types[k + 1] if k + 1 < len(types) else t + 4000)
