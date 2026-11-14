@@ -30,17 +30,17 @@ constexpr uintptr_t RVA_FN_ON_DOOR_TRANSITION    = 0x0002BA00;
 constexpr uintptr_t RVA_FN_READ_INPUT            = 0x00040990;
 constexpr uintptr_t RVA_FN_HUD_POPUP_COLORED     = 0x00041400;
 constexpr uintptr_t RVA_FN_HUD_POPUP_CRYSTALS    = 0x00041420;
-constexpr uintptr_t RVA_FN_HUD_POPUP_CLOCKWORK   = 0x000414F0;
-constexpr uintptr_t RVA_FN_HUD_POPUP_GOBBO       = 0x00041520;
-constexpr uintptr_t RVA_FN_HUD_POPUP_KEY         = 0x00041530;
+constexpr uintptr_t RVA_FN_HUD_POPUP_JIGSAW      = 0x000414F0; // called by opcode 248 (jigsaw piece)
+constexpr uintptr_t RVA_FN_HUD_POPUP_OP250       = 0x00041520; // called by opcode 250, which no script runs
+constexpr uintptr_t RVA_FN_HUD_POPUP_GOLDEN_GOBBO = 0x00041530; // called by opcode 249 (Golden Gobbo)
 constexpr uintptr_t RVA_FN_ADD_INVENTORY_ITEM    = 0x00041600;
 constexpr uintptr_t RVA_FN_ADD_COLORED_CRYSTAL   = 0x00041D90;
 constexpr uintptr_t RVA_FN_HUD_POPUP_HEARTS      = 0x000440F0;
 constexpr uintptr_t RVA_FN_REBUILD_INV_WHEEL     = 0x00045D30;
-constexpr uintptr_t RVA_FN_GIVE_KEY_NATIVE       = 0x00065F90;
-constexpr uintptr_t RVA_FN_GIVE_GOBBO_NATIVE     = 0x00065FD0;
-constexpr uintptr_t RVA_FN_GIVE_BINOCULARS_NAT   = 0x00065FE0;
-constexpr uintptr_t RVA_FN_GIVE_CLOCKWORK_NAT    = 0x00066010;
+constexpr uintptr_t RVA_FN_OP_GOLDEN_GOBBO       = 0x00065F90; // opcode 249: Golden Gobbo counter += 1
+constexpr uintptr_t RVA_FN_OP_250                = 0x00065FD0; // opcode 250: counter 0xBA9B34 += 1 (no script runs it)
+constexpr uintptr_t RVA_FN_OP_REWARD_100         = 0x00065FE0; // opcode 270: wallet += 100 when the reward flag is set
+constexpr uintptr_t RVA_FN_OP_JIGSAW_PIECE       = 0x00066010; // opcode 248: jigsaw piece counter += 1
 constexpr uintptr_t RVA_FN_GIVE_HEART_POT_NAT    = 0x00066120;
 constexpr uintptr_t RVA_FN_GIVE_INV_ITEM_NAT     = 0x00062CD0; // Opcode 172 handler: GiveInventoryItem(type)
 constexpr uintptr_t RVA_FN_SET_ACHIEVEMENT       = 0x0025FF00; // AchievementManager::SetAchievementValue(std::string*, int)
@@ -70,27 +70,29 @@ constexpr uintptr_t RVA_CLIMB_ALLOWED_BYTE       = 0x00BD1361; // uint8_t 1 when
 constexpr uintptr_t RVA_CLIMB_TOUCH_SURFACE_FLAG = 0x00BD1930; // int32_t non-zero when touching climbable wall/vine
 constexpr uintptr_t RVA_CLIMB_ACTIVE_STATE_FLAG  = 0x00BD19A0; // int32_t 1 when climbing wall/vine
 
-// Strat VM Collectable & Inventory Opcode Handlers & Dispatch Table Slots
-constexpr uintptr_t RVA_STRAT_VM_DISPATCH_TABLE  = 0x007F9420;
-constexpr uintptr_t RVA_STRAT_VM_HEART_POT_SLOT  = 0x007F9978; // Opcode 171 (0xAB) -> 0x140066120
-constexpr uintptr_t RVA_STRAT_VM_INV_ITEM_SLOT   = 0x007F9980; // Opcode 172 (0xAC) -> 0x140062CD0
-constexpr uintptr_t RVA_STRAT_VM_CLOCKWORK_SLOT  = 0x007F9BE0; // Opcode 248 (0xF8) -> 0x140066010
-constexpr uintptr_t RVA_STRAT_VM_KEY_SLOT        = 0x007F9BE8; // Opcode 249 (0xF9) -> 0x140065F90
-constexpr uintptr_t RVA_STRAT_VM_GOBBO_SLOT      = 0x007F9BF0; // Opcode 250 (0xFA) -> 0x140065FD0
-constexpr uintptr_t RVA_STRAT_VM_BINOCULARS_SLOT = 0x007F9C90; // Opcode 270 (0x10E) -> 0x140065FE0
+// Strat VM pickup opcodes and their dispatch table slots. What each one does was read from its handler and
+// from the scripts that run it (docs/level_objects.md, "Every pickup, traced").
+constexpr uintptr_t RVA_STRAT_VM_DISPATCH_TABLE    = 0x007F9420;
+constexpr uintptr_t RVA_STRAT_VM_HEART_POT_SLOT    = 0x007F9978; // Opcode 171: add a heart pot (Heart Pot objects, Swap Meet Pete)
+constexpr uintptr_t RVA_STRAT_VM_INV_ITEM_SLOT     = 0x007F9980; // Opcode 172 <type>: give an inventory item (types below)
+constexpr uintptr_t RVA_STRAT_VM_JIGSAW_SLOT       = 0x007F9BE0; // Opcode 248: jigsaw piece (run only by JigsawPiece)
+constexpr uintptr_t RVA_STRAT_VM_GOLDEN_GOBBO_SLOT = 0x007F9BE8; // Opcode 249: Golden Gobbo (run only by Golden Gobbo / Special Golden Gobbo)
+constexpr uintptr_t RVA_STRAT_VM_OP250_SLOT        = 0x007F9BF0; // Opcode 250: no script runs it
+constexpr uintptr_t RVA_STRAT_VM_REWARD_100_SLOT   = 0x007F9C90; // Opcode 270: 100 crystals to the wallet (hub reward characters)
 
 // NOT sound effects: these are the AchievementManager checks the game's pickup handlers tail-call
 // (each builds an achievement ID and calls RVA_FN_SET_ACHIEVEMENT). Calling them unlocks real Steam
 // achievements, so the mod must never use them as pickup feedback. Kept only as documentation.
-constexpr uintptr_t RVA_FN_ACH_CHECK_KEY         = 0x00260DE0; // was RVA_FN_PLAY_SFX_KEY; sets "firstGoldenGobbo"
-constexpr uintptr_t RVA_FN_ACH_CHECK_CLOCKWORK   = 0x00260F90; // was RVA_FN_PLAY_SFX_CLOCKWORK
-constexpr uintptr_t RVA_FN_ACH_CHECK_BINOCULARS  = 0x00261060; // was RVA_FN_PLAY_SFX_BINOCULARS
-constexpr uintptr_t RVA_FN_ACH_CHECK_INV_ITEM    = 0x00260DD0; // was RVA_FN_PLAY_SFX_INV_ITEM; opcode 172 tail-jumps here with the item type
+constexpr uintptr_t RVA_FN_ACH_CHECK_GOLDEN_GOBBO = 0x00260DE0; // tail of opcode 249; sets "firstGoldenGobbo"
+constexpr uintptr_t RVA_FN_ACH_CHECK_JIGSAW      = 0x00260F90; // tail of opcode 248
+constexpr uintptr_t RVA_FN_ACH_CHECK_REWARD_100  = 0x00261060; // tail of opcode 270
+constexpr uintptr_t RVA_FN_ACH_CHECK_INV_ITEM    = 0x00260DD0; // tail of opcode 172, passed the item type
 
 // Exact croc2.exe Global State RVAs
 constexpr uintptr_t RVA_ACTIVE_SAVE_SLOT         = 0x00B4D5A8; // int32_t save slot index (0..4)
 constexpr uintptr_t RVA_PAUSE_MENU_ACTIVE        = 0x00B8E018;
 constexpr uintptr_t RVA_COLORED_CRYSTAL_PTR      = 0x00B8E028; // Points to int32_t (0x1000 per crystal, 0x5000 = all 5)
+constexpr uintptr_t RVA_FN_STRAT_READ_VALUE      = 0x00067EA0; // push game value N (opcode 4 and 9 others)
 constexpr uintptr_t PLAYER_GROUND_FLAGS_OFF      = 0x100;      // Croc strat flags word; bit 1 set while on the ground (recorded in-game)
 constexpr uint32_t  PLAYER_ON_GROUND_BIT         = 0x2;
 constexpr uintptr_t RVA_TRANSITION_STATE         = 0x00B90D30; // 7 = door transition triggered
@@ -106,26 +108,27 @@ constexpr uintptr_t RVA_CURR_MAP_LEVEL           = 0x00BA9B08; // int32_t level 
 constexpr uintptr_t RVA_CURR_MAP_SUBMAP          = 0x00BA9B0C; // int32_t submap (1..999)
 constexpr uintptr_t RVA_CURR_MAP_TYPE            = 0x00BA9B10; // int32_t map_type (0=L, 1=B, 2=S, 3=I)
 constexpr uintptr_t RVA_STAGE_COLORED_MASK       = 0x00BA9B24; // int32_t colored crystal mask
-constexpr uintptr_t RVA_HUD_KEYS                 = 0x00BA9B30; // int32_t in-stage / HUD key count
-constexpr uintptr_t RVA_HUD_GOBBOS               = 0x00BA9B34; // int32_t HUD gobbo count
-constexpr uintptr_t RVA_HUD_CLOCKWORK_GOBBOS     = 0x00BA9B38; // int32_t HUD clockwork gobbo count (max 9)
+constexpr uintptr_t RVA_COUNT_GOLDEN_GOBBOS      = 0x00BA9B30; // int32_t Golden Gobbos (opcode 249 adds 1)
+constexpr uintptr_t RVA_COUNT_OP250              = 0x00BA9B34; // int32_t counter of opcode 250, which no script runs
+constexpr uintptr_t RVA_COUNT_JIGSAW_PIECES      = 0x00BA9B38; // int32_t jigsaw pieces (opcode 248 adds 1)
 constexpr uintptr_t RVA_LEVEL_CRYSTALS           = 0x00BA9B3C; // Current in-level white crystals
-constexpr uintptr_t RVA_INV_GOLDEN_GOBBOS        = 0x00BA9B40; // Wheel item_type 2. Observed in-game as the BINOCULARS, not Golden Gobbos
-constexpr uintptr_t RVA_INV_STAGE_ITEM           = 0x00BA9B44; // Wheel item_type 3
-constexpr uintptr_t RVA_INV_RED_JELLIES          = 0x00BA9B48; // Wheel item_type 5 (Gummi Jump Red Jelly, max 9)
-constexpr uintptr_t RVA_INV_BLUE_JELLIES         = 0x00BA9B4C; // Wheel item_type 7 (Jelly Jump Blue Jelly, max 9)
-constexpr uintptr_t RVA_INV_GREEN_JELLIES        = 0x00BA9B50; // Wheel item_type 6 (High Jelly Jump Green Jelly, max 9)
-constexpr uintptr_t RVA_INV_KEYS                 = 0x00BA9B54; // Wheel item_type 12 (Keys in inventory wheel)
-constexpr uintptr_t RVA_INV_CLOCKWORK            = 0x00BA9B58; // Wheel item_type 8 (Clockwork Gobbo in wheel, max 9)
-constexpr uintptr_t RVA_INV_BINOCULARS           = 0x00BA9B5C; // Wheel item_type 4
-constexpr uintptr_t RVA_INV_JIGSAW_PIECES        = 0x00BA9B60; // Wheel item_type 10 (Jigsaw Pieces, max 4)
+// Inventory counters by item type, from AddInventoryItem's own switch (0x140041600) and the scripts that give them.
+constexpr uintptr_t RVA_INV_BINOCULARS           = 0x00BA9B40; // type 2: binoculars (an object in Sailor Village gives them)
+constexpr uintptr_t RVA_INV_KEYS                 = 0x00BA9B44; // type 3: keys (the Key objects)
+constexpr uintptr_t RVA_INV_STRAWBERRY_JELLIES   = 0x00BA9B48; // type 5: strawberry jelly (80 crystals at Pete's), max 9
+constexpr uintptr_t RVA_INV_ORANGE_JELLIES       = 0x00BA9B4C; // type 7: orange jelly (40 crystals), max 9
+constexpr uintptr_t RVA_INV_LIME_JELLIES         = 0x00BA9B50; // type 6: lime jelly (60 crystals), max 9
+constexpr uintptr_t RVA_INV_CARRIED              = 0x00BA9B54; // types 12, 13, 14 share it: what Croc is carrying (12 a Gobbo, 14 water)
+constexpr uintptr_t RVA_INV_CLOCKWORK            = 0x00BA9B58; // type 8: Clockwork Gobbo (50 crystals), max 9
+constexpr uintptr_t RVA_INV_TYPE_4               = 0x00BA9B5C; // type 4: no script gives it
+constexpr uintptr_t RVA_INV_WHEELS               = 0x00BA9B60; // type 10: racer wheels (jungle Wheel objects, mine wheel blocks)
 constexpr uintptr_t RVA_INV_WHEEL_SLOT_COUNT     = 0x00BA9B64; // Number of active non-zero item types in inventory wheel
 constexpr uintptr_t RVA_INV_WHEEL_CUR_ITEM_ID    = 0x00BA9B68; // Currently selected item_type in inventory wheel
 constexpr uintptr_t RVA_PREV_MAP_TRIBE           = 0x00BA9B6C; // int32_t prev_tribe
 constexpr uintptr_t RVA_PREV_MAP_LEVEL           = 0x00BA9B70; // int32_t prev_level
 constexpr uintptr_t RVA_PREV_MAP_SUBMAP          = 0x00BA9B74; // int32_t prev_submap
 constexpr uintptr_t RVA_PREV_MAP_TYPE            = 0x00BA9B78; // int32_t prev_map_type
-constexpr uintptr_t RVA_HUD_BINOCULARS           = 0x00BA9B7C; // int32_t 1 = Binoculars owned
+constexpr uintptr_t RVA_REWARD_100_FLAG          = 0x00BA9B7C; // int32_t opcode 270 pays its 100 crystals only when this is set; what sets it isn't known
 constexpr uintptr_t RVA_HELD_BUTTONS             = 0x00BC4B54; // PS1 PAD bitmask (0x8000=Tail, 0x4000=Jump/Stomp, 0x0C00=Flip)
 constexpr uintptr_t RVA_PREV_30HZ_BUTTONS        = 0x00BC4B58; // Previous 30Hz logic tick held buttons
 constexpr uintptr_t RVA_PRESSED_BUTTONS          = 0x00BC4B5C; // 30Hz rising-edge pressed buttons (~prev_30hz & held)
