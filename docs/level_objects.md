@@ -29,68 +29,87 @@ Field 14 is a ready-made permanent ID for a collectable: it's unique in the leve
 
 ## White crystal sources
 
+"Gain crystal" (opcode 173) takes an amount: 0 means one crystal, and the race scripts pass 100, 70 or 50.
+
 | Source | Crystals | How it's known |
 |---|---|---|
-| `crystal` (placed) | 1 | 747 placed records |
+| `crystal` (placed) | 1 | Placed records |
 | `Smash Box`, `Smash Box Cave`, `Smash Box Snow`, `Snow Smash Box (Snowball)` | 5 | The box spawns one holder per crystal until a counter equals its variable 1; every box has 5 there |
-| `ring of crystals` | 8 | Variable 0 of each ring is 8 (T4L6: 1 + 15 boxes + 3 rings = 100) |
+| `ring of crystals` | 8 | It spawns round a full circle in steps of an eighth (variable 3) |
 | Treasure chest (`SeeSaw Chest Count`, T1L3) | 10 | The chest script loops "gain crystal" 10 times; 5 chests |
-| `CCCSwitch` pattern (T2L3) | 28 (inferred) | Its script spawns crystals on a grid; 16 were present 4 s after load and still appearing. 14 + 50 + 8 + 28 = 100 |
-| `inca baby` (T4L2) | 2 per rescue | Each of the baby script's five exits gives 2 crystals |
+| `inca baby` (T4L2) | 2 per rescue, 0 if it cried | Each of the baby script's five exits gives 2; 30 babies |
+| `HGCrystalHoop` (T2L6) | 10 | 9 hoops; the FAQ lists the same groups of 10 |
+| Hang glider landing (T2L6) | 10, or 5 | The `HangGlider` script gives 10 in one case and 5 in the other at the end of the flight |
+| Race result (T1L5, T3L4) | 100 / 70 / 50 | The finish script gives one of the three by position; the FAQ says 100 for winning |
+| `F-Fire gobbo`, `F-Fire rescue me gobbo` | 1 per rescue | One "gain crystal" in each script's rescue path |
+| `ForestFireGobboCheck` | 50 | Loops "gain crystal" 50 times once its condition is met (all Gobbos rescued) |
+| `Talking Gobbo 1` puzzle (T4L5) | up to 20 each | Loops "gain crystal" up to its variable 9; the FAQ says 20 per puzzle if solved quickly; 5 puzzles |
 
 A box's holder objects are the ones named "Blank" in debug logs; they are what runs "gain crystal" for a box.
 
 ## White crystals per stage
 
-All sub-maps of a stage added together.
+Checked two ways: the level files (placed records and scripts) and a PlayStation FAQ, which states "There are
+100 of these in every level" and describes the special cases below. The game has 18 levels and 8 bosses, plus
+the secret levels and the lost levels.
 
-| Stage | Placed | Boxes | Rings | Other | Total |
+| Map | Level | Placed | Boxes x5 | Other | Total |
 |---|---|---|---|---|---|
-| T1L2 | 55 | 9 | 0 | | 100 |
-| T1L3 | 40 | 2 | 0 | 5 chests x 10 | 100 |
-| T1L4 | 60 | 8 | 0 | | 100 |
-| T1L6 | 55 | 9 | 0 | | 100 |
-| T1S1 | 60 | 8 | 0 | | 100 |
-| T2L2 | 5 | 19 | 0 | | 100 |
-| T2L3 | 14 | 10 | 1 | CCCSwitch pattern 28 (inferred) | 100 |
-| T2L5 | 60 | 8 | 0 | | 100 |
-| T2L7 | 35 | 13 | 0 | | 100 |
-| T2S1 | 25 | 15 | 0 | | 100 |
-| T3L2 | 35 | 13 | 0 | | 100 |
-| T3L3 | 25 | 15 | 0 | | 100 |
-| T3L5 | 12 | 16 | 1 | | 100 |
-| T3S1 | 100 | 0 | 0 | | 100 |
-| T4L2 "Save 30 Gobbo babies!" | 40 | 0 | 0 | 30 babies x 2 = 60. A baby that cries gives 0, so the level must stay replayable until every baby has paid out | 100 |
-| T4L3 | 35 | 13 | 0 | | 100 |
-| T4L6 | 1 | 15 | 3 | | 100 |
-| T4S1 | 0 | 20 | 0 | | 100 |
-| T1B1 | 20 | 6 | 0 | | 50 |
-| T1B2 | 35 | 3 | 0 | | 50 |
-| T3B1 | 0 | 10 | 0 | | 50 |
-| T3B2 | 0 | 10 | 0 | | 50 |
+| T1L2 | Find the Key! Save the Gobbo! | 55 | 9 | | 100 |
+| T1L3 | Find 5 Lost Treasure Chests | 40 | 2 | 5 chests x 10 | 100 |
+| T1L5 | Croc Vs Dantini Boat Race | 0 | 0 | 100 for 1st, 70 for 2nd, 50 for 3rd | 100 |
+| T1L6 | Save the Bird from the Thief | 55 | 9 | | 100 |
+| T1L4 | Get the Gobbo's Sandwich! | 60 | 8 | | 100 |
+| T2L2 | Save the Ice Trapped Gobbos! | 5 | 19 | | 100 |
+| T2L3 | Chase the Choo Choo Train | 32 | 12 | 1 ring x 8 | 100 |
+| T2L6 | Hang Glider Valley | 0 | 0 | 9 hoops x 10, landing bonus 10 | 100 |
+| T2L5 | It's just Snowball Madness! | 60 | 8 | | 100 |
+| T2L7 | KaBooom! It's Roger Red Ant | 35 | 13 | | 100 |
+| T3L2 | Find the Wheels in the Jungle! | 35 | 13 | | 100 |
+| T3L3 | Find the Wheels in the Mine! | 25 | 15 | | 100 |
+| T3L4 | Race Day at Goldrock | 0 | 0 | 100 / 70 / 50 by position | 100 |
+| T3L5 | Climb The Devil's Tower | 12 | 16 | 1 ring x 8 | 100 |
+| T3L7 | Save 50 Trapped Gobbos! | 0 | 0 | 50 Gobbos x 1, plus 50 for rescuing all | 100 |
+| T4L2 | Save 30 Gobbo babies! | 40 | 0 | 30 babies x 2 | 100 |
+| T4L3 | Up the Waterfall | 35 | 13 | | 100 |
+| T4L5 | Bride of the Dungeon of Defright | 0 | 0 | 5 timed puzzles x 20 | 100 |
+| T4L6 | Goo Man Chu's Tower (boss 8) | 1 | 15 | 3 rings x 8 | 100 |
+| T1S1 | Sailor Tribe - Secret Mine | 60 | 8 | | 100 |
+| T2S1 | Cossack Tribe - Secret Ice Cap | 25 | 15 | | 100 |
+| T3S1 | Caveman Tribe - Secret Mine | 100 | 0 | | 100 |
+| T4S1 | Inca Tribe - Secret Maze | 0 | 20 | | 100 |
+| T1B1 | Soveena The Squid | 20 | 6 | | 50 |
+| T1B2 | Cannon Boat Keith | 35 | 3 | | 50 |
+| T3B1 | Venus Fly Von-Trappe | 0 | 10 | | 50 |
+| T3B2 | The Village Masher | 0 | 10 | | 50 |
+| T2B1, T2B2, T4B1, T4B2 | Flavio, Lava Lamp Larry, Dante's Peak, Dante's Final Fight | 0 | 0 | none found | 0 |
 
-`T0L1` is not one stage: `T0L1M001`..`M007` are separate maps (shorter replays of earlier levels and two boss
-arenas), so they are listed on their own below. The boss totals are placed crystals and boxes in the arena, not a
-script bonus (Soveena The Squid: 20 crystals + 6 boxes).
+Not every award is certain to be collected: a baby that cries pays 0, a race pays less for 2nd or 3rd, the
+glider landing can pay 5, and a dungeon puzzle pays less (or nothing) when slow. Those stay replayable.
 
-### Stages that don't use placed crystals
+### Lost levels (`T0L1M00x`)
 
-| Map | Title | What the files show | Status |
-|---|---|---|---|
-| T1L5M001 | Croc Vs Dantini Boat Race | 20 crystal holders ("Blank") live, none placed | count not verified |
-| T2L6M001 | Hang Glider Valley | 100 crystal holders live, 9 `HGCrystalHoop` placed | matches 100 |
-| T3L4M001 | Race Day at Goldrock | 50 crystal holders live | count not verified |
-| T3L7M001 | Save 50 Trapped Gobbos! | 45 `F-Fire gobbo` + 5 `F-Fire rescue me gobbo` | crystals per rescue not read yet |
-| T0L1M003 | Burning Down the Forest | 10 `F-Fire gobbo` + 4 `F-Fire rescue me gobbo` | crystals per rescue not read yet |
-| T0L1M004 | ...the Wheels in the Jungle! | 7 crystals + 1 box = 12 | |
-| T0L1M005 | He Stole my lunch! | 12 crystals + 2 boxes = 22 | |
-| T0L1M006 | ...the Ice Trapped Gobbos! | 4 crystals + 11 boxes = 59 | |
-| T0L1M007 | 3 Lost Treasure Chests | 12 crystals, chests not counted yet | |
-| T4L5M001 | Bride of the Dungeon of Defright | no crystal objects found | |
+These are separate maps, harder remixes of earlier levels, played for their coloured crystals. They are not
+100-crystal stages.
 
-T4L2 babies found so far: 9 placed, 5 in Inca Pots (pots whose variable 0 is set), 4 on the carousel, 2 on swings,
-1 on a block stack, plus those carried by the 6 "Inca Dantini with Baby" and thrown along the 4 baby-chain
-objects.
+| Map | Title | White crystals |
+|---|---|---|
+| T0L1M003 | Burning Down the Forest | 14 Gobbos x 1; the same 50-crystal bonus script is present |
+| T0L1M004 | ...the Wheels in the Jungle! | 7 placed + 1 box = 12 |
+| T0L1M005 | He Stole my lunch! | 12 placed + 2 boxes = 22 |
+| T0L1M006 | ...the Ice Trapped Gobbos! | 4 placed + 11 boxes = 59 |
+| T0L1M007 | 3 Lost Treasure Chests | 12 placed, plus the chest script (10 per chest) |
+
+Note for the mod: `T0L1M003` is in the hook's stage-door table as "Inca Door 5", but the FAQ lists Inca Village
+as Save 30 Gobbo Babies, Up the Waterfall, Dante's Peak, Bride of the Dungeon of Defright and Goo Man Chu's Tower.
+"Burning Down the Forest" is the lost-level remix of the fire level.
+
+T4L2 babies found in the scripts: 9 placed, 5 in Inca Pots (pots whose variable 0 is set), 4 on the carousel, 2 on
+swings, 1 on a block stack, plus those carried by the 6 "Inca Dantini with Baby" and thrown along the 4 baby-chain
+objects. The level title and guides give 30.
+
+Source for the guide checks: Robshi's Croc 2 FAQ (PlayStation),
+https://www.video-games-museum.com/en/faqs/Playstation/26124-Croc-2.pdf
 
 ## Other collectables (placed records)
 
