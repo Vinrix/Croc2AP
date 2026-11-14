@@ -94,9 +94,9 @@ the secret levels and the lost levels.
 | T4S1 | Inca Tribe - Secret Maze | 0 | 20 | | 100 |
 | T1B1 | Soveena The Squid | 20 | 6 | 50 when Soveena is beaten | 100 |
 | T1B2 | Cannon Boat Keith | 35 | 3 | 50 when Keith is beaten | 100 |
-| T3B1 | Venus Fly Von-Trappe | 0 | 10 | In the fight: 10 from Venus's script per stage and 20 from a second object (amounts from the scripts; 3 stages + 20 = 50 is inferred) | 100? |
+| T3B1 | Venus Fly Von-Trappe | 0 | 10 | In the fight: 20 for each Gobbo grabbed after a hit (two), and 10 from Venus's script for a hit with no Gobbo grabbed (the third) | 100 |
 | T3B2 | The Village Masher | 0 | 10 | 50 when the Masher is beaten | 100 |
-| T2B1 | Flavio the Thermal Fish | 0 | 0 | 50 when game value 91 is 0, otherwise 25, each time the award runs (50 + 25 + 25 over three hits is inferred) | 100? |
+| T2B1 | Flavio the Thermal Fish | 0 | 0 | 25 for each of the first two hits, 50 for the final one | 100 |
 | T2B2 | Lava Lamp Larry | 0 | 0 | 100 when Larry is beaten | 100 |
 | T4B1, T4B2 | Dante's Peak, Dante's Final Fight | 0 | 0 | no crystal award in their scripts | 0 |
 
@@ -249,7 +249,7 @@ Inventory item types given by opcode 172:
 | 3 | `Key` (19 placed) | key |
 | 5, 6, 7, 8 | Swap Meet Pete | strawberry, lime and orange jelly; Clockwork Gobbo |
 | 10 | `Wheel` (2 in `T3L2`) and the object the two mine wheel blocks spawn (`T3L3`) | racer wheel |
-| 12 | `throwable gobbo 2` in `T1L4` | not identified |
+| 12 | `throwable gobbo 2` in `T1L4` | a Gobbo Croc is carrying |
 | 14 | `FFRefill`, `Forest Fire Setup` (fire levels) | water |
 
 ### Who gives what
@@ -282,8 +282,27 @@ Inventory item types given by opcode 172:
 | `Inca Baby Bouncer` (`T4L2`) | 100 crystals to the wallet | spawned |
 | `SMP Croc` (Swap Meet Pete, all four shops) | see below | 1 per shop |
 
-Hearts (`Heart`, `Snow Heart`) and Clockwork Gobbos (`ClockworkGobbo`) run none of these opcodes: a heart heals and
-a Clockwork Gobbo marker starts its section, so they are found by name, not by pickup code.
+Hearts (`Heart`, `Snow Heart`) and Clockwork Gobbos (`ClockworkGobbo`) run none of these opcodes:
+
+- A heart runs opcode 170, which restores one heart (Swap Meet Pete uses the same opcode to refill hearts after
+  selling a heart pot). A heart pickup is "opcode 170 run by a `Heart` or `Snow Heart` object".
+- A `ClockworkGobbo` object is not a pickup. It is the marker where a Clockwork Gobbo item is used: opcodes 295
+  and 296 save and restore the player pointer, which is the switch to steering the wind-up Gobbo and back.
+
+How the boss awards run, read from their scripts:
+
+- Flavio: the thrown object's script gives 50 when game value 91 is 0 and 25 otherwise, and a few lines later
+  the same test (value 91 is 0) starts the victory sequence. So value 91 is the boss's remaining health: 25,
+  25, then 50 on the final hit.
+- Venus: the Gobbo she spits out (an unnamed object) sets a flag and gives 20 when Croc grabs it. Venus's own
+  script, handling a hit, gives 10 only when that flag isn't set. The FAQ says the first two hits need the
+  Gobbo grabbed and the third doesn't: 20 + 20 + 10.
+
+Inventory counters, from the switch in AddInventoryItem (`0x140041600`): type 2 `0xBA9B40`, 3 `0xBA9B44`,
+5 `0xBA9B48`, 7 `0xBA9B4C`, 6 `0xBA9B50`, 8 `0xBA9B58`, 10 `0xBA9B60`, 4 `0xBA9B5C` (no script gives type 4), and
+types 12, 13 and 14 share `0xBA9B54`.
+
+Opcode 250 is unused: the two places the number appears are jump offsets of 250.
 
 ### Swap Meet Pete's shop
 

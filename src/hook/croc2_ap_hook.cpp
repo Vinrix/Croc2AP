@@ -56,9 +56,17 @@ static std::atomic<bool> g_jump_hidden{false};      // jump lock decision, updat
 static std::atomic<bool> g_jump_raw_held{false};
 static constexpr DWORD JUMP_LOCK_FLIP_GRACE_MS = 150;   // see the jump lock in Hooked_ReadInput
 static constexpr DWORD JUMP_LOCK_GRACE_MIN_AIR_MS = 200; // shorter drops (steps, slopes) get no grace
-static std::vector<void*> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
+struct QueuedCrystal { void* strat; DWORD spawned; };
+static std::vector<QueuedCrystal> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
-static DWORD g_last_map_load_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
+static DWORD g_last_map_load_tick = 0;
+// debug_watch map tour (command "debug_map_tour"): loads every level file in turn and dumps its objects.
+static std::vector<std::string> g_tour_maps;
+static size_t g_tour_next = 0;
+static bool g_tour_active = false;
+static bool g_tour_started = false;      // stays set for the session: enables the tour-only crash recovery
+static std::string g_tour_target;       // map the tour asked for; Hooked_LoadMap forces it
+static DWORD g_tour_requested_tick = 0;           // set by Hooked_LoadMap; the strat list is rebuilt during loads
 static void apply_ap_item_by_id_locked(int item_id, const std::string& sender_name = "", const std::string& location_name = "", bool record_persistent = true, bool show_toast = true);
 static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance& out_imp);
 static void trigger_bottom_toast_locked(bool is_outgoing, const std::string& item_name, ItemImportance imp, const std::string& sender, const std::string& receiver, const std::string& location, uint32_t duration_ms = 5000);
@@ -129,10 +137,10 @@ using FnSetActionState = void(__fastcall*)(void* strat, int32_t action_id);
 static FnSetActionState g_orig_set_action_state = nullptr;
 
 static FnStratVmHandler g_orig_pickup_heart_pot = nullptr;
-static FnStratVmHandler g_orig_pickup_clockwork = nullptr;
-static FnStratVmHandler g_orig_pickup_key = nullptr;
-static FnStratVmHandler g_orig_pickup_gobbo = nullptr;
-static FnStratVmHandler g_orig_pickup_binoculars = nullptr;
+static FnStratVmHandler g_orig_op_jigsaw_piece = nullptr;
+static FnStratVmHandler g_orig_op_golden_gobbo = nullptr;
+static FnStratVmHandler g_orig_op_250 = nullptr;
+static FnStratVmHandler g_orig_op_reward_100 = nullptr;
 
 // Canonical table of all 20 Village Stage Doors, their vanilla WADs, exact Archipelago IDs, and authentic in-game names
 struct DoorWadEntry {
@@ -1786,6 +1794,37 @@ static std::string handle_command_locked(const std::string& req) {
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
     }
 
+    if (cmd == "debug_map_tour") {
+        if (!g_state.debug_watch) return "{\"status\":\"refused\"}";
+        char path[MAX_PATH] = {0};
+        GetModuleFileNameA(nullptr, path, MAX_PATH);
+        std::string dir(path);
+        dir = dir.substr(0, dir.find_last_of("\\/") + 1) + "original\\crocii\\";
+        g_tour_maps.clear();
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((dir + "*.WAD").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                std::string w(fd.cFileName);
+                w = w.substr(0, w.size() - 4);
+                MapCoords c;
+                // Skip the title screen and the intro / cutscene maps (map type 3, "I").
+                // Also skip the two maps that crash when entered directly.
+                if (wad_to_coords(w, c) && c.map_type != 3 && !(c.tribe == 0 && c.level == 0) && w != "T3B2M002" &&
+                    w != "T5L4M004") {
+                    g_tour_maps.push_back(w);
+                }
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+        std::sort(g_tour_maps.begin(), g_tour_maps.end());
+        g_tour_next = static_cast<size_t>(std::max(0, extract_json_int(req, "start", 0))); // resume after a crash
+        g_tour_active = g_tour_next < g_tour_maps.size();
+        g_tour_started = true;
+        debug_log_locked("TOUR start, " + std::to_string(g_tour_maps.size()) + " maps");
+        return "{\"status\":\"ok\",\"maps\":" + std::to_string(g_tour_maps.size()) + "}";
+    }
+
     if (cmd == "debug_lava_hurt") {
         if (!g_state.debug_watch) return "{\"status\":\"refused\"}";
         g_lava_entry_offset.store(extract_json_int(req, "entry", 0));
@@ -3353,6 +3392,11 @@ static void* __fastcall Hooked_LoadMap(int32_t tribe, int32_t level, int32_t sub
         std::lock_guard<std::mutex> lock(g_mutex);
         MapCoords req{tribe, level, submap, map_type};
         MapCoords dest = resolve_map_load_locked(req);
+        if (g_tour_active && !g_tour_target.empty()) {
+            MapCoords t;
+            if (wad_to_coords(g_tour_target, t)) dest = t; // map tour: load exactly this map
+            g_tour_target.clear();
+        }
         g_crystals_collecting.clear();
         g_crystal_spawn_queue.clear();
         g_last_map_load_tick = GetTickCount();
@@ -3429,7 +3473,7 @@ static void drain_pending_native_inventory_grants() {
     // In croc2.exe, fn_add_item updates the count in 0x140BA9B40..B60, appends the slot to 0x140BC4EB0,
     // and updates RVA_INV_WHEEL_SLOT_COUNT (0x140BA9B64).
     // IMPORTANT: Never call 0x140045D30 (fn_rebuild) or fn_add_item(4, ...) on every frame, because
-    // 0x140045D30 zeroes RVA_INV_KEYS and resets RVA_INV_WHEEL_SEL_INDEX (0x140BC4EA4) to 0, locking the wheel!
+    // 0x140045D30 zeroes RVA_INV_CARRIED and resets RVA_INV_WHEEL_SEL_INDEX (0x140BC4EA4) to 0, locking the wheel!
     auto sync_item = [&](int32_t current_count, int32_t desired_count, int32_t item_type) {
         if (desired_count > current_count) {
             int32_t diff = desired_count - current_count;
@@ -3438,41 +3482,41 @@ static void drain_pending_native_inventory_grants() {
     };
 
     // Gummi Jump (Red Jelly) -> Wheel item_type 5 (0x140BA9B48)
-    sync_item(i32(RVA_INV_RED_JELLIES), g_state.red_jellies, 5);
+    sync_item(i32(RVA_INV_STRAWBERRY_JELLIES), g_state.red_jellies, 5);
 
     // Jelly Jump (Blue Jelly) -> Wheel item_type 7 (0x140BA9B4C)
-    sync_item(i32(RVA_INV_BLUE_JELLIES), g_state.blue_jellies, 7);
+    sync_item(i32(RVA_INV_ORANGE_JELLIES), g_state.blue_jellies, 7);
 
     // High Jelly Jump (Green Jelly) -> Wheel item_type 6 (0x140BA9B50)
-    sync_item(i32(RVA_INV_GREEN_JELLIES), g_state.green_jellies, 6);
+    sync_item(i32(RVA_INV_LIME_JELLIES), g_state.green_jellies, 6);
 
-    // Clockwork Gobbo -> Wheel item_type 8 (0x140BA9B58) + HUD counter (0x140BA9B38)
-    if (g_state.clockwork_gobbos > i32(RVA_INV_CLOCKWORK)) {
-        sync_item(i32(RVA_INV_CLOCKWORK), g_state.clockwork_gobbos, 8);
-        i32(RVA_HUD_CLOCKWORK_GOBBOS) = std::min(9, g_state.clockwork_gobbos);
+    // Clockwork Gobbo -> item type 8 (0x140BA9B58). (This used to also write 0x140BA9B38, taken for a HUD
+    // clockwork count; that address is the jigsaw piece counter.)
+    sync_item(i32(RVA_INV_CLOCKWORK), g_state.clockwork_gobbos, 8);
+
+    // Golden Gobbos: the game's counter is 0x140BA9B30 (opcode 249). Received Golden Gobbos are not written to
+    // it yet: whether a village's Golden Gobbo door reads this counter or per-level state is not known. The
+    // count is tracked in g_state.golden_gobbos and the save footer.
+
+    // Jigsaw Pieces -> the game's jigsaw counter (0x140BA9B38, what opcode 248 adds to). (This used to add
+    // inventory type 10, which is the racer wheel.)
+    if (g_state.jigsaw_pieces > i32(RVA_COUNT_JIGSAW_PIECES)) {
+        i32(RVA_COUNT_JIGSAW_PIECES) = g_state.jigsaw_pieces;
     }
 
-    // Golden Gobbos used to be synced as wheel item_type 2 (0x140BA9B40), but in-game testing showed type 2
-    // is the binoculars, so received Golden Gobbos showed up as binoculars. Disabled until the real Golden
-    // Gobbo counter is found; the count is still tracked in g_state.golden_gobbos and the save footer.
-
-    // Jigsaw Pieces -> Wheel item_type 10 (0x140BA9B60)
-    sync_item(i32(RVA_INV_JIGSAW_PIECES), g_state.jigsaw_pieces, 10);
-
-    // Binoculars -> Native HUD flag at 0x140BA9B7C (see 0x140065FE0 in croc2.exe).
-    // Note: fn_add_item(4, ...) zeroes 0x140BA9B5C, so we must NOT check RVA_INV_BINOCULARS == 0!
-    if (g_state.binoculars && i32(RVA_HUD_BINOCULARS) == 0) {
-        i32(RVA_HUD_BINOCULARS) = 1;
-    } else if (!g_state.binoculars && g_state.is_randomizer_active()) {
-        i32(RVA_HUD_BINOCULARS) = 0;
-        i32(RVA_INV_BINOCULARS) = 0;
+    // Binoculars -> item type 2 (0x140BA9B40). (This used to set 0x140BA9B7C instead, taken for a binoculars
+    // flag. Opcode 270 tests that flag before paying a hub reward's 100 crystals, so clearing it stopped
+    // those rewards. It is no longer touched.)
+    if (g_state.binoculars) {
+        sync_item(i32(RVA_INV_BINOCULARS), 1, 2);
     }
 
-    // Keys -> Wheel item_type 12 (0x140BA9B54) + HUD key counter (0x140BA9B30)
+    // The randomizer's own Silver / Gold Keys are shown in the inventory wheel through item type 12, the slot
+    // the game uses for a carried Gobbo (counter 0x140BA9B54). (This used to also write 0x140BA9B30, taken for
+    // a HUD key count; that address is the Golden Gobbo counter.)
     int total_keys = g_state.silver_keys + g_state.gold_keys;
-    if (total_keys > i32(RVA_INV_KEYS)) {
-        sync_item(i32(RVA_INV_KEYS), total_keys, 12);
-        i32(RVA_HUD_KEYS) = total_keys;
+    if (total_keys > i32(RVA_INV_CARRIED)) {
+        sync_item(i32(RVA_INV_CARRIED), total_keys, 12);
     }
 
     // Wallet Crystals
@@ -3493,6 +3537,64 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
     uint32_t raw_buttons = buttons;
     uint32_t newly_pressed = raw_buttons & ~g_prev_raw_buttons;
     g_prev_raw_buttons = raw_buttons;
+
+    // debug_watch map tour: 4 s after a map settles, dump every object (name and position) to croc2ap_objects.tsv,
+    // then start a normal level transition (state 7) to the next map, which Hooked_LoadMap forces.
+    if (g_tour_active) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        const DWORD now = GetTickCount();
+        const int32_t tstate = *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE);
+        const bool waiting = g_tour_requested_tick && now - g_tour_requested_tick < 15000 && !g_tour_target.empty();
+        if (tstate == 0 && !waiting && now - g_last_map_load_tick > 4000 && now - g_tour_requested_tick > 4000) {
+            static FILE* s_tsv = nullptr;
+            if (!s_tsv) {
+                char path[MAX_PATH] = {0};
+                GetModuleFileNameA(nullptr, path, MAX_PATH);
+                std::string p2(path);
+                p2 = p2.substr(0, p2.find_last_of("\\/") + 1) + "croc2ap_objects.tsv";
+                s_tsv = std::fopen(p2.c_str(), "a"); // append: a crash mid-tour keeps the maps already dumped
+            }
+            const std::string here = coords_to_wad(*reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE));
+            int n = 0, guard = 0;
+            for (uint8_t* st = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_STRAT_LIST_HEAD);
+                 st && readable_memory(st, 0x140) && ++guard < 8192; st = *reinterpret_cast<uint8_t**>(st + 8)) {
+                const char* nm = *reinterpret_cast<const char**>(st + 0x30);
+                if (!nm || !readable_memory(nm, 1)) continue;
+                if (s_tsv) {
+                    std::fprintf(s_tsv, "%s\t%.60s\t%d\t%d\t%d", here.c_str(), nm, *reinterpret_cast<int32_t*>(st + 0x4C),
+                                 *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54));
+                    // First 16 script variables: containers keep their crystal count there (a box's is variable 1).
+                    const int32_t* vars = *reinterpret_cast<int32_t* const*>(st + 0x118);
+                    if (vars && readable_memory(vars, 16 * 4)) {
+                        for (int v = 0; v < 16; ++v) std::fprintf(s_tsv, "\t%d", vars[v]);
+                    }
+                    std::fputc(10, s_tsv);
+                }
+                ++n;
+            }
+            if (s_tsv) std::fflush(s_tsv);
+            debug_log_locked("TOUR dumped " + std::to_string(n) + " objects in " + here);
+            if (g_tour_next < g_tour_maps.size()) {
+                MapCoords next;
+                g_tour_target = g_tour_maps[g_tour_next++];
+                if (wad_to_coords(g_tour_target, next)) {
+                    // Same steps as the game's own "go to map" code (0x140062600): remember the current map as the
+                    // previous one, write the new one, set state 7, then start the transition with 0x140027BF0(1).
+                    std::memcpy(reinterpret_cast<void*>(g_exe_base + 0x00BA9B6C), reinterpret_cast<void*>(g_exe_base + RVA_CURR_MAP_TRIBE), 16);
+                    *reinterpret_cast<MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE) = next;
+                    *reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE) = 7;
+                    using FnStartTransition = void(__fastcall*)(int32_t);
+                    reinterpret_cast<FnStartTransition>(g_exe_base + 0x00027BF0)(1);
+                    g_tour_requested_tick = now;
+                    debug_log_locked("TOUR -> " + g_tour_target + " (" + std::to_string(g_tour_next) + "/" +
+                                     std::to_string(g_tour_maps.size()) + ")");
+                }
+            } else {
+                g_tour_active = false;
+                debug_log_locked("TOUR finished");
+            }
+        }
+    }
 
     int dmg_to_apply = 0;
     int pots_to_apply = 0;
@@ -3891,7 +3993,7 @@ static void trigger_climb_blocked_toast_locked() {
 }
 
 // Helper: Trigger a randomized check for collectable pickups intercepted in the world
-enum class Pickup { HeartPot, Clockwork, Key, Gobbo, Binoculars, GoldenGobbo, Jigsaw, RedJelly, BlueJelly, Other };
+enum class Pickup { HeartPot, Clockwork, Binoculars, GoldenGobbo, Jigsaw, RedJelly, BlueJelly, Other };
 
 static bool is_shop_coords(const MapCoords& m) {
     return m.tribe >= 1 && m.tribe <= 4 && m.level == 1 && m.submap == 4 && m.map_type == 0;
@@ -3995,65 +4097,65 @@ static void __fastcall Hooked_PickupHeartPot(void* strat) {
     if (g_orig_pickup_heart_pot) g_orig_pickup_heart_pot(strat);
 }
 
-// Opcode 248 (0xF8): PickupClockwork
-static void __fastcall Hooked_PickupClockwork(void* strat) {
-    if (handle_pickup(Pickup::Clockwork, "Clockwork Gobbo Pickup")) {
-        // Same HUD feedback the game's own handler (0x140066010) shows. Do NOT call its tail target
-        // 0x140260F90: that is an achievement check, not a sound.
-        reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_CLOCKWORK)();
+// Opcode 248: jigsaw piece (the JigsawPiece object in each village's secret level).
+static void __fastcall Hooked_JigsawPiece(void* strat) {
+    if (handle_pickup(Pickup::Jigsaw, "Jigsaw Piece")) {
+        // Same HUD feedback the game's own handler (0x140066010) shows. Its tail target 0x140260F90 is an
+        // achievement check and must not be called for a swallowed pickup.
+        reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_JIGSAW)();
         return;
     }
-    if (g_orig_pickup_clockwork) g_orig_pickup_clockwork(strat);
+    if (g_orig_op_jigsaw_piece) g_orig_op_jigsaw_piece(strat);
 }
 
-// Opcode 249 (0xF9): PickupKey
-static void __fastcall Hooked_PickupKey(void* strat) {
-    if (handle_pickup(Pickup::Key, "Key Pickup")) {
-        // Same HUD feedback the game's own handler (0x140065F90) shows. Its tail target 0x140260DE0
-        // awards the "firstGoldenGobbo" achievement, so it must not be called here.
-        reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_KEY)();
+// Opcode 249: Golden Gobbo (Golden Gobbo and Special Golden Gobbo objects).
+static void __fastcall Hooked_GoldenGobbo(void* strat) {
+    if (handle_pickup(Pickup::GoldenGobbo, "Golden Gobbo")) {
+        // Same HUD feedback the game's own handler (0x140065F90) shows. Its tail target 0x140260DE0 awards
+        // the "firstGoldenGobbo" achievement and must not be called for a swallowed pickup.
+        reinterpret_cast<FnPlaySfxNoArg>(g_exe_base + RVA_FN_HUD_POPUP_GOLDEN_GOBBO)();
         return;
     }
-    if (g_orig_pickup_key) g_orig_pickup_key(strat);
+    if (g_orig_op_golden_gobbo) g_orig_op_golden_gobbo(strat);
 }
 
-// Opcode 250 (0xFA): PickupGobbo
-static void __fastcall Hooked_PickupGobbo(void* strat) {
-    if (handle_pickup(Pickup::Gobbo, "Gobbo Pickup")) {
-        // The game's own handler only tail-calls 0x140041520, which is an empty function: no feedback.
-        return;
+// Opcode 250: no script runs it. Hooked only so it would show in the debug log if one ever did.
+static void __fastcall Hooked_Opcode250(void* strat) {
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        debug_log_locked("opcode 250 ran in " + g_state.current_wad);
     }
-    if (g_orig_pickup_gobbo) g_orig_pickup_gobbo(strat);
+    if (g_orig_op_250) g_orig_op_250(strat);
 }
 
-// Opcode 270 (0x10E): PickupBinoculars (used by Sailor Village crate at 0x17736C!)
-static void __fastcall Hooked_PickupBinoculars(void* strat) {
-    if (handle_pickup(Pickup::Binoculars, "Magic Eye-Zoomers (Binoculars) Pickup")) {
-        // The game's own handler (0x140065FE0) only jumps to 0x140261060, an achievement check, so there
-        // is no native popup to show here.
-        return;
+// Opcode 270: 100 crystals to the wallet, from a hub reward character (Sailor Village's reward and trampoline
+// Gobbos, the Cossack snowman kids, Gobbo King 3, the burping Gobbo) or the baby bouncer in Save 30 Gobbo
+// Babies. Left as the game has it; logged under debug_watch.
+static void __fastcall Hooked_Reward100(void* strat) {
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        debug_log_locked("100-crystal reward (opcode 270) in " + g_state.current_wad);
     }
-    if (g_orig_pickup_binoculars) g_orig_pickup_binoculars(strat);
+    if (g_orig_op_reward_100) g_orig_op_reward_100(strat);
 }
 
-// Opcode 172 (0xAC): GiveInventoryItem(type) -> AddInventoryItem(type, 1, 1, 0) at 0x140041600.
-// The item type is the next int32 in the strat script stream (*(int32_t**)strat). AddInventoryItem's
-// switch maps type -> counter: 2 -> 0xBA9B40 (labelled "golden gobbos", but observed giving binoculars),
-// 4 -> 0xBA9B5C, 5 red jelly, 6 green jelly, 7 blue jelly, 8 clockwork, 9/12/13/14 keys, 10 jigsaw.
+// Opcode 172 <type>: GiveInventoryItem -> AddInventoryItem(type, 1, 1, 0) at 0x140041600. The type is the next
+// int32 in the script. Types and who gives them (read from the scripts):
+//   2 binoculars (an object in Sailor Village)      3 key (Key objects)
+//   5 strawberry, 6 lime, 7 orange jelly and 8 Clockwork Gobbo (Swap Meet Pete)
+//   10 racer wheel (jungle Wheel objects, mine wheel blocks)
+//   12 a carried Gobbo, 14 carried water (fire levels)
+// Keys, wheels and carried things are needed inside their own level, so they are always left to the game.
 static FnStratVmHandler g_orig_give_inv_item = nullptr;
 static void __fastcall Hooked_GiveInventoryItem(void* strat) {
     int32_t type = **reinterpret_cast<int32_t**>(strat);
     Pickup kind = Pickup::Other;
     switch (type) {
-        // Type 2 is the Magic Eye-Zoomers (binoculars), not a Golden Gobbo: in testing, the Sailor Village
-        // crate gave the binoculars through GiveInventoryItem(2). Treated like the binoculars opcode
-        // (randomized in solo, vanilla in a multiworld).
         case 2: kind = Pickup::Binoculars; break;
-        case 5: kind = Pickup::RedJelly; break;
-        case 7: kind = Pickup::BlueJelly; break;
+        case 5: kind = Pickup::RedJelly; break;   // strawberry jelly
+        case 7: kind = Pickup::BlueJelly; break;  // orange jelly
         case 8: kind = Pickup::Clockwork; break;
-        case 10: kind = Pickup::Jigsaw; break;
-        default: break;
+        default: break;                           // 3 key, 6 lime jelly, 10 wheel, 12/14 carried: left to the game
     }
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -4249,6 +4351,9 @@ static void clear_coloured_crystal_state(const MapCoords& m) {
 }
 
 static std::string g_crystal_wad;              // current map, for the spawn hook
+// Remembered crystals already matched during this visit to the current map (parallel to g_collected_crystals),
+// so each one removes at most one spawned crystal. Reset on every map change.
+static std::vector<bool> g_crystal_matched;
 static int32_t* g_coloured_state_ptr = nullptr; // remaster saved coloured-crystal state for the current stage
 static void clear_coloured_crystal_state_fast() {
     if (int32_t* g = g_coloured_state_ptr) { g[0] = g[1] = g[2] = g[3] = g[4] = 0; }
@@ -4264,7 +4369,12 @@ static void apply_crystal_persistence_locked(const MapCoords& cur) {
     static MapCoords s_last{-1, -1, -1, -1};
     static bool s_restore_pending = false;
     const bool map_changed = std::memcmp(&s_last, &cur, sizeof(MapCoords)) != 0;
-    if (map_changed) { s_last = cur; s_restore_pending = true; g_crystal_wad = coords_to_wad(cur); }
+    if (map_changed) {
+        s_last = cur;
+        s_restore_pending = true;
+        g_crystal_wad = coords_to_wad(cur);
+        g_crystal_matched.assign(g_collected_crystals.size(), false); // new visit: only earlier visits can match
+    }
     check_crystal_spawn_queue_locked();
     if (!map_changed && !s_restore_pending) { clear_coloured_crystal_state_fast(); return; }
     if (g_collected_crystals.empty()) return;
@@ -4312,36 +4422,93 @@ static int crystal_kind(const uint8_t* st) {
     if (std::strcmp(name, "crystal") == 0) return 1;
     return std::strcmp(name, "bonus crystal") == 0 ? 2 : 0;
 }
-static bool remove_crystal_if_collected_locked(uint8_t* st, int kind) {
-    if (g_collected_crystals.empty() || g_crystal_wad.empty()) return false;
-    if (!crystal_collected_locked(kind == 2 ? g_crystal_wad + "*" : g_crystal_wad, *reinterpret_cast<int32_t*>(st + 0x4C),
-                                  *reinterpret_cast<int32_t*>(st + 0x50), *reinterpret_cast<int32_t*>(st + 0x54))) return false;
+// Remembered crystals already matched during this visit to the current map (parallel to g_collected_crystals),
+// so each one removes at most one spawned crystal. Reset when the map changes.
+
+// Crystals from smashed boxes scatter to random spots (5 at a time), so they never land on the remembered spot
+// again: seen in a tester's crystal file, most entries come in groups of 5 with scattered positions. Exact match
+// first; with `fuzzy`, otherwise the nearest unmatched remembered crystal of the same kind in this map within a
+// box's scatter radius.
+static constexpr int32_t kCrystalScatterXZ = 4096;
+static constexpr int32_t kCrystalScatterY = 2048;
+static constexpr int32_t kCrystalSafeDistance = 8192; // keep removals well clear of Croc
+// Index of the remembered crystal this strat matches in the current map, or -1.
+static int find_collected_crystal_locked(uint8_t* st, int kind, bool fuzzy, int64_t* out_dist = nullptr) {
+    if (g_collected_crystals.empty() || g_crystal_wad.empty()) return -1;
+    // Reset on every map change (apply_crystal_persistence_locked); anything remembered after that was collected
+    // during this visit and is never matched.
+    if (g_crystal_matched.size() < g_collected_crystals.size()) g_crystal_matched.resize(g_collected_crystals.size(), true);
+    const std::string key = kind == 2 ? g_crystal_wad + "*" : g_crystal_wad;
+    const int32_t x = *reinterpret_cast<int32_t*>(st + 0x4C), y = *reinterpret_cast<int32_t*>(st + 0x50),
+                  z = *reinterpret_cast<int32_t*>(st + 0x54);
+    int best = -1;
+    int64_t best_d = INT64_MAX;
+    for (size_t i = 0; i < g_collected_crystals.size(); ++i) {
+        const auto& c = g_collected_crystals[i];
+        if (g_crystal_matched[i] || c.wad != key) continue;
+        if (c.x == x && c.y == y && c.z == z) { best = static_cast<int>(i); best_d = 0; break; }
+        if (!fuzzy || std::abs(c.x - x) > kCrystalScatterXZ || std::abs(c.z - z) > kCrystalScatterXZ ||
+            std::abs(c.y - y) > kCrystalScatterY) continue;
+        const int64_t dx = c.x - x, dz = c.z - z, d = dx * dx + dz * dz;
+        if (d < best_d) { best_d = d; best = static_cast<int>(i); }
+    }
+    if (out_dist) *out_dist = best_d;
+    return best;
+}
+
+static bool remove_crystal_if_collected_locked(uint8_t* st, int kind, bool fuzzy) {
+    int64_t best_d = 0;
+    const int best = find_collected_crystal_locked(st, kind, fuzzy, &best_d);
+    if (best < 0) return false;
+    g_crystal_matched[best] = true;
     *reinterpret_cast<uint32_t*>(st + 0xFC) |= 6;
-    if (g_state.debug_watch) debug_log_locked(std::string("CRYSTALS removed collected ") + (kind == 2 ? "bonus crystal" : "crystal") + " in " + g_crystal_wad);
+    if (g_state.debug_watch) {
+        debug_log_locked(std::string("CRYSTALS removed collected ") + (kind == 2 ? "bonus crystal" : "crystal") + " in " +
+                         g_crystal_wad + (best_d ? " (scattered, nearest match)" : ""));
+    }
     return true;
 }
-// White crystals run opcode 180 before their position / the current map is final, so each one is also queued
-// and checked again from the input hook once the map has settled (only the queued strats, no list walk).
+// At spawn only an exact match is trusted (white crystals' position isn't final yet). Every crystal is also
+// queued and checked again, with the scatter match, once it has had JUST over half a second to settle. This runs
+// for the whole visit, so crystals that appear later (from a smashed box) are covered too.
 static void remove_if_collected(void* strat) {
     uint8_t* st = static_cast<uint8_t*>(strat);
     const int kind = crystal_kind(st);
     if (!kind) return;
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (remove_crystal_if_collected_locked(st, kind)) return;
+    if (remove_crystal_if_collected_locked(st, kind, false)) return;
     if (g_crystal_spawn_queue.size() < 512 &&
-        std::find(g_crystal_spawn_queue.begin(), g_crystal_spawn_queue.end(), strat) == g_crystal_spawn_queue.end())
-        g_crystal_spawn_queue.push_back(strat);
+        std::none_of(g_crystal_spawn_queue.begin(), g_crystal_spawn_queue.end(), [&](const QueuedCrystal& q) { return q.strat == strat; }))
+        g_crystal_spawn_queue.push_back({strat, GetTickCount()});
 }
 static void check_crystal_spawn_queue_locked() {
     if (g_crystal_spawn_queue.empty()) return;
-    if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE) != 0 || GetTickCount() - g_last_map_load_tick < 500) return;
-    for (void* p : g_crystal_spawn_queue) {
-        uint8_t* st = static_cast<uint8_t*>(p);
-        if (std::find(g_crystals_collecting.begin(), g_crystals_collecting.end(), p) != g_crystals_collecting.end()) continue;
-        if (*reinterpret_cast<uint32_t*>(st + 0xFC) & 4) continue;
-        if (int kind = crystal_kind(st)) remove_crystal_if_collected_locked(st, kind);
+    const DWORD now = GetTickCount();
+    if (*reinterpret_cast<int32_t*>(g_exe_base + RVA_TRANSITION_STATE) != 0 || now - g_last_map_load_tick < 500) return;
+    // Never remove a crystal Croc could be touching: removing one in the same frame as its pickup crashed the game
+    // on the next level load (a box crystal was removed 0.1 s before Croc collected one from the same box). Those
+    // stay queued until Croc moves away; if he collects one first, Hooked_GainCrystal doesn't count it again.
+    const uint8_t* croc = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
+    for (size_t i = 0; i < g_crystal_spawn_queue.size();) {
+        const QueuedCrystal q = g_crystal_spawn_queue[i];
+        uint8_t* st = static_cast<uint8_t*>(q.strat);
+        if (std::find(g_crystals_collecting.begin(), g_crystals_collecting.end(), q.strat) != g_crystals_collecting.end() ||
+            !readable_memory(st, 0x100) || (*reinterpret_cast<uint32_t*>(st + 0xFC) & 4) ||
+            !readable_memory(*reinterpret_cast<const char**>(st + 0x30), 16) || !crystal_kind(st)) {
+            g_crystal_spawn_queue.erase(g_crystal_spawn_queue.begin() + i);
+            continue;
+        }
+        if (now - q.spawned < 600) { ++i; continue; }
+        if (croc && std::abs(*reinterpret_cast<const int32_t*>(croc + 0x4C) - *reinterpret_cast<int32_t*>(st + 0x4C)) < kCrystalSafeDistance &&
+            std::abs(*reinterpret_cast<const int32_t*>(croc + 0x54) - *reinterpret_cast<int32_t*>(st + 0x54)) < kCrystalSafeDistance) {
+            ++i;
+            continue;
+        }
+        g_crystal_spawn_queue.erase(g_crystal_spawn_queue.begin() + i);
+        // Exact match only. Removing scattered box crystals (nearest match) crashed the game when the level unloaded,
+        // twice; they're left alone and a repeat pickup just doesn't count (Hooked_GainCrystal).
+        remove_crystal_if_collected_locked(st, crystal_kind(st), false);
     }
-    g_crystal_spawn_queue.clear();
 }
 static void __fastcall Hooked_CrystalSpawn180(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_180(strat); }
 static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_329(strat); }
@@ -4399,6 +4566,7 @@ static void __fastcall Hooked_GainCrystal(void* strat) {
     int colour = value >> 12;
     bool coloured = colour >= 1 && colour <= 5;
     bool suppress = false;
+    bool repeat_pickup = false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         if (g_state.debug_watch) {
@@ -4420,12 +4588,32 @@ static void __fastcall Hooked_GainCrystal(void* strat) {
             }
             suppress = g_state.colored_crystals_mode == 1;
         }
+        // A crystal that matches one already collected on an earlier visit (one Croc reached before it could be
+        // removed, e.g. from a box he just smashed again) doesn't count again: no counter tick and no new check.
         if (g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && g_state.save_locked_to_mod) {
+            const int repeat = coloured ? -1 : find_collected_crystal_locked(sp, 1, true);
+            if (repeat >= 0) {
+                g_crystal_matched[repeat] = true;
+                g_crystals_collecting.push_back(strat);
+                if (g_state.debug_watch) debug_log_locked("CRYSTALS repeat pickup of a collected crystal, not counted");
+                repeat_pickup = true;
+            }
+        }
+        if (!repeat_pickup && g_state.is_mod_enabled_toggle() && g_state.is_randomizer_active() && g_state.save_locked_to_mod) {
             g_crystals_collecting.push_back(strat);
             if (g_crystals_collecting.size() > 256) g_crystals_collecting.erase(g_crystals_collecting.begin());
             remember_crystal_locked(coloured ? g_state.current_wad + "*" : g_state.current_wad, *reinterpret_cast<int32_t*>(sp + 0x4C),
                                     *reinterpret_cast<int32_t*>(sp + 0x50), *reinterpret_cast<int32_t*>(sp + 0x54));
         }
+    }
+    if (repeat_pickup) {
+        // Let the game's own pickup routine run (skipping it crashed the game on the next level unload), then put
+        // the top-right counter back so the repeat doesn't count and sends no check.
+        int32_t& counter = *reinterpret_cast<int32_t*>(g_exe_base + RVA_LEVEL_CRYSTALS);
+        const int32_t before = counter;
+        g_orig_gain_crystal(strat);
+        counter = before;
+        return;
     }
     if (suppress && stack_count > 0) {
         using FnPop = int32_t(__fastcall*)(void*);
@@ -4527,6 +4715,16 @@ static LONG CALLBACK DebugCrashReporter(EXCEPTION_POINTERS* ep) {
     const DWORD code = ep->ExceptionRecord->ExceptionCode;
     if (code != EXCEPTION_ACCESS_VIOLATION && code != 0xC0000409 && code != EXCEPTION_ILLEGAL_INSTRUCTION) {
         return EXCEPTION_CONTINUE_SEARCH;
+    }
+    // Map tour only: jumping straight into a map can leave a script's linked object (strat+0x168) empty, and the
+    // value reader then faults at 0x140068B86 (mov edi, [rax+0x20]). Return 0 for that read and carry on.
+    if (g_tour_started && code == EXCEPTION_ACCESS_VIOLATION &&
+        ep->ContextRecord->Rip == g_exe_base + 0x00068B86) {
+        ep->ContextRecord->Rdi = 0;
+        ep->ContextRecord->Rip += 3;
+        static int s_skips = 0;
+        if (s_skips++ < 20) debug_log_locked("TOUR skipped an empty linked-object read");
+        return EXCEPTION_CONTINUE_EXECUTION;
     }
     static std::atomic<int> s_reports{0};
     if (s_reports.fetch_add(1) >= 3) return EXCEPTION_CONTINUE_SEARCH;
@@ -4722,9 +4920,9 @@ static void install_croc2_engine_hooks() {
     };
 
     hook_strat_slot(RVA_STRAT_VM_HEART_POT_SLOT, RVA_FN_GIVE_HEART_POT_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupHeartPot), g_orig_pickup_heart_pot);
-    hook_strat_slot(RVA_STRAT_VM_CLOCKWORK_SLOT, RVA_FN_GIVE_CLOCKWORK_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupClockwork), g_orig_pickup_clockwork);
-    hook_strat_slot(RVA_STRAT_VM_KEY_SLOT, RVA_FN_GIVE_KEY_NATIVE, reinterpret_cast<uintptr_t>(&Hooked_PickupKey), g_orig_pickup_key);
-    hook_strat_slot(RVA_STRAT_VM_GOBBO_SLOT, RVA_FN_GIVE_GOBBO_NATIVE, reinterpret_cast<uintptr_t>(&Hooked_PickupGobbo), g_orig_pickup_gobbo);
+    hook_strat_slot(RVA_STRAT_VM_JIGSAW_SLOT, RVA_FN_OP_JIGSAW_PIECE, reinterpret_cast<uintptr_t>(&Hooked_JigsawPiece), g_orig_op_jigsaw_piece);
+    hook_strat_slot(RVA_STRAT_VM_GOLDEN_GOBBO_SLOT, RVA_FN_OP_GOLDEN_GOBBO, reinterpret_cast<uintptr_t>(&Hooked_GoldenGobbo), g_orig_op_golden_gobbo);
+    hook_strat_slot(RVA_STRAT_VM_OP250_SLOT, RVA_FN_OP_250, reinterpret_cast<uintptr_t>(&Hooked_Opcode250), g_orig_op_250);
     {
         // Opcode table at RVA_STRAT_VM_DISPATCH_TABLE; only hooked if each slot still holds the expected handler.
         static const uintptr_t kHurtTargets[5] = {0x00065BD0, 0x00065F20, 0x00065F00, 0x002044E0, 0x00204720};
@@ -4741,7 +4939,7 @@ static void install_croc2_engine_hooks() {
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 329 * 8, 0x000227E0, reinterpret_cast<uintptr_t>(&Hooked_CrystalSpawn329), g_orig_crystal_spawn_329);
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 173 * 8, 0x00066030, reinterpret_cast<uintptr_t>(&Hooked_GainCrystal), g_orig_gain_crystal);
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
-    hook_strat_slot(RVA_STRAT_VM_BINOCULARS_SLOT, RVA_FN_GIVE_BINOCULARS_NAT, reinterpret_cast<uintptr_t>(&Hooked_PickupBinoculars), g_orig_pickup_binoculars);
+    hook_strat_slot(RVA_STRAT_VM_REWARD_100_SLOT, RVA_FN_OP_REWARD_100, reinterpret_cast<uintptr_t>(&Hooked_Reward100), g_orig_op_reward_100);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
     if (g_state.debug_watch) {
