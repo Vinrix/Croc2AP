@@ -36,7 +36,7 @@ static constexpr int kToastSlots = 6;
 static constexpr int kToastHeight = 34;  // one line: a dark bar with a coloured left edge
 static constexpr int kToastPitch = 38;   // bar plus the gap to the next one
 static constexpr int kToastMaxWidth = 720;
-static constexpr DWORD kToastHoldMs = 3000;
+static constexpr DWORD kToastHoldMs = 5000;
 struct ToastSlot {
     HWND hwnd = nullptr;
     bool used = false;
@@ -2792,7 +2792,7 @@ static void background_tick_worker() {
     //   place and slides down into it.
     // - When the bottom one's time is up it fades out, everything above slides down one place, and the next one
     //   waiting in the queue comes in at the top.
-    // - Each stays kToastHoldMs (3 s) at least. With six on screen that is two a second; anything faster waits
+    // - Each stays kToastHoldMs (5 s) at least. With six on screen that is about one a second; anything faster waits
     //   in the queue and is shown in order, never skipped.
     static constexpr DWORD kFadeInMs = 150, kFadeOutMs = 300;
     int order[kToastSlots]; // slot indices, oldest (bottom) first
