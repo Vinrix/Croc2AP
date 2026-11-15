@@ -30,7 +30,22 @@ static std::thread g_server_thread;
 static std::thread g_ui_thread;
 static std::thread g_ws_thread;
 static SOCKET g_listen_socket = INVALID_SOCKET;
-static HWND g_toast_hwnd = nullptr;
+// On-screen notifications: a stack of up to kToastSlots at the bottom-left of the game window. Each one is its own
+// small window, so it can slide and fade by itself. See background_tick_worker.
+static constexpr int kToastSlots = 4;
+static constexpr int kToastHeight = 96;
+struct ToastSlot {
+    HWND hwnd = nullptr;
+    bool used = false;
+    bool fading = false;
+    DWORD shown_tick = 0; // when it appeared
+    DWORD fade_tick = 0;  // when it started fading out
+    float y = 0.0f;       // current top edge, in screen pixels
+    bool placed = false;  // y has been given a starting value
+    int alpha = 0;
+    int width = 0;
+};
+static ToastSlot g_toast_slots[kToastSlots];
 static std::string g_ini_file_path = "croc2_mod.ini";
 
 // Forward declarations
@@ -765,34 +780,19 @@ static void trigger_bottom_toast_locked(bool is_outgoing,
     toast.duration_ms = duration_ms;
     toast.expire_tick = now + duration_ms;
 
-    if (g_state.toast_active) {
-        if (is_gate_warning) {
-            if (g_state.active_toast.item_name == toast.item_name) {
-                g_state.active_toast.expire_tick = now + duration_ms;
-            }
-            return;
+    // Every notification is queued and shown in order; the display (background_tick_worker) shows several at a
+    // time and speeds up when the queue is long. Only a gate warning ("... Required!", "... Locked") that is
+    // already waiting or on screen is not repeated: holding Croc against a locked door fires one every frame.
+    if (is_gate_warning) {
+        if (g_state.toast_active && g_state.active_toast.item_name == toast.item_name) return;
+        for (const BottomToastNotification& q : g_state.toast_queue) {
+            if (q.item_name == toast.item_name) return;
         }
-
-        // If active toast is a gate warning ("Required!"), replace it immediately with the incoming item pickup
-        bool active_is_gate_warning =
-            (g_state.active_toast.importance == ItemImportance::TRAP) &&
-            (g_state.active_toast.item_name.find("Required") != std::string::npos ||
-             g_state.active_toast.item_name.find("Locked") != std::string::npos);
-        if (active_is_gate_warning && g_state.toast_queue.empty()) {
-            g_state.active_toast = toast;
-            g_state.active_toast.expire_tick = now + duration_ms;
-            return;
-        }
-
-        // Strictly queue every single item pickup in FIFO order without overwriting or dropping!
-        if (g_state.toast_queue.size() < 256) {
-            g_state.toast_queue.push_back(toast);
-        }
-        return;
     }
-
-    g_state.active_toast = toast;
-    g_state.active_toast.expire_tick = now + duration_ms;
+    if (g_state.toast_queue.size() < 512) {
+        g_state.toast_queue.push_back(toast);
+    }
+    g_state.active_toast = toast; // the latest one (what "get_bottom_toast" reports)
     g_state.toast_active = true;
 }
 
@@ -2238,7 +2238,7 @@ static std::string handle_command_locked(const std::string& req) {
     }
 
     if (cmd == "get_bottom_toast") {
-        const BottomToastNotification& t = g_state.toast_queue.empty() ? g_state.active_toast : g_state.toast_queue.back();
+        const BottomToastNotification& t = g_state.active_toast; // always the most recent notification
         std::ostringstream ss;
         std::string p1 = t.sender.empty() ? "Croc" : t.sender;
         std::string p2 = t.receiver.empty() ? "Croc" : t.receiver;
@@ -2671,12 +2671,12 @@ static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         FillRect(memDC, &rc, keyBrush);
         DeleteObject(keyBrush);
 
+        // The toast this window is showing (set by background_tick_worker, which runs on this same thread).
         BottomToastNotification toast_snap;
         bool active = false;
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            active = g_state.toast_active;
-            toast_snap = g_state.active_toast;
+        if (auto* shown = reinterpret_cast<BottomToastNotification*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA))) {
+            toast_snap = *shown;
+            active = true;
         }
 
         if (active) {
@@ -2767,7 +2767,9 @@ static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 static BOOL CALLBACK FindCrocWindowCallback(HWND hwnd, LPARAM lParam) {
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
-    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd) && hwnd != g_toast_hwnd) {
+    bool is_toast_window = false;
+    for (const ToastSlot& s : g_toast_slots) is_toast_window = is_toast_window || s.hwnd == hwnd;
+    if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd) && !is_toast_window) {
         LONG style = GetWindowLongA(hwnd, GWL_STYLE);
         if ((style & WS_CAPTION) || (style & WS_POPUP)) {
             RECT rc;
@@ -2794,19 +2796,29 @@ static void background_tick_worker() {
     wcToast.lpszClassName = "Croc2APToastWndClass";
     RegisterClassExA(&wcToast);
 
-    // Boxless floating text toast window (Mario 64 Archipelago style)
-    g_toast_hwnd = CreateWindowExA(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
-        "Croc2APToastWndClass",
-        "Croc 2 AP Notification Toast",
-        WS_POPUP,
-        0, 0, 960, 96,
-        nullptr, nullptr, hInst, nullptr
-    );
-    if (g_toast_hwnd) {
-        SetLayeredWindowAttributes(g_toast_hwnd, RGB(1, 1, 1), 255, LWA_COLORKEY);
-        ShowWindow(g_toast_hwnd, SW_HIDE);
+    // Boxless floating text windows (Mario 64 Archipelago style), one per visible notification.
+    static BottomToastNotification slot_toast[kToastSlots];
+    for (ToastSlot& s : g_toast_slots) {
+        s.hwnd = CreateWindowExA(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+            "Croc2APToastWndClass", "Croc 2 AP Notification Toast", WS_POPUP,
+            0, 0, 960, kToastHeight, nullptr, nullptr, hInst, nullptr);
+        if (s.hwnd) {
+            SetLayeredWindowAttributes(s.hwnd, RGB(1, 1, 1), 0, LWA_COLORKEY | LWA_ALPHA);
+            ShowWindow(s.hwnd, SW_HIDE);
+        }
     }
+
+    // How the stack behaves:
+    // - The oldest notification sits at the bottom; newer ones stack above it. A new one fades in just above its
+    //   place and slides down into it.
+    // - When the bottom one's time is up it fades out, everything above slides down one place, and the next one
+    //   waiting in the queue comes in at the top.
+    // - Each stays about 3.5 s when nothing is waiting, and down to 0.6 s when a lot is (crystal pickups arrive
+    //   several a second), so the display keeps up without skipping any.
+    static constexpr DWORD kFadeInMs = 150, kFadeOutMs = 300;
+    int order[kToastSlots]; // slot indices, oldest (bottom) first
+    int shown = 0;
 
     DWORD last_tick = GetTickCount();
 
@@ -2822,62 +2834,111 @@ static void background_tick_worker() {
         last_tick = now;
         if (dt > 0.5f) dt = 0.5f;
 
-        bool show_toast = false;
+        // 1. Retire finished toasts, then take new ones from the queue while there is room.
+        for (int i = 0; i < shown;) {
+            ToastSlot& s = g_toast_slots[order[i]];
+            if (s.fading && now - s.fade_tick >= kFadeOutMs) {
+                s.used = false;
+                SetWindowLongPtrA(s.hwnd, GWLP_USERDATA, 0);
+                ShowWindow(s.hwnd, SW_HIDE);
+                for (int k = i; k + 1 < shown; ++k) order[k] = order[k + 1];
+                --shown;
+            } else {
+                ++i;
+            }
+        }
+        size_t waiting = 0;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             step_internal_locked(dt);
+            while (shown < kToastSlots && !g_state.toast_queue.empty()) {
+                int free_slot = -1;
+                for (int k = 0; k < kToastSlots; ++k) if (!g_toast_slots[k].used) { free_slot = k; break; }
+                if (free_slot < 0) break;
+                ToastSlot& s = g_toast_slots[free_slot];
+                slot_toast[free_slot] = g_state.toast_queue.front();
+                g_state.toast_queue.pop_front();
+                s.used = true;
+                s.fading = false;
+                s.placed = false;
+                s.shown_tick = now;
+                s.alpha = 0;
+                order[shown++] = free_slot;
+                SetWindowLongPtrA(s.hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&slot_toast[free_slot]));
+                InvalidateRect(s.hwnd, nullptr, FALSE);
+            }
+            waiting = g_state.toast_queue.size();
+            g_state.toast_active = shown > 0 || waiting > 0;
+        }
 
-            if (g_state.toast_active) {
-                if (now >= g_state.active_toast.expire_tick) {
-                    if (!g_state.toast_queue.empty()) {
-                        g_state.active_toast = g_state.toast_queue.front();
-                        g_state.toast_queue.pop_front();
-                        uint32_t dur = g_state.active_toast.duration_ms >= 5000 ? g_state.active_toast.duration_ms : 5000;
-                        g_state.active_toast.expire_tick = now + dur;
-                        show_toast = true;
-                    } else {
-                        g_state.toast_active = false;
-                        show_toast = false;
+        // 2. The bottom one leaves when its time is up; sooner when others are waiting.
+        if (shown > 0) {
+            ToastSlot& bottom = g_toast_slots[order[0]];
+            DWORD hold = 3500;
+            if (waiting > 0) {
+                hold = static_cast<DWORD>(3500 / (1 + waiting));
+                if (hold < 600) hold = 600;
+            }
+            if (!bottom.fading && now - bottom.shown_tick >= hold) {
+                bottom.fading = true;
+                bottom.fade_tick = now;
+            }
+        }
+
+        // 3. Place and draw.
+        if (shown > 0) {
+            HWND game_hwnd = nullptr;
+            EnumWindows(FindCrocWindowCallback, reinterpret_cast<LPARAM>(&game_hwnd));
+            RECT grc{};
+            if (game_hwnd && GetWindowRect(game_hwnd, &grc)) {
+                int tw = (grc.right - grc.left) - 36;
+                if (tw > 1100) tw = 1100;
+                if (tw < 380) tw = 380;
+                const int tx = grc.left + 18;
+                const float bottom_y = static_cast<float>(grc.bottom - kToastHeight - 18);
+                for (int i = 0; i < shown; ++i) {
+                    ToastSlot& s = g_toast_slots[order[i]];
+                    // A toast that is fading out no longer holds a place: the ones above it start moving down.
+                    int rank = i;
+                    if (g_toast_slots[order[0]].fading && i > 0) rank = i - 1;
+                    const float target = bottom_y - static_cast<float>(rank * kToastHeight);
+                    if (!s.placed) {
+                        s.y = target - 40.0f; // comes in from just above its place
+                        s.placed = true;
                     }
-                } else {
-                    show_toast = true;
+                    float step = dt * 12.0f;
+                    if (step > 1.0f) step = 1.0f;
+                    s.y += (target - s.y) * step;
+                    int alpha = 255;
+                    if (s.fading) {
+                        alpha = 255 - static_cast<int>(255 * (now - s.fade_tick) / kFadeOutMs);
+                        s.y += dt * 60.0f; // drifts down as it goes
+                    } else if (now - s.shown_tick < kFadeInMs) {
+                        alpha = static_cast<int>(255 * (now - s.shown_tick) / kFadeInMs);
+                    }
+                    if (alpha < 0) alpha = 0;
+                    if (alpha > 255) alpha = 255;
+                    if (alpha != s.alpha || !IsWindowVisible(s.hwnd)) {
+                        s.alpha = alpha;
+                        SetLayeredWindowAttributes(s.hwnd, RGB(1, 1, 1), static_cast<BYTE>(alpha), LWA_COLORKEY | LWA_ALPHA);
+                    }
+                    if (tw != s.width) {
+                        s.width = tw;
+                        InvalidateRect(s.hwnd, nullptr, FALSE);
+                    }
+                    SetWindowPos(s.hwnd, HWND_TOPMOST, tx, static_cast<int>(s.y), tw, kToastHeight, SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 }
             }
         }
 
-        if (g_toast_hwnd) {
-            if (show_toast) {
-                HWND game_hwnd = nullptr;
-                EnumWindows(FindCrocWindowCallback, reinterpret_cast<LPARAM>(&game_hwnd));
-                if (game_hwnd) {
-                    RECT grc;
-                    if (GetWindowRect(game_hwnd, &grc)) {
-                        int gw = grc.right - grc.left;
-                        int tw = gw - 36;
-                        if (tw > 1100) tw = 1100;
-                        if (tw < 380) tw = 380;
-                        int th = 96;
-                        int tx = grc.left + 18;
-                        int ty = grc.bottom - th - 18;
-                        SetWindowPos(g_toast_hwnd, HWND_TOPMOST, tx, ty, tw, th, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                    }
-                } else if (!IsWindowVisible(g_toast_hwnd)) {
-                    ShowWindow(g_toast_hwnd, SW_SHOWNOACTIVATE);
-                }
-                InvalidateRect(g_toast_hwnd, nullptr, FALSE);
-            } else {
-                if (IsWindowVisible(g_toast_hwnd)) {
-                    ShowWindow(g_toast_hwnd, SW_HIDE);
-                }
-            }
-        }
-
-        Sleep(25);
+        Sleep(16);
     }
 
-    if (g_toast_hwnd) {
-        DestroyWindow(g_toast_hwnd);
-        g_toast_hwnd = nullptr;
+    for (ToastSlot& s : g_toast_slots) {
+        if (s.hwnd) {
+            DestroyWindow(s.hwnd);
+            s.hwnd = nullptr;
+        }
     }
 }
 
