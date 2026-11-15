@@ -32,8 +32,11 @@ static std::thread g_ws_thread;
 static SOCKET g_listen_socket = INVALID_SOCKET;
 // On-screen notifications: a stack of up to kToastSlots at the bottom-left of the game window. Each one is its own
 // small window, so it can slide and fade by itself. See background_tick_worker.
-static constexpr int kToastSlots = 4;
-static constexpr int kToastHeight = 96;
+static constexpr int kToastSlots = 6;
+static constexpr int kToastHeight = 34;  // one line: a dark bar with a coloured left edge
+static constexpr int kToastPitch = 38;   // bar plus the gap to the next one
+static constexpr int kToastMaxWidth = 720;
+static constexpr DWORD kToastHoldMs = 3000;
 struct ToastSlot {
     HWND hwnd = nullptr;
     bool used = false;
@@ -2618,41 +2621,6 @@ static COLORREF get_ap_importance_color(ItemImportance imp) {
     }
 }
 
-static void draw_outlined_seg(HDC hdc, HFONT hFontOutline, HFONT hFontFill, int& x, int y, int max_x, const std::string& text, COLORREF col) {
-    if (text.empty() || x >= max_x) return;
-
-    const UINT len = static_cast<UINT>(text.size());
-
-    // Pass 1: Crisp opaque black outline + drop shadow (Mario 64 Archipelago floating text style)
-    // Uses NONANTIALIASED_QUALITY so the outer silhouette has zero color-key fringing against RGB(1, 1, 1).
-    SelectObject(hdc, hFontOutline);
-    SetTextColor(hdc, RGB(0, 0, 0));
-    for (int dy = -3; dy <= 3; ++dy) {
-        for (int dx = -3; dx <= 3; ++dx) {
-            if (dx * dx + dy * dy <= 10) {
-                RECT rc_out = {x + dx, y + dy, max_x + 4, y + dy + 60};
-                ExtTextOutA(hdc, x + dx, y + dy, ETO_CLIPPED, &rc_out, text.c_str(), len, nullptr);
-            }
-        }
-    }
-    // Bold bottom-right drop shadow
-    for (int s = 3; s <= 4; ++s) {
-        RECT rc_sh = {x + s, y + s, max_x + 4, y + s + 60};
-        ExtTextOutA(hdc, x + s, y + s, ETO_CLIPPED, &rc_sh, text.c_str(), len, nullptr);
-    }
-
-    // Pass 2: Smooth anti-aliased colored interior fill (blends cleanly against the solid black outline underneath)
-    SelectObject(hdc, hFontFill);
-    SetTextColor(hdc, col);
-    RECT clip_rc = {x, y, max_x, y + 60};
-    ExtTextOutA(hdc, x, y, ETO_CLIPPED, &clip_rc, text.c_str(), len, nullptr);
-
-    SIZE sz{};
-    if (GetTextExtentPoint32A(hdc, text.c_str(), static_cast<int>(text.size()), &sz)) {
-        x += sz.cx;
-    }
-}
-
 static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
@@ -2680,78 +2648,88 @@ static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         }
 
         if (active) {
+            // One line: [coloured edge] Got <item> (from <player>) / Sent <item> to <player> ......... <location>
+            // The bar is solid, so the text needs no outline; the whole window is made slightly see-through.
+            const COLORREF col_gold = RGB(255, 230, 95);  // Archipelago player gold
+            const COLORREF col_text = RGB(245, 248, 250);
+            const COLORREF col_loc  = RGB(85, 240, 140);  // Archipelago location green
+            const bool gate_warning = toast_snap.importance == ItemImportance::TRAP &&
+                                      (toast_snap.item_name.find("Required") != std::string::npos ||
+                                       toast_snap.item_name.find("Locked") != std::string::npos);
+            const COLORREF col_item = gate_warning ? RGB(255, 115, 95) : get_ap_importance_color(toast_snap.importance);
+
+            HBRUSH bar = CreateSolidBrush(RGB(14, 14, 14));
+            FillRect(memDC, &rc, bar);
+            DeleteObject(bar);
+            RECT edge = {0, 0, 5, h};
+            HBRUSH edge_brush = CreateSolidBrush(col_item);
+            FillRect(memDC, &edge, edge_brush);
+            DeleteObject(edge_brush);
+
             const char* font_family = g_croc_font_loaded ? "Darumadrop One" : "Segoe UI";
-            HFONT hFontMainOut = CreateFontA(36, 0, 0, 0, FW_EXTRABOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
-                                             DEFAULT_PITCH | FF_SWISS, font_family);
-            HFONT hFontMainFill = CreateFontA(36, 0, 0, 0, FW_EXTRABOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                                              DEFAULT_PITCH | FF_SWISS, font_family);
-            HFONT hFontSubOut = CreateFontA(25, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY,
-                                            DEFAULT_PITCH | FF_SWISS, font_family);
-            HFONT hFontSubFill = CreateFontA(25, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                                             DEFAULT_PITCH | FF_SWISS, font_family);
-
+            HFONT hFontMain = CreateFontA(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                          CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, font_family);
+            HFONT hFontSub = CreateFontA(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                         CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, font_family);
             SetBkMode(memDC, TRANSPARENT);
-
-            const COLORREF col_gold = RGB(255, 230, 95);       // Archipelago Player Gold
-            const COLORREF col_text = RGB(245, 248, 250);      // Crisp white text
-            const COLORREF col_item = get_ap_importance_color(toast_snap.importance);
-            const COLORREF col_loc  = RGB(85, 240, 140);       // Archipelago Location Green
+            HGDIOBJ oldFont = SelectObject(memDC, hFontSub);
 
             std::string p1 = toast_snap.sender.empty() ? "Croc" : toast_snap.sender;
             std::string p2 = toast_snap.receiver.empty() ? "Croc" : toast_snap.receiver;
+            const bool self = toast_snap.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc");
 
-            // Line 1: Main Floating Announcement (Mario 64 Archipelago bottom-left style)
-            HGDIOBJ oldFont = SelectObject(memDC, hFontMainFill);
-            int cur_x = 12;
-            int line1_y = 6;
-            int max_x = w - 12;
-
-            if (toast_snap.importance == ItemImportance::TRAP &&
-                (toast_snap.item_name.find("Required") != std::string::npos ||
-                 toast_snap.item_name.find("Locked") != std::string::npos)) {
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, toast_snap.item_name, RGB(255, 115, 95));
-            } else if (toast_snap.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc")) {
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, "GOT ", col_text);
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
-            } else if (toast_snap.is_outgoing) {
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, "SENT ", col_text);
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, " TO ", col_text);
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, p2, col_gold);
-            } else {
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, "GOT ", col_text);
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, toast_snap.item_name, col_item);
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, " FROM ", col_text);
-                draw_outlined_seg(memDC, hFontMainOut, hFontMainFill, cur_x, line1_y, max_x, p1, col_gold);
+            // Right side first, so the left side knows where it has to stop.
+            std::string right;
+            COLORREF col_right = col_loc;
+            if (!toast_snap.location.empty() && toast_snap.location != "Padlock" && toast_snap.location != "License") {
+                right = toast_snap.location;
+            } else if (!gate_warning && toast_snap.importance == ItemImportance::TRAP) {
+                right = "10 seconds";
+                col_right = RGB(255, 160, 140);
+            }
+            int left_max = w - 12;
+            if (!right.empty()) {
+                SIZE rs{};
+                GetTextExtentPoint32A(memDC, right.c_str(), static_cast<int>(right.size()), &rs);
+                int rx = w - 12 - rs.cx;
+                if (rx < w / 2) rx = w / 2; // a very long location gives way to the item, not the other way round
+                SetTextColor(memDC, col_right);
+                RECT rr = {rx, 0, w - 8, h};
+                ExtTextOutA(memDC, rx, (h - rs.cy) / 2, ETO_CLIPPED, &rr, right.c_str(), static_cast<UINT>(right.size()), nullptr);
+                left_max = rx - 14;
             }
 
-            // Line 2: Subtext / Sender / Location
-            int line2_x = 12;
-            int line2_y = 48;
-
-            if (!toast_snap.location.empty() && toast_snap.location != "Padlock" && toast_snap.location != "License") {
-                if (toast_snap.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc")) {
-                    draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, "FROM ", col_text);
-                    draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, toast_snap.location, col_loc);
-                } else {
-                    draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, toast_snap.location, col_loc);
-                }
-            } else if (toast_snap.importance == ItemImportance::TRAP) {
-                draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, "Ill effect lasts a flat 10 seconds", RGB(255, 160, 140));
+            SelectObject(memDC, hFontMain);
+            int x = 16;
+            auto seg = [&](const std::string& text, COLORREF col) {
+                if (text.empty() || x >= left_max) return;
+                SIZE sz{};
+                GetTextExtentPoint32A(memDC, text.c_str(), static_cast<int>(text.size()), &sz);
+                SetTextColor(memDC, col);
+                RECT clip = {x, 0, left_max, h};
+                ExtTextOutA(memDC, x, (h - sz.cy) / 2, ETO_CLIPPED, &clip, text.c_str(), static_cast<UINT>(text.size()), nullptr);
+                x += sz.cx;
+            };
+            if (gate_warning) {
+                seg(toast_snap.item_name, col_item);
+            } else if (self) {
+                seg("Got ", col_text);
+                seg(toast_snap.item_name, col_item);
+            } else if (toast_snap.is_outgoing) {
+                seg("Sent ", col_text);
+                seg(toast_snap.item_name, col_item);
+                seg(" to ", col_text);
+                seg(p2, col_gold);
             } else {
-                draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, "FROM ", col_text);
-                draw_outlined_seg(memDC, hFontSubOut, hFontSubFill, line2_x, line2_y, max_x, p1, col_gold);
+                seg("Got ", col_text);
+                seg(toast_snap.item_name, col_item);
+                seg(" from ", col_text);
+                seg(p1, col_gold);
             }
 
             SelectObject(memDC, oldFont);
-            DeleteObject(hFontMainOut);
-            DeleteObject(hFontMainFill);
-            DeleteObject(hFontSubOut);
-            DeleteObject(hFontSubFill);
+            DeleteObject(hFontMain);
+            DeleteObject(hFontSub);
         }
 
         BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
@@ -2814,8 +2792,8 @@ static void background_tick_worker() {
     //   place and slides down into it.
     // - When the bottom one's time is up it fades out, everything above slides down one place, and the next one
     //   waiting in the queue comes in at the top.
-    // - Each stays about 3.5 s when nothing is waiting, and down to 0.6 s when a lot is (crystal pickups arrive
-    //   several a second), so the display keeps up without skipping any.
+    // - Each stays kToastHoldMs (3 s) at least. With six on screen that is two a second; anything faster waits
+    //   in the queue and is shown in order, never skipped.
     static constexpr DWORD kFadeInMs = 150, kFadeOutMs = 300;
     int order[kToastSlots]; // slot indices, oldest (bottom) first
     int shown = 0;
@@ -2874,12 +2852,8 @@ static void background_tick_worker() {
         // 2. The bottom one leaves when its time is up; sooner when others are waiting.
         if (shown > 0) {
             ToastSlot& bottom = g_toast_slots[order[0]];
-            DWORD hold = 3500;
-            if (waiting > 0) {
-                hold = static_cast<DWORD>(3500 / (1 + waiting));
-                if (hold < 600) hold = 600;
-            }
-            if (!bottom.fading && now - bottom.shown_tick >= hold) {
+            (void)waiting;
+            if (!bottom.fading && now - bottom.shown_tick >= kToastHoldMs) {
                 bottom.fading = true;
                 bottom.fade_tick = now;
             }
@@ -2892,7 +2866,7 @@ static void background_tick_worker() {
             RECT grc{};
             if (game_hwnd && GetWindowRect(game_hwnd, &grc)) {
                 int tw = (grc.right - grc.left) - 36;
-                if (tw > 1100) tw = 1100;
+                if (tw > kToastMaxWidth) tw = kToastMaxWidth;
                 if (tw < 380) tw = 380;
                 const int tx = grc.left + 18;
                 const float bottom_y = static_cast<float>(grc.bottom - kToastHeight - 18);
@@ -2901,9 +2875,9 @@ static void background_tick_worker() {
                     // A toast that is fading out no longer holds a place: the ones above it start moving down.
                     int rank = i;
                     if (g_toast_slots[order[0]].fading && i > 0) rank = i - 1;
-                    const float target = bottom_y - static_cast<float>(rank * kToastHeight);
+                    const float target = bottom_y - static_cast<float>(rank * kToastPitch);
                     if (!s.placed) {
-                        s.y = target - 40.0f; // comes in from just above its place
+                        s.y = target - 20.0f; // comes in from just above its place
                         s.placed = true;
                     }
                     float step = dt * 12.0f;
@@ -2916,6 +2890,7 @@ static void background_tick_worker() {
                     } else if (now - s.shown_tick < kFadeInMs) {
                         alpha = static_cast<int>(255 * (now - s.shown_tick) / kFadeInMs);
                     }
+                    alpha = alpha * 225 / 255; // the bar is slightly see-through even at full strength
                     if (alpha < 0) alpha = 0;
                     if (alpha > 255) alpha = 255;
                     if (alpha != s.alpha || !IsWindowVisible(s.hwnd)) {
