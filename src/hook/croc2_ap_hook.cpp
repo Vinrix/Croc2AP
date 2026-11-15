@@ -35,7 +35,7 @@ static SOCKET g_listen_socket = INVALID_SOCKET;
 static constexpr int kToastSlots = 6;
 static constexpr int kToastHeight = 34;  // one line: a dark bar with a coloured left edge
 static constexpr int kToastPitch = 38;   // bar plus the gap to the next one
-static constexpr int kToastMaxWidth = 720;
+static constexpr int kToastBackAlpha = 120; // the bar behind the text, 0..255 (the text itself stays solid)
 static constexpr DWORD kToastHoldMs = 5000;
 struct ToastSlot {
     HWND hwnd = nullptr;
@@ -46,7 +46,10 @@ struct ToastSlot {
     float y = 0.0f;       // current top edge, in screen pixels
     bool placed = false;  // y has been given a starting value
     int alpha = 0;
-    int width = 0;
+    int width = 0;        // of the drawn bar: as wide as its text, no wider
+    HDC dc = nullptr;     // the drawn bar (32-bit, per-pixel alpha), made once when the toast appears
+    HBITMAP bmp = nullptr;
+    HGDIOBJ old_bmp = nullptr;
 };
 static ToastSlot g_toast_slots[kToastSlots];
 static std::string g_ini_file_path = "croc2_mod.ini";
@@ -2622,124 +2625,137 @@ static COLORREF get_ap_importance_color(ItemImportance imp) {
 }
 
 static LRESULT CALLBACK ToastWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (msg == WM_PAINT) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        int w = rc.right - rc.left;
-        int h = rc.bottom - rc.top;
+    return DefWindowProcA(hwnd, msg, wParam, lParam); // drawn with UpdateLayeredWindow, never painted
+}
 
-        HDC memDC = CreateCompatibleDC(hdc);
-        HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
-        HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
-
-        // Fill entire surface with transparent color key RGB(1, 1, 1) — no box or border!
-        HBRUSH keyBrush = CreateSolidBrush(RGB(1, 1, 1));
-        FillRect(memDC, &rc, keyBrush);
-        DeleteObject(keyBrush);
-
-        // The toast this window is showing (set by background_tick_worker, which runs on this same thread).
-        BottomToastNotification toast_snap;
-        bool active = false;
-        if (auto* shown = reinterpret_cast<BottomToastNotification*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA))) {
-            toast_snap = *shown;
-            active = true;
-        }
-
-        if (active) {
-            // One line: [coloured edge] Got <item> (from <player>) / Sent <item> to <player> ......... <location>
-            // The bar is solid, so the text needs no outline; the whole window is made slightly see-through.
-            const COLORREF col_gold = RGB(255, 230, 95);  // Archipelago player gold
-            const COLORREF col_text = RGB(245, 248, 250);
-            const COLORREF col_loc  = RGB(85, 240, 140);  // Archipelago location green
-            const bool gate_warning = toast_snap.importance == ItemImportance::TRAP &&
-                                      (toast_snap.item_name.find("Required") != std::string::npos ||
-                                       toast_snap.item_name.find("Locked") != std::string::npos);
-            const COLORREF col_item = gate_warning ? RGB(255, 115, 95) : get_ap_importance_color(toast_snap.importance);
-
-            HBRUSH bar = CreateSolidBrush(RGB(14, 14, 14));
-            FillRect(memDC, &rc, bar);
-            DeleteObject(bar);
-            RECT edge = {0, 0, 5, h};
-            HBRUSH edge_brush = CreateSolidBrush(col_item);
-            FillRect(memDC, &edge, edge_brush);
-            DeleteObject(edge_brush);
-
-            const char* font_family = g_croc_font_loaded ? "Darumadrop One" : "Segoe UI";
-            HFONT hFontMain = CreateFontA(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                          CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, font_family);
-            HFONT hFontSub = CreateFontA(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                         CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, font_family);
-            SetBkMode(memDC, TRANSPARENT);
-            HGDIOBJ oldFont = SelectObject(memDC, hFontSub);
-
-            std::string p1 = toast_snap.sender.empty() ? "Croc" : toast_snap.sender;
-            std::string p2 = toast_snap.receiver.empty() ? "Croc" : toast_snap.receiver;
-            const bool self = toast_snap.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc");
-
-            // Right side first, so the left side knows where it has to stop.
-            std::string right;
-            COLORREF col_right = col_loc;
-            if (!toast_snap.location.empty() && toast_snap.location != "Padlock" && toast_snap.location != "License") {
-                right = toast_snap.location;
-            } else if (!gate_warning && toast_snap.importance == ItemImportance::TRAP) {
-                right = "10 seconds";
-                col_right = RGB(255, 160, 140);
-            }
-            int left_max = w - 12;
-            if (!right.empty()) {
-                SIZE rs{};
-                GetTextExtentPoint32A(memDC, right.c_str(), static_cast<int>(right.size()), &rs);
-                int rx = w - 12 - rs.cx;
-                if (rx < w / 2) rx = w / 2; // a very long location gives way to the item, not the other way round
-                SetTextColor(memDC, col_right);
-                RECT rr = {rx, 0, w - 8, h};
-                ExtTextOutA(memDC, rx, (h - rs.cy) / 2, ETO_CLIPPED, &rr, right.c_str(), static_cast<UINT>(right.size()), nullptr);
-                left_max = rx - 14;
-            }
-
-            SelectObject(memDC, hFontMain);
-            int x = 16;
-            auto seg = [&](const std::string& text, COLORREF col) {
-                if (text.empty() || x >= left_max) return;
-                SIZE sz{};
-                GetTextExtentPoint32A(memDC, text.c_str(), static_cast<int>(text.size()), &sz);
-                SetTextColor(memDC, col);
-                RECT clip = {x, 0, left_max, h};
-                ExtTextOutA(memDC, x, (h - sz.cy) / 2, ETO_CLIPPED, &clip, text.c_str(), static_cast<UINT>(text.size()), nullptr);
-                x += sz.cx;
-            };
-            if (gate_warning) {
-                seg(toast_snap.item_name, col_item);
-            } else if (self) {
-                seg("Got ", col_text);
-                seg(toast_snap.item_name, col_item);
-            } else if (toast_snap.is_outgoing) {
-                seg("Sent ", col_text);
-                seg(toast_snap.item_name, col_item);
-                seg(" to ", col_text);
-                seg(p2, col_gold);
-            } else {
-                seg("Got ", col_text);
-                seg(toast_snap.item_name, col_item);
-                seg(" from ", col_text);
-                seg(p1, col_gold);
-            }
-
-            SelectObject(memDC, oldFont);
-            DeleteObject(hFontMain);
-            DeleteObject(hFontSub);
-        }
-
-        BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
-        SelectObject(memDC, oldBmp);
-        DeleteObject(memBmp);
-        DeleteDC(memDC);
-        EndPaint(hwnd, &ps);
-        return 0;
+static void free_toast_bitmap(ToastSlot& s) {
+    if (s.dc) {
+        if (s.old_bmp) SelectObject(s.dc, s.old_bmp);
+        DeleteDC(s.dc);
     }
-    return DefWindowProcA(hwnd, msg, wParam, lParam);
+    if (s.bmp) DeleteObject(s.bmp);
+    s.dc = nullptr;
+    s.bmp = nullptr;
+    s.old_bmp = nullptr;
+}
+
+// Draws one notification into s.dc: a single line, a see-through dark bar with an edge in the item's colour, and
+// solid text. The bar is as wide as its text (up to max_w).
+//   Sent <item> to <player> (<location>)     a check of ours that held someone else's item
+//   Got <item> from <player>                 an item someone else found for us
+//   Got <item> (<location>)                  our own item from our own check
+static void render_toast_bitmap(ToastSlot& s, const BottomToastNotification& t, int max_w) {
+    free_toast_bitmap(s);
+    const COLORREF col_gold = RGB(255, 230, 95);  // Archipelago player gold
+    const COLORREF col_text = RGB(245, 248, 250);
+    const COLORREF col_loc  = RGB(85, 240, 140);  // Archipelago location green
+    const bool gate_warning = t.importance == ItemImportance::TRAP &&
+                              (t.item_name.find("Required") != std::string::npos || t.item_name.find("Locked") != std::string::npos);
+    const COLORREF col_item = gate_warning ? RGB(255, 115, 95) : get_ap_importance_color(t.importance);
+    const std::string p1 = t.sender.empty() ? "Croc" : t.sender;
+    const std::string p2 = t.receiver.empty() ? "Croc" : t.receiver;
+    const bool self = t.is_self || p1 == p2 || (p1 == "Croc" && p2 == "Croc");
+    const bool has_loc = !t.location.empty() && t.location != "Padlock" && t.location != "License";
+
+    std::vector<std::pair<std::string, COLORREF>> segs;
+    if (gate_warning) {
+        segs.push_back({t.item_name, col_item});
+    } else if (!self && !t.is_outgoing) {
+        segs.push_back({"Got ", col_text});
+        segs.push_back({t.item_name, col_item});
+        segs.push_back({" from ", col_text});
+        segs.push_back({p1, col_gold});
+    } else {
+        segs.push_back({self ? "Got " : "Sent ", col_text});
+        segs.push_back({t.item_name, col_item});
+        if (!self) {
+            segs.push_back({" to ", col_text});
+            segs.push_back({p2, col_gold});
+        }
+        if (has_loc) {
+            segs.push_back({" (", col_text});
+            segs.push_back({t.location, col_loc});
+            segs.push_back({")", col_text});
+        }
+    }
+
+    HDC screen = GetDC(nullptr);
+    HDC dc = CreateCompatibleDC(screen);
+    ReleaseDC(nullptr, screen);
+    const char* font_family = g_croc_font_loaded ? "Darumadrop One" : "Segoe UI";
+    HFONT font = CreateFontA(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, font_family);
+    HGDIOBJ old_font = SelectObject(dc, font);
+
+    const int pad_left = 15, pad_right = 12, h = kToastHeight;
+    int text_w = 0, text_h = 0;
+    for (const auto& sg : segs) {
+        SIZE sz{};
+        GetTextExtentPoint32A(dc, sg.first.c_str(), static_cast<int>(sg.first.size()), &sz);
+        text_w += sz.cx;
+        if (sz.cy > text_h) text_h = sz.cy;
+    }
+    int w = pad_left + text_w + pad_right;
+    if (w > max_w) w = max_w;
+    if (w < 40) w = 40;
+
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h; // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    uint32_t* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, reinterpret_cast<void**>(&bits), nullptr, 0);
+    if (!bmp || !bits) {
+        SelectObject(dc, old_font);
+        DeleteObject(font);
+        DeleteDC(dc);
+        if (bmp) DeleteObject(bmp);
+        return;
+    }
+    HGDIOBJ old_bmp = SelectObject(dc, bmp);
+
+    const COLORREF bar_col = RGB(14, 14, 14);
+    RECT rc = {0, 0, w, h};
+    HBRUSH bar = CreateSolidBrush(bar_col);
+    FillRect(dc, &rc, bar);
+    DeleteObject(bar);
+    SetBkMode(dc, TRANSPARENT);
+    int x = pad_left;
+    const int max_x = w - pad_right;
+    for (const auto& sg : segs) {
+        if (x >= max_x) break;
+        SIZE sz{};
+        GetTextExtentPoint32A(dc, sg.first.c_str(), static_cast<int>(sg.first.size()), &sz);
+        SetTextColor(dc, sg.second);
+        RECT clip = {x, 0, max_x, h};
+        ExtTextOutA(dc, x, (h - text_h) / 2, ETO_CLIPPED, &clip, sg.first.c_str(), static_cast<UINT>(sg.first.size()), nullptr);
+        x += sz.cx;
+    }
+    GdiFlush();
+
+    // GDI leaves the alpha byte alone, so set it here: bar pixels see-through, everything drawn on top solid.
+    // (Text edges are blended with the bar colour, which gives the letters a thin dark rim.) Premultiplied.
+    const uint32_t bar_px = 0x000E0E0E;
+    const uint32_t a = static_cast<uint32_t>(kToastBackAlpha);
+    const uint32_t bar_out = (a << 24) | ((14 * a / 255) << 16) | ((14 * a / 255) << 8) | (14 * a / 255);
+    for (int i = 0; i < w * h; ++i) {
+        const uint32_t px = bits[i] & 0x00FFFFFF;
+        bits[i] = (px == bar_px) ? bar_out : (0xFF000000u | px);
+    }
+    // The coloured edge, solid.
+    const uint32_t edge_px = 0xFF000000u | (static_cast<uint32_t>(GetRValue(col_item)) << 16) |
+                             (static_cast<uint32_t>(GetGValue(col_item)) << 8) | GetBValue(col_item);
+    for (int yy = 0; yy < h; ++yy) for (int xx = 0; xx < 5 && xx < w; ++xx) bits[yy * w + xx] = edge_px;
+
+    SelectObject(dc, old_font);
+    DeleteObject(font);
+    s.dc = dc;
+    s.bmp = bmp;
+    s.old_bmp = old_bmp;
+    s.width = w;
 }
 
 static BOOL CALLBACK FindCrocWindowCallback(HWND hwnd, LPARAM lParam) {
@@ -2781,13 +2797,11 @@ static void background_tick_worker() {
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
             "Croc2APToastWndClass", "Croc 2 AP Notification Toast", WS_POPUP,
             0, 0, 960, kToastHeight, nullptr, nullptr, hInst, nullptr);
-        if (s.hwnd) {
-            SetLayeredWindowAttributes(s.hwnd, RGB(1, 1, 1), 0, LWA_COLORKEY | LWA_ALPHA);
-            ShowWindow(s.hwnd, SW_HIDE);
-        }
+        if (s.hwnd) ShowWindow(s.hwnd, SW_HIDE);
     }
 
     // How the stack behaves:
+    // - The stack sits at the middle of the left edge, clear of the HUD in the corners.
     // - The oldest notification sits at the bottom; newer ones stack above it. A new one fades in just above its
     //   place and slides down into it.
     // - When the bottom one's time is up it fades out, everything above slides down one place, and the next one
@@ -2817,7 +2831,7 @@ static void background_tick_worker() {
             ToastSlot& s = g_toast_slots[order[i]];
             if (s.fading && now - s.fade_tick >= kFadeOutMs) {
                 s.used = false;
-                SetWindowLongPtrA(s.hwnd, GWLP_USERDATA, 0);
+                free_toast_bitmap(s);
                 ShowWindow(s.hwnd, SW_HIDE);
                 for (int k = i; k + 1 < shown; ++k) order[k] = order[k + 1];
                 --shown;
@@ -2842,8 +2856,7 @@ static void background_tick_worker() {
                 s.shown_tick = now;
                 s.alpha = 0;
                 order[shown++] = free_slot;
-                SetWindowLongPtrA(s.hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&slot_toast[free_slot]));
-                InvalidateRect(s.hwnd, nullptr, FALSE);
+                free_toast_bitmap(s); // drawn in step 3, once the game window's width is known
             }
             waiting = g_state.toast_queue.size();
             g_state.toast_active = shown > 0 || waiting > 0;
@@ -2865,11 +2878,11 @@ static void background_tick_worker() {
             EnumWindows(FindCrocWindowCallback, reinterpret_cast<LPARAM>(&game_hwnd));
             RECT grc{};
             if (game_hwnd && GetWindowRect(game_hwnd, &grc)) {
-                int tw = (grc.right - grc.left) - 36;
-                if (tw > kToastMaxWidth) tw = kToastMaxWidth;
-                if (tw < 380) tw = 380;
+                int max_w = (grc.right - grc.left) - 36;
+                if (max_w < 200) max_w = 200;
                 const int tx = grc.left + 18;
-                const float bottom_y = static_cast<float>(grc.bottom - kToastHeight - 18);
+                // Middle of the left edge: the six places are centred on the window's vertical middle.
+                const float bottom_y = static_cast<float>((grc.top + grc.bottom) / 2 + (kToastSlots * kToastPitch) / 2 - kToastPitch);
                 for (int i = 0; i < shown; ++i) {
                     ToastSlot& s = g_toast_slots[order[i]];
                     // A toast that is fading out no longer holds a place: the ones above it start moving down.
@@ -2890,18 +2903,19 @@ static void background_tick_worker() {
                     } else if (now - s.shown_tick < kFadeInMs) {
                         alpha = static_cast<int>(255 * (now - s.shown_tick) / kFadeInMs);
                     }
-                    alpha = alpha * 225 / 255; // the bar is slightly see-through even at full strength
                     if (alpha < 0) alpha = 0;
                     if (alpha > 255) alpha = 255;
-                    if (alpha != s.alpha || !IsWindowVisible(s.hwnd)) {
-                        s.alpha = alpha;
-                        SetLayeredWindowAttributes(s.hwnd, RGB(1, 1, 1), static_cast<BYTE>(alpha), LWA_COLORKEY | LWA_ALPHA);
+                    s.alpha = alpha;
+                    if (!s.dc) render_toast_bitmap(s, slot_toast[order[i]], max_w);
+                    if (!s.dc) continue;
+                    POINT pos = {tx, static_cast<int>(s.y)};
+                    SIZE size = {s.width, kToastHeight};
+                    POINT src = {0, 0};
+                    BLENDFUNCTION bf = {AC_SRC_OVER, 0, static_cast<BYTE>(alpha), AC_SRC_ALPHA};
+                    UpdateLayeredWindow(s.hwnd, nullptr, &pos, &size, s.dc, &src, 0, &bf, ULW_ALPHA);
+                    if (!IsWindowVisible(s.hwnd)) {
+                        SetWindowPos(s.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                     }
-                    if (tw != s.width) {
-                        s.width = tw;
-                        InvalidateRect(s.hwnd, nullptr, FALSE);
-                    }
-                    SetWindowPos(s.hwnd, HWND_TOPMOST, tx, static_cast<int>(s.y), tw, kToastHeight, SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 }
             }
         }
@@ -2910,6 +2924,7 @@ static void background_tick_worker() {
     }
 
     for (ToastSlot& s : g_toast_slots) {
+        free_toast_bitmap(s);
         if (s.hwnd) {
             DestroyWindow(s.hwnd);
             s.hwnd = nullptr;
