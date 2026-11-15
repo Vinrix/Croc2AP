@@ -27,6 +27,16 @@ def _load_level_mapping() -> dict:
 LEVEL_MAPPING: dict = _load_level_mapping()
 
 
+def _load_crystal_ids() -> List[dict]:
+    """Per stage: what each White Crystal number 1..100 is (tools/crystal_ids.py)."""
+    raw = pkgutil.get_data(__package__ or "worlds.croc2", "data/crystal_ids.json")
+    return json.loads(raw.decode("utf-8"))["stages"] if raw else []
+
+
+CRYSTAL_IDS: List[dict] = _load_crystal_ids()
+CRYSTAL_KIND_BOX = 1
+
+
 def _build_full_location_table() -> List[dict]:
     base_locs = _load_locations_data()
     # Dynamically append the 2,000 individual White Crystal locations (1..100 across all 20 stages)
@@ -42,8 +52,19 @@ def _build_full_location_table() -> List[dict]:
             reqs = list(lvl.get("requires", []))
             for c_idx in range(1, 101):
                 loc_id = 7211000 + stage_idx * 100 + c_idx
-                # The first 25 White Crystals in any stage are reachable right from the entrance without abilities
-                c_reqs = [] if c_idx <= 25 else reqs
+                # "White Crystal N" is one specific crystal (docs/crystal_ids.md), not "the Nth collected".
+                # A smash box's crystals need Butt Stomp on top of the stage's own requirements. The first ten
+                # loose crystals of the stage's first map are taken to need nothing but a jump. That is an
+                # assumption from their place in the level file, not a played check.
+                info = CRYSTAL_IDS[stage_idx] if stage_idx < len(CRYSTAL_IDS) else None
+                if info is None:
+                    c_reqs = [] if c_idx <= 25 else reqs
+                elif c_idx in info["early"]:
+                    c_reqs = []
+                elif info["kinds"][c_idx - 1] == CRYSTAL_KIND_BOX:
+                    c_reqs = reqs + [r for r in ("Butt Stomp",) if r not in reqs]
+                else:
+                    c_reqs = reqs
                 base_locs.append({
                     "id": loc_id,
                     "name": f"{lvl['name']} - White Crystal {c_idx}",

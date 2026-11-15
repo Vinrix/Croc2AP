@@ -64,6 +64,14 @@
     "ability_enum": "LONG_JUMP"
   },
   {
+    "id": 7200162,
+    "name": "High Jump",
+    "classification": "progression",
+    "group": "Abilities",
+    "default_count": 1,
+    "ability_enum": "HIGH_JUMP"
+  },
+  {
     "id": 7200008,
     "name": "Pete's VIP Pass (Sailor Village)",
     "classification": "progression",
