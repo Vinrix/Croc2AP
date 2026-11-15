@@ -52,10 +52,6 @@ static bool readable_memory(const void* p, size_t size);
 static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
 static std::atomic<bool> g_jump_lock_active{false}; // Butt Stomp locked, in a randomizer save (set in Hooked_ReadInput)
-static std::atomic<bool> g_jump_hidden{false};      // jump lock decision, updated in Hooked_ReadInput from the raw buttons
-static std::atomic<bool> g_jump_raw_held{false};
-static constexpr DWORD JUMP_LOCK_FLIP_GRACE_MS = 150;   // see the jump lock in Hooked_ReadInput
-static constexpr DWORD JUMP_LOCK_GRACE_MIN_AIR_MS = 200; // shorter drops (steps, slopes) get no grace
 struct QueuedCrystal { void* strat; DWORD spawned; };
 static std::vector<QueuedCrystal> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
@@ -1236,6 +1232,8 @@ static void save_config_ini(const char* ini_path) {
         << "menu_hotkey_vk = 0x" << std::hex << g_state.menu_hotkey_vk << std::dec << "\n\n"
         << "; Fire Breakout Trap visual flame effect and knockback recoil in milliseconds (instant -1 heart damage)\n"
         << "fire_trap_knockback_ms = 2000\n\n"
+        << "; 1 = write croc2_ap_debug.log next to croc2.exe (testing)\n"
+        << "debug_watch = " << (g_state.debug_watch ? 1 : 0) << "\n\n"
         << "[ServerConnection]\n"
         << "; Default Archipelago Server connection details (editable in-game by pressing F9)\n"
         << "server_host = " << g_state.conn.server_host << "\n"
@@ -3738,53 +3736,13 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 buttons &= ~0x8000u; // Lock Square (Tail Whack) until unlocked in seed
             }
 
-            // Jump lock (Butt Stomp / High Jump): decided in Hooked_StratReadValue, at the moment Croc's script
-            // reads the controller. Here only whether it applies.
+            // Butt Stomp lock: applied in Hooked_StratReadValue, at the two places in Croc's script that start a
+            // stomp. The controller is not touched for it, so jumping is never affected.
             if (has_lead_boots) {
                 buttons &= ~0x4000u; // Heavy boots disable jumping
                 g_jump_lock_active.store(false);
             } else {
                 g_jump_lock_active.store(!g_state.abilities.butt_stomp);
-            }
-            // The decision. Recorded in-game: bit 1 of Croc's strat +0x100 is clear exactly while he is off the
-            // ground. Hidden: Jump while Croc is in the air after it was let go (a mid-air press), and a mid-air press
-            // still held after landing until it is released (Croc's landing code turns Jump held at touchdown into
-            // the stomp / high jump, e.g. X pressed just before a front flip lands). A jump held from the ground still
-            // reaches full height. Applied to both the controller input (the game's own movement code reads the held
-            // buttons directly) and the script's controller reads (Hooked_StratReadValue).
-            {
-                static bool s_held_from_ground = true, s_air_press = false;
-                const bool raw_held = (raw_buttons & 0x4000u) != 0;
-                uint8_t* jp = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
-                const bool on_ground_now = !jp || !readable_memory(jp + PLAYER_GROUND_FLAGS_OFF, 4) ||
-                                           (*reinterpret_cast<uint32_t*>(jp + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
-                bool hide = false;
-                // Front flips and falls: the ground bit comes back slightly before the flip finishes, and a press then
-                // still stomps. After time in the air that didn't start with Jump held, Croc counts as in the air for
-                // JUMP_LOCK_FLIP_GRACE_MS more (only after at least JUMP_LOCK_GRACE_MIN_AIR_MS in the air, so walking
-                // off a step doesn't delay the next jump).
-                static bool s_prev_on_ground = true, s_air_from_jump = false;
-                static DWORD s_grace_until = 0, s_left_ground = 0;
-                const DWORD jl_now = GetTickCount();
-                if (g_jump_lock_active.load()) {
-                    if (s_prev_on_ground && !on_ground_now) { s_air_from_jump = raw_held; s_left_ground = jl_now; }
-                    if (!s_prev_on_ground && on_ground_now && !s_air_from_jump && jl_now - s_left_ground >= JUMP_LOCK_GRACE_MIN_AIR_MS) {
-                        s_grace_until = jl_now + JUMP_LOCK_FLIP_GRACE_MS;
-                    }
-                    s_prev_on_ground = on_ground_now;
-                    const bool in_grace = static_cast<int32_t>(s_grace_until - jl_now) > 0;
-                    if (on_ground_now && !in_grace) s_held_from_ground = true;
-                    else if (!raw_held) s_held_from_ground = false;
-                    if ((!on_ground_now || in_grace) && !s_held_from_ground && raw_held) s_air_press = true;
-                    if (!raw_held) s_air_press = false;
-                    hide = ((!on_ground_now || in_grace) && !s_held_from_ground) || s_air_press;
-                } else {
-                    s_held_from_ground = true;
-                    s_air_press = false;
-                }
-                g_jump_raw_held.store(raw_held);
-                g_jump_hidden.store(hide);
-                if (hide) buttons &= ~0x4000u;
             }
 
             // Long Jump (front flip): L1 + R1 together. L1 or R1 alone stays usable.
@@ -3809,31 +3767,8 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 }
             }
 
-            // Live Inventory Wheel Cycling with L2 (0x0100) and R2 (0x0200) during normal gameplay
-            int32_t slot_count = *reinterpret_cast<int32_t*>(g_exe_base + RVA_INV_WHEEL_SLOT_COUNT);
-            if (slot_count >= 2) {
-                bool l2_pressed = (newly_pressed & 0x0100u) != 0;
-                bool r2_pressed = (newly_pressed & 0x0200u) != 0;
-                if (l2_pressed || r2_pressed) {
-                    int32_t sel_idx = *reinterpret_cast<int32_t*>(g_exe_base + RVA_INV_WHEEL_SEL_INDEX);
-                    if (l2_pressed) {
-                        sel_idx = (sel_idx - 1 + slot_count) % slot_count;
-                    } else {
-                        sel_idx = (sel_idx + 1) % slot_count;
-                    }
-                    *reinterpret_cast<int32_t*>(g_exe_base + RVA_INV_WHEEL_SEL_INDEX) = sel_idx;
-                    uintptr_t slot_addr = g_exe_base + RVA_INV_WHEEL_SLOTS_ARRAY + (sel_idx * 0x1C);
-                    int32_t new_item_id = *reinterpret_cast<int32_t*>(slot_addr);
-                    *reinterpret_cast<int32_t*>(g_exe_base + RVA_INV_WHEEL_CUR_ITEM_ID) = new_item_id;
-                    *reinterpret_cast<uint8_t*>(g_exe_base + 0x00BC4E0B) = 0;
-                    void* p_hud = *reinterpret_cast<void**>(g_exe_base + 0x00B90CF8);
-                    if (p_hud) {
-                        using FnHudPlaySfx = void(__fastcall*)(void*);
-                        auto fn_sfx = reinterpret_cast<FnHudPlaySfx>(g_exe_base + 0x0019C180);
-                        if (fn_sfx) fn_sfx(p_hud);
-                    }
-                }
-            }
+            // The game cycles the item wheel on L2/R2 itself. The mod used to do it too, which skipped an item
+            // on every press.
 
             if (has_reverse_controls) {
                 uint32_t dpad = buttons & 0x00F0u;
@@ -4513,43 +4448,45 @@ static void check_crystal_spawn_queue_locked() {
 static void __fastcall Hooked_CrystalSpawn180(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_180(strat); }
 static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected(strat); g_orig_crystal_spawn_329(strat); }
 
-// Strat opcode 4 (0x140068CA0): push game value N (0x140067EA0). Croc's script reads the controller through it
-// (values 42, 44 and 144, tested against Jump = 16384 in every on-foot state, including the stomp checks).
-// Jump lock, while Butt Stomp is locked: recorded in-game, bit 1 of Croc's strat +0x100 is clear exactly while he
-// is off the ground. Once Jump has been let go in the air (the game's own held buttons, 0xBC4B54), the Jump bit is
-// cleared from these reads for Croc's strat until he is back on the ground. The controller itself is never
-// masked, so the game's landing, auto-jump and jump-height code see the real input; a jump held from the ground
-// still reaches full height.
-// Hooked at the value reader itself (0x140067EA0: rcx = strat whose stack gets the value, rdx = strat read, r8d =
-// N), not just opcode 4: opcodes 9, 144, 193, 195, 199, 205, 219, 257 and 258 call it too, and the stomp out of a
-// front flip got through while every opcode-4 read was hidden.
+// Butt Stomp lock. Croc's script ("WalkingCroc", the same in all 52 level files that have it) is a state machine
+// on var 175; 24576 is the stomp (falling, landing, and the High Jump out of it). Exactly two places store 24576,
+// and each sits behind one test of "Jump newly pressed" (push value 44, & 16384):
+//   A. on foot, in the air after a jump:   4 44 10 16384 138 1 177 1 67 19 1 177 1 68 ...
+//   B. in the front flip (var 175 = 36864): 4 44 10 16384 138 130 <skip> 7 16 10 0 18 5 178 10 0 18 5 177 1 78 18
+// While Butt Stomp is locked, those two reads have the Jump bit cleared, so the script never takes the branch.
+// Nothing else is changed: no input masking and no guessing from the ground flag, which broke jumping after
+// doors, ropes and anything else where Croc doesn't "land".
+// Hooked at the value reader (0x140067EA0: rcx = strat whose stack gets the value, rdx = strat read, r8d = N),
+// which opcode 4 (0x140068CA0) calls.
 using FnStratReadValue = void(__fastcall*)(void*, void*, int32_t);
 static FnStratReadValue g_orig_strat_read_value = nullptr;
+static bool is_stomp_test(const int32_t* q) { // q = the word after "4 44"
+    static const int32_t a[] = {10, 16384, 138, 1, 177, 1, 67, 19, 1, 177, 1, 68};
+    static const int32_t b_head[] = {10, 16384, 138, 130};
+    static const int32_t b_tail[] = {7, 16, 10, 0, 18, 5, 178, 10, 0, 18, 5, 177, 1, 78, 18};
+    if (!readable_memory(q, 20 * sizeof(int32_t))) return false;
+    if (std::memcmp(q, a, sizeof(a)) == 0) return true;
+    return std::memcmp(q, b_head, sizeof(b_head)) == 0 && std::memcmp(q + 5, b_tail, sizeof(b_tail)) == 0;
+}
 static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t which) {
     g_orig_strat_read_value(strat, source, which);
-    // Any strat: the controller values are global, and Croc's moves are not all read by his own strat.
-    if ((which != 42 && which != 44 && which != 144) || !g_jump_lock_active.load(std::memory_order_relaxed)) return;
-    uint8_t* croc = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_PLAYER_PTR);
-    if (!croc) return;
+    if (which != 44 || !g_jump_lock_active.load(std::memory_order_relaxed)) return;
     uint8_t* sp = static_cast<uint8_t*>(strat);
-    static bool s_prev_ground = true, s_prev_hidden = false;
-    const bool on_ground = (*reinterpret_cast<uint32_t*>(croc + PLAYER_GROUND_FLAGS_OFF) & PLAYER_ON_GROUND_BIT) != 0;
-    const bool held = g_jump_raw_held.load(std::memory_order_relaxed);
-    const bool hide = g_jump_hidden.load(std::memory_order_relaxed);
-    int32_t* top = nullptr;
-    if (*reinterpret_cast<int32_t*>(sp + 0x138) > 0) top = reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4);
-    if (g_state.debug_watch && which != 144 &&
-        (on_ground != s_prev_ground || hide != s_prev_hidden || (hide && top && (*top & 0x4000)))) {
-        char b[128];
-        const char* nm = *reinterpret_cast<const char**>(sp + 0x30);
-        std::snprintf(b, sizeof(b), "JUMPLOCK %s read %d=0x%X ground=%d held=%d hide=%d", strat == croc ? "croc" : (nm ? nm : "?"),
-                      which, top ? *top : -1, on_ground, held, hide);
+    if (*reinterpret_cast<int32_t*>(sp + 0x138) <= 0) return;
+    int32_t* top = reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4);
+    if (!(*top & 0x4000)) return;
+    // The script position is on, or just past, the "44" argument when the reader runs.
+    const int32_t* pc = *reinterpret_cast<const int32_t**>(sp);
+    if (!pc || !readable_memory(pc - 2, 3 * sizeof(int32_t))) return;
+    const int32_t* q = nullptr;
+    if (pc[-1] == 4 && pc[0] == 44) q = pc + 1;
+    else if (pc[-2] == 4 && pc[-1] == 44) q = pc;
+    if (!q || !is_stomp_test(q)) return;
+    *top &= ~0x4000;
+    if (g_state.debug_watch) {
         std::lock_guard<std::mutex> lock(g_mutex);
-        debug_log_locked(b);
+        debug_log_locked("STOMP blocked (Butt Stomp locked)");
     }
-    s_prev_ground = on_ground;
-    s_prev_hidden = hide;
-    if (hide && top) *top &= ~0x4000;
 }
 
 // Strat opcode 173 (0x140066030): GainCrystal. Pops a value; value >> 12 of 1..5 is a coloured crystal of that
@@ -4753,6 +4690,35 @@ static LONG CALLBACK DebugCrashReporter(EXCEPTION_POINTERS* ep) {
         void* handler_data = nullptr;
         DWORD64 establisher = 0;
         RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Rip, fn, &ctx, &handler_data, &establisher, nullptr);
+    }
+    // The live strat chain (head at RVA_STRAT_LIST_HEAD, next at +8). The exit-after-smashing-a-box crash is the
+    // interpreter following a bad link, so list the chain up to the first node that can't be read.
+    {
+        uint8_t* st = *reinterpret_cast<uint8_t**>(g_exe_base + RVA_STRAT_LIST_HEAD);
+        std::snprintf(buf, sizeof(buf), "CRASH strat list: head=%p free=%p live=%d", static_cast<void*>(st),
+                      *reinterpret_cast<void**>(g_exe_base + 0x00BC7D28), *reinterpret_cast<int32_t*>(g_exe_base + 0x00BC7D38));
+        debug_log_locked(buf);
+        struct Node { uint8_t* p; char name[40]; uint32_t flags; };
+        Node ring[16];
+        int n = 0;
+        uint8_t* bad = nullptr;
+        for (; st && n < 2000; ++n) {
+            if (!readable_memory(st, 0x140)) { bad = st; break; }
+            Node& r = ring[n & 15];
+            r.p = st;
+            r.flags = *reinterpret_cast<uint32_t*>(st + 0xFC);
+            const char* nm = *reinterpret_cast<const char**>(st + 0x30);
+            std::snprintf(r.name, sizeof(r.name), "%.39s", (nm && readable_memory(nm, 1)) ? nm : "?");
+            st = *reinterpret_cast<uint8_t**>(st + 8);
+        }
+        std::snprintf(buf, sizeof(buf), "CRASH strat list: %d readable nodes, then %p%s", n, static_cast<void*>(bad),
+                      bad ? " (unreadable)" : " (end)");
+        debug_log_locked(buf);
+        for (int k = std::max(0, n - 16); k < n; ++k) {
+            const Node& r = ring[k & 15];
+            std::snprintf(buf, sizeof(buf), "CRASH   node %d %p flags=%X name=%s", k, static_cast<void*>(r.p), r.flags, r.name);
+            debug_log_locked(buf);
+        }
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }

@@ -259,6 +259,22 @@ namespace Croc2Launcher
                 }
                 if (string.IsNullOrEmpty(iniPath)) return;
 
+                // Keep a debug_watch line the user added by hand: this file is rewritten from scratch below, and
+                // losing it meant no debug log was written for the sessions that needed one.
+                bool debugWatch = false;
+                try
+                {
+                    if (File.Exists(iniPath))
+                    {
+                        foreach (string line in File.ReadAllLines(iniPath))
+                        {
+                            string t = line.Trim().ToLowerInvariant().Replace(" ", "");
+                            if (t == "debug_watch=1" || t == "debug_watch=true") debugWatch = true;
+                        }
+                    }
+                }
+                catch { }
+
                 var sb = new StringBuilder();
                 sb.AppendLine("[ArchipelagoMod]");
                 sb.AppendLine("enabled = true");
@@ -266,6 +282,7 @@ namespace Croc2Launcher
                 sb.AppendLine("toggle_hotkey_vk = 0x79");
                 sb.AppendLine("menu_hotkey_vk = 0x78");
                 sb.AppendLine("fire_trap_tick_ms = 1500");
+                sb.AppendLine("debug_watch = " + (debugWatch ? "1" : "0"));
                 sb.AppendLine();
                 sb.AppendLine("[ServerConnection]");
                 sb.AppendLine("server_host = " + (_txtHost.Text.Trim()));
