@@ -77,6 +77,10 @@ constexpr uintptr_t RVA_STRAT_VM_HEART_POT_SLOT    = 0x007F9978; // Opcode 171: 
 constexpr uintptr_t RVA_STRAT_VM_INV_ITEM_SLOT     = 0x007F9980; // Opcode 172 <type>: give an inventory item (types below)
 constexpr uintptr_t RVA_STRAT_VM_JIGSAW_SLOT       = 0x007F9BE0; // Opcode 248: jigsaw piece (run only by JigsawPiece)
 constexpr uintptr_t RVA_STRAT_VM_GOLDEN_GOBBO_SLOT = 0x007F9BE8; // Opcode 249: Golden Gobbo (run only by Golden Gobbo / Special Golden Gobbo)
+constexpr uintptr_t RVA_STRAT_VM_EVENT_SLOT        = 0x007F9698; // Opcode 79 <descriptor> <slot>: register an event handler
+constexpr uintptr_t RVA_FN_OP_REGISTER_EVENT       = 0x00066CD0;
+constexpr uintptr_t RVA_STRAT_VM_PICKABLE_SLOT     = 0x007F99F8; // Opcode 187 <0|1>: clear / set "Croc can pick this up" (strat +0x100 bit 0x200)
+constexpr uintptr_t RVA_FN_OP_SET_PICKABLE         = 0x000636A0;
 constexpr uintptr_t RVA_STRAT_VM_OP250_SLOT        = 0x007F9BF0; // Opcode 250: no script runs it
 constexpr uintptr_t RVA_STRAT_VM_REWARD_100_SLOT   = 0x007F9C90; // Opcode 270: 100 crystals to the wallet (hub reward characters)
 
@@ -243,6 +247,7 @@ struct PlayerAbilities {
     bool vehicle_license = false;
     bool airplane_ammo_feed = false;
     bool long_jump = false;
+    bool high_jump = false; // the jump out of a stomp (the "triple jump")
 };
 
 struct ServerConnectionConfig {
