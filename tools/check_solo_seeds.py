@@ -80,9 +80,10 @@ def main():
             revisit_seeds += revisit
             late_revisits += late
             chains += chain
-            if r['stranded_items']:
+            if r['stranded_items'] or r.get('lost_items'):
                 bad += 1
-                print('seed %d: %d needed items out of reach' % (seed, r['stranded_items']))
+                print('seed %d: %d needed items out of reach, %d items on checks that cannot be collected' % (
+                    seed, r['stranded_items'], r.get('lost_items', 0)))
             if verbose:
                 print('seed %d  door 1 -> stage %d  reachable %d  stranded %d' % (seed, r['door1_stage'], r['reachable'], r['stranded_items']))
                 for k, sp in enumerate(spheres):
@@ -101,7 +102,7 @@ def main():
             os.remove(ini)
         except OSError:
             pass
-    print('%d of %d seeds left a needed item out of reach' % (bad, count))
+    print('%d of %d seeds left a needed item out of reach or lost one on a dead check' % (bad, count))
     sys.exit(1 if bad else 0)
 
 

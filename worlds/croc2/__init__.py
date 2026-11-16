@@ -121,6 +121,18 @@ class Croc2World(World):
                     key_name = f"{lvl['name']} Key"
                     pool.append(self.create_item(key_name))
 
+        # 3b. Jellies and Clockwork Gobbos gate checks (docs/logic.md): markers above jelly points, and every
+        #     Clockwork Gobbo section. They are progression, and are always in the pool. Once one of a kind has
+        #     been received the mod keeps the backpack topped up, so one is enough; the extras are spares.
+        for consumable, copies in (
+            ("Jelly Jump (Blue Jelly)", 3),
+            ("High Jelly Jump (Green Jelly)", 3),
+            ("Gummi Jump (Red Jelly)", 2),
+            ("Clockwork Gobbo", 4),
+        ):
+            for _ in range(copies):
+                pool.append(self.create_item(consumable))
+
         # 4. Jigsaw Pieces (4 total: 1 per Village Hub), Trophies (16), and Golden Gobbos (20)
         for _ in range(4):
             pool.append(self.create_item("Jigsaw Piece"))

@@ -1691,34 +1691,38 @@
   {
     "id": 7200142,
     "name": "Clockwork Gobbo",
-    "classification": "useful",
+    "classification": "progression",
     "group": "Pete Shop Items",
     "default_count": 6,
-    "inventory_enum": "CLOCKWORK_GOBBOS"
+    "inventory_enum": "CLOCKWORK_GOBBOS",
+    "note": "Gates checks (docs/logic.md), so it must be progression: Archipelago only counts progression items when it tests a rule."
   },
   {
     "id": 7200143,
     "name": "Gummi Jump (Red Jelly)",
-    "classification": "useful",
+    "classification": "progression",
     "group": "Pete Shop Items",
     "default_count": 6,
-    "inventory_enum": "RED_JELLIES"
+    "inventory_enum": "RED_JELLIES",
+    "note": "Gates checks (docs/logic.md), so it must be progression: Archipelago only counts progression items when it tests a rule."
   },
   {
     "id": 7200144,
     "name": "Jelly Jump (Blue Jelly)",
-    "classification": "useful",
+    "classification": "progression",
     "group": "Pete Shop Items",
     "default_count": 4,
-    "inventory_enum": "BLUE_JELLIES"
+    "inventory_enum": "BLUE_JELLIES",
+    "note": "Gates checks (docs/logic.md), so it must be progression: Archipelago only counts progression items when it tests a rule."
   },
   {
     "id": 7200145,
     "name": "High Jelly Jump (Green Jelly)",
-    "classification": "useful",
+    "classification": "progression",
     "group": "Pete Shop Items",
     "default_count": 4,
-    "inventory_enum": "GREEN_JELLIES"
+    "inventory_enum": "GREEN_JELLIES",
+    "note": "Gates checks (docs/logic.md), so it must be progression: Archipelago only counts progression items when it tests a rule."
   },
   {
     "id": 7200146,

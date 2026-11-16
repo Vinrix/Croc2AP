@@ -131,16 +131,20 @@ def create_croc2_regions(
 
 # Must match is_vehicle_stage_wad() in src/hook/croc2_ap_hook.cpp. The hook refuses entry to these
 # without a Vehicle License, so none of them may sit behind Sailor Village Door 1 (open from the start).
-VEHICLE_STAGE_WADS = {"T1L3M001", "T1L5M001", "T2L3M001", "T2L6M001", "T3L4M001", "T3L5M001", "T4L3M001"}
+# The stages played entirely in a vehicle: the boat race, the hang glider and the kart race. (Four on-foot stages
+# used to be listed here too; the mod has the same list in is_vehicle_stage_wad.)
+VEHICLE_STAGE_WADS = {"T1L5M001", "T2L6M001", "T3L4M001"}
+
+# The Sailor stages with plenty to collect on a plain jump (docs/logic.md): the only ones that may sit behind
+# Door 1, which is open from the start. The others need Climbing Claws, Mine Cart or Vehicle License at once.
+START_STAGE_WADS = {"T1L2M001", "T1L6M001"}
 
 
 def _fix_first_door(world_random, targets: list, vanilla_wad: str) -> None:
-    """Swap a non-vanilla, non-vehicle stage into slot 0 if slot 0 is vanilla or a vehicle stage."""
-    first = targets[0]["wad"]
-    if first != vanilla_wad and first not in VEHICLE_STAGE_WADS:
+    """Make slot 0 (Door 1) one of START_STAGE_WADS, swapping one in if it is not."""
+    if targets[0]["wad"] in START_STAGE_WADS:
         return
-    ok = [i for i in range(1, len(targets))
-          if targets[i]["wad"] != vanilla_wad and targets[i]["wad"] not in VEHICLE_STAGE_WADS]
+    ok = [i for i in range(1, len(targets)) if targets[i]["wad"] in START_STAGE_WADS]
     if ok:
         j = world_random.choice(ok)
         targets[0], targets[j] = targets[j], targets[0]

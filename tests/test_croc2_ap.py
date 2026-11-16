@@ -104,6 +104,9 @@ def _install_ap_shims_if_needed() -> None:
             self.prog_items = {}
 
         def collect(self, item: Item):
+            # Like Archipelago's own CollectionState: only progression items count towards rules.
+            if not item.advancement:
+                return
             p_items = self.prog_items.setdefault(item.player, {})
             p_items[item.name] = p_items.get(item.name, 0) + 1
 
@@ -412,12 +415,9 @@ class TestCroc2Archipelago(unittest.TestCase):
         # + 2000 White Crystal checks (100 per stage * 20 stages) = 2172
         self.assertEqual(len(unfilled), 2172)
 
-        # Verify that Sailor Village Door 1 (T1_D1) is shuffled (not vanilla T1L2M001) when door_shuffle is enabled
-        self.assertNotEqual(
-            world.slot_door_map["T1_D1"],
-            "T1L2M001",
-            "Sailor Village Door 1 must be shuffled to a non-vanilla level when door_shuffle is enabled",
-        )
+        # Door 1 is open from the start, so it must lead to a stage with checks reachable on a plain jump:
+        # Find the Key! Save the Gobbo! or Save the Bird from the Thief (docs/logic.md).
+        self.assertIn(world.slot_door_map["T1_D1"], ("T1L2M001", "T1L6M001"))
 
         # Verify authentic in-game level naming for items and locations
         self.assertIn("Find the Key! Save the Gobbo! - Blue Crystal", ITEM_NAME_TO_DATA)
@@ -646,6 +646,7 @@ class TestCroc2Archipelago(unittest.TestCase):
                 logic = await bridge.send_command({"command": "debug_solo_logic"})
                 self.assertEqual(logic["status"], "ok")
                 self.assertEqual(logic["stranded_items"], 0, "Every needed item must be reachable in logic")
+                self.assertEqual(logic["lost_items"], 0, "Nothing but filler may sit on a check that cannot be collected")
                 self.assertGreater(len(logic["spheres"]), 2, "Needed items must be spread over several spheres")
                 self.assertGreater(logic["spheres"][0]["checks"], 20, "The first stage must have checks reachable with a plain jump")
 
@@ -1221,7 +1222,7 @@ class TestCroc2Archipelago(unittest.TestCase):
             for seed in range(300):
                 _, door_map = compute_door_pairing(random.Random(seed), opts)
                 self.assertNotIn(door_map["T1_D1"], VEHICLE_STAGE_WADS, "mode %d seed %d" % (mode, seed))
-                self.assertNotEqual(door_map["T1_D1"], "T1L2M001", "mode %d seed %d" % (mode, seed))
+                self.assertIn(door_map["T1_D1"], ("T1L2M001", "T1L6M001"), "mode %d seed %d" % (mode, seed))
                 self.assertEqual(len(set(door_map.values())), 20, "door shuffle must stay a permutation")
 
 

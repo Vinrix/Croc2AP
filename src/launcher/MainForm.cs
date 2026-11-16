@@ -1043,21 +1043,8 @@ namespace Croc2Launcher
 
                 // The same line goes to croc2ap_activity.log beside croc2_mod.ini, so a play session can be
                 // checked afterwards or attached to a report without copying from this window.
-                try
-                {
-                    string iniPath = _paths != null ? _paths.IniPath : null;
-                    if (!string.IsNullOrEmpty(iniPath))
-                    {
-                        string who = (sender == receiver || (sender == "Croc" && receiver == "Croc"))
-                            ? sender + " got his own " + itemName
-                            : (isOutgoing ? "[OUT] " : "[IN] ") + sender + " sent " + itemName + " to " + receiver;
-                        string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + who +
-                                      (string.IsNullOrEmpty(location) ? "" : "  @ " + location) + Environment.NewLine;
-                        System.IO.File.AppendAllText(
-                            System.IO.Path.Combine(System.IO.Path.GetDirectoryName(iniPath), "croc2ap_activity.log"), line);
-                    }
-                }
-                catch { }
+                ActivityLog.Append(_paths != null ? _paths.IniPath : null,
+                                   ActivityLog.Format(isOutgoing, itemName, sender, receiver, location));
             });
         }
 

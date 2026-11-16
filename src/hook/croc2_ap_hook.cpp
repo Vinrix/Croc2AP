@@ -385,7 +385,21 @@ static bool solo_location_reachable(int loc, uint64_t have) {
 // ability, key, jelly or Clockwork Gobbo is within reach, swaps one in from where it was stranded. Each swap goes
 // to a random check that is reachable at that moment, so items end up spread through the game in the order they
 // are needed, not piled up by the first door. Revisits are implicit: a late item can open leftovers anywhere.
+// Croc Crystals, Extra Lives and traps: the only items that may sit on a check nobody can ever collect.
+static bool solo_item_is_filler(int id) {
+    return id == 0 || (id >= 7200147 && id <= 7200160);
+}
+// A check that cannot be collected in this mode: the 20th door's (no real stage), and the crystal-count milestones
+// (sub 0..2), which only exist when white crystals are not checks.
+static bool solo_location_is_dead(int loc) {
+    if (loc >= SOLO_CHECK_POOL_SIZE) return (loc - SOLO_CHECK_POOL_SIZE) / 100 >= kLogicStages;
+    return loc / 9 >= kLogicStages || loc % 9 < 3;
+}
 static void solo_logic_repair_locked(std::mt19937_64& rng) {
+    // The numbered-crystal logic only exists for "every white crystal is a check". In the other modes most white
+    // crystal slots are never collected, so mixing them with the 180 main checks would throw items away: leave
+    // those modes' layout exactly as it was.
+    if (g_state.shuffle_white_crystals != 3) return;
     // First undo the old "safe" placement, which put every ability on a handful of checks in the first stage:
     // shuffle every item over every check. What has to be early is then decided by the walk below alone.
     {
@@ -393,6 +407,21 @@ static void solo_logic_repair_locked(std::mt19937_64& rng) {
         for (int loc = 0; loc < kSoloLocations; ++loc) all[loc] = solo_item_at(loc);
         std::shuffle(all.begin(), all.end(), rng);
         for (int loc = 0; loc < kSoloLocations; ++loc) solo_item_at(loc) = all[loc];
+    }
+    // Anything that matters (not just what the walk below tracks: also jigsaw pieces, coloured crystals, trophies,
+    // heart pots, VIP passes) is moved off dead checks, swapping with filler on live ones.
+    {
+        std::vector<int> live_filler;
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            if (!solo_location_is_dead(loc) && solo_item_is_filler(solo_item_at(loc))) live_filler.push_back(loc);
+        }
+        std::shuffle(live_filler.begin(), live_filler.end(), rng);
+        for (int loc = 0; loc < kSoloLocations && !live_filler.empty(); ++loc) {
+            if (solo_location_is_dead(loc) && !solo_item_is_filler(solo_item_at(loc))) {
+                std::swap(solo_item_at(loc), solo_item_at(live_filler.back()));
+                live_filler.pop_back();
+            }
+        }
     }
     uint64_t have = 0;
     int swaps = 0;
@@ -412,7 +441,9 @@ static void solo_logic_repair_locked(std::mt19937_64& rng) {
             const bool r = solo_location_reachable(loc, have);
             if (r) ++reach_now;
             if (bit && !(have & bit)) { if (!r) stranded.push_back(loc); }
-            else if (r && bit == 0) open.push_back(loc); // only a check holding nothing needed may give its place up
+            // Only a check holding filler may give its place up: what it holds goes to wherever the stranded item
+            // was, which may be a check that can never be collected.
+            else if (r && solo_item_is_filler(solo_item_at(loc))) open.push_back(loc);
         }
         if (stranded.empty() || open.empty()) break;
         std::shuffle(stranded.begin(), stranded.end(), rng);
@@ -1926,7 +1957,12 @@ static std::string handle_command_locked(const std::string& req) {
             const uint64_t bit = logic_item_bit(solo_item_at(loc));
             if (bit && !(have & bit)) ++stranded;
         }
-        ss << "],\"reachable\":" << total << ",\"stranded_items\":" << stranded << "}";
+        // Items that matter sitting on checks that can never be collected (there should be none).
+        int lost = 0;
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            if (solo_location_is_dead(loc) && !solo_item_is_filler(solo_item_at(loc))) ++lost;
+        }
+        ss << "],\"reachable\":" << total << ",\"stranded_items\":" << stranded << ",\"lost_items\":" << lost << "}";
         return ss.str();
     }
 
@@ -4812,8 +4848,18 @@ static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t 
     if (which == 32 && g_cart_lock_active.load(std::memory_order_relaxed)) {
         uint8_t* cs = static_cast<uint8_t*>(strat);
         const char* nm = *reinterpret_cast<const char* const*>(cs + 0x30);
-        if (nm && readable_memory(nm, 20) && (!std::strcmp(nm, "MineCartFlat") || !std::strcmp(nm, "BoneMineCartFlat")) &&
-            *reinterpret_cast<int32_t*>(cs + 0x138) > 0) {
+        // Many platforms read value 32 every frame. Names are strings in the level data, shared by every object
+        // of a kind, so the answer for a name pointer is remembered until the next map load.
+        static const char* s_seen = nullptr;
+        static bool s_seen_is_cart = false;
+        static DWORD s_seen_load = 0;
+        if (nm != s_seen || s_seen_load != g_last_map_load_tick) {
+            s_seen = nm;
+            s_seen_load = g_last_map_load_tick;
+            s_seen_is_cart = nm && readable_memory(nm, 20) &&
+                             (!std::strcmp(nm, "MineCartFlat") || !std::strcmp(nm, "BoneMineCartFlat"));
+        }
+        if (s_seen_is_cart && *reinterpret_cast<int32_t*>(cs + 0x138) > 0) {
             *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(cs + 0x130) - 4) = 0;
         }
     }
@@ -4988,9 +5034,13 @@ static const CrystalSource* find_crystal_source_locked(const uint8_t* sp, int st
             if (d < box_d) { box_d = d; box = &s; }
         }
     }
-    if (loose) return loose;
     const int64_t reach = 16384; // box and ring crystals scatter a few thousand units from their source
-    return (box && box_d <= reach * reach) ? box : nullptr;
+    const bool box_near = box && box_d <= reach * reach;
+    // A box crystal can come to rest on a loose crystal's spot. If that loose crystal is already collected and a
+    // box in range still has numbers left, this pickup is the box's.
+    if (loose && !loose_free && box_near && unclaimed_in_source_locked(*box) > 0) return box;
+    if (loose) return loose;
+    return box_near ? box : nullptr;
 }
 // Send the checks for `amount` crystals from `src` (nullptr = the stage's awarded crystals).
 static void claim_crystal_numbers_locked(int stage, const CrystalSource* src, int amount) {

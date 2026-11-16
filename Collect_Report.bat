@@ -4,7 +4,7 @@ setlocal
 ::   croc2_ap_debug.log      what the mod saw (written by test builds, or when debug_watch = 1)
 ::   croc2ap_activity.log    the launcher's list of everything sent and received
 ::   croc2ap_crystals_*.txt  which crystals each save has collected
-::   croc2_mod.ini           your settings
+::   croc2_mod.ini           your settings (the server password line is left out)
 :: Run it straight after a crash or a problem, before starting the game again.
 
 set "GAME_DIR=C:\Program Files (x86)\Steam\steamapps\common\Croc 2"
@@ -23,16 +23,26 @@ if not exist "%GAME_DIR%\croc2.exe" (
     exit /b 1
 )
 
-for /f "tokens=1-6 delims=/:. " %%a in ("%date% %time%") do set "STAMP=%%a%%b%%c_%%d%%e%%f"
-set "OUT=%USERPROFILE%\Desktop\Croc2AP_report_%STAMP%"
+:: A timestamp that reads the same whatever the PC's date format is.
+set "STAMP=report"
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "STAMP=%%i"
+:: The real Desktop folder: it is somewhere else when OneDrive backs the Desktop up.
+set "DESKTOP=%USERPROFILE%\Desktop"
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESKTOP=%%i"
+set "OUT=%DESKTOP%\Croc2AP_report_%STAMP%"
 mkdir "%OUT%" 2>nul
 
 set COUNT=0
-for %%F in ("%GAME_DIR%\croc2_ap_debug.log" "%GAME_DIR%\croc2ap_activity.log" "%GAME_DIR%\croc2_mod.ini") do (
+for %%F in ("%GAME_DIR%\croc2_ap_debug.log" "%GAME_DIR%\croc2ap_activity.log") do (
     if exist "%%~F" (
         copy /Y "%%~F" "%OUT%\" >nul
         set /a COUNT+=1
     )
+)
+:: The settings file, without the server password line: this folder is meant to be shared.
+if exist "%GAME_DIR%\croc2_mod.ini" (
+    findstr /V /I /B /C:"password" "%GAME_DIR%\croc2_mod.ini" > "%OUT%\croc2_mod.ini"
+    set /a COUNT+=1
 )
 for %%F in ("%GAME_DIR%\croc2ap_crystals_*.txt") do (
     copy /Y "%%~F" "%OUT%\" >nul
