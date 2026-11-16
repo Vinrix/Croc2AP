@@ -4204,9 +4204,23 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                         if (cv && readable_memory(cv + 175, 4)) script_climbing = cv[175] == 49152 || cv[175] == 53248;
                     }
                 }
-                if (wall_climbing != 0 || bar_climbing != 0 || script_climbing) {
-                    *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
-                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00BD1B60) = 0;
+                // Only Croc's own script state decides that he is climbing. The two native values used to trigger
+                // this as well, and were cleared here; but one of them is set in Sailor Village while Croc is just
+                // standing talking to the first Gobbo (state 4096, on foot), which showed "Climbing Claws
+                // Required!" there. What they really hold is not known, so they are no longer acted on or
+                // written; a change is logged so it can be worked out.
+                if (g_state.debug_watch && !script_climbing) {
+                    static int32_t s_prev_wall = 0, s_prev_bar = 0;
+                    if (wall_climbing != s_prev_wall || bar_climbing != s_prev_bar) {
+                        char nb[128];
+                        std::snprintf(nb, sizeof(nb), "CLIMB native values while not climbing: BD19A0 %d -> %d, BD1B60 %d -> %d",
+                                      s_prev_wall, wall_climbing, s_prev_bar, bar_climbing);
+                        debug_log_locked(nb);
+                        s_prev_wall = wall_climbing;
+                        s_prev_bar = bar_climbing;
+                    }
+                }
+                if (script_climbing) {
                     // g_mutex is already held here (this whole block runs under the lock taken at the top of
                     // Hooked_ReadInput). Locking it again threw std::system_error ("resource deadlock would
                     // occur") and crashed the game whenever Croc touched a climbable surface without claws.
