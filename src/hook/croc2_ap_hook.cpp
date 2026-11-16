@@ -5603,6 +5603,11 @@ __declspec(dllexport) void __cdecl Croc2AP_Initialize(const char* ini_path) {
         std::lock_guard<std::mutex> lock(croc2_ap::g_mutex);
         croc2_ap::g_state = croc2_ap::ModState{};
         croc2_ap::load_config_ini(ini_path);
+#ifdef CROC2AP_TEST_BUILD
+        // Pull-request test builds always write croc2_ap_debug.log, whatever the ini says, so a tester never has
+        // to edit a file before sending a report. Release builds follow debug_watch in croc2_mod.ini.
+        croc2_ap::g_state.debug_watch = true;
+#endif
         croc2_ap::init_default_door_shuffle_locked();
         croc2_ap::load_yaml_player_names();
         croc2_ap::check_cmdline_flags();

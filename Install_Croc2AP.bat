@@ -81,6 +81,11 @@ if exist "%~dp0INSTALL_INSTRUCTIONS.txt" (
     copy /Y "%~dp0INSTALL_INSTRUCTIONS.txt" "%GAME_DIR%\INSTALL_INSTRUCTIONS.txt" >nul
 )
 
+:: Copy the report collector and, in test builds, the testing notes and logic lists
+for %%F in (Collect_Report.bat HOW_TO_TEST.txt logic.md crystal_ids.md) do (
+    if exist "%~dp0%%F" copy /Y "%~dp0%%F" "%GAME_DIR%\%%F" >nul
+)
+
 :: Copy Icon
 if exist "%~dp0icon.ico" (
     copy /Y "%~dp0icon.ico" "%GAME_DIR%\icon.ico" >nul

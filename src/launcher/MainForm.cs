@@ -1010,7 +1010,7 @@ namespace Croc2Launcher
                     _rtbLog.SelectionColor = GetImportanceColor(importance);
                     _rtbLog.AppendText(itemName);
                     _rtbLog.SelectionColor = Color.FromArgb(220, 220, 220);
-                    _rtbLog.AppendText("!\n");
+                    _rtbLog.AppendText("!");
                 }
                 else
                 {
@@ -1028,9 +1028,36 @@ namespace Croc2Launcher
                     _rtbLog.SelectionColor = Color.FromArgb(255, 215, 0); // Gold
                     _rtbLog.AppendText(receiver);
                     _rtbLog.SelectionColor = Color.FromArgb(220, 220, 220);
-                    _rtbLog.AppendText("!\n");
+                    _rtbLog.AppendText("!");
                 }
+                // Where it came from: the check's name (for a crystal, its stage and number).
+                if (!string.IsNullOrEmpty(location))
+                {
+                    _rtbLog.SelectionColor = Color.FromArgb(150, 150, 150);
+                    _rtbLog.AppendText("  @ ");
+                    _rtbLog.SelectionColor = Color.FromArgb(85, 240, 140);
+                    _rtbLog.AppendText(location);
+                }
+                _rtbLog.AppendText("\n");
                 _rtbLog.ScrollToCaret();
+
+                // The same line goes to croc2ap_activity.log beside croc2_mod.ini, so a play session can be
+                // checked afterwards or attached to a report without copying from this window.
+                try
+                {
+                    string iniPath = _paths != null ? _paths.IniPath : null;
+                    if (!string.IsNullOrEmpty(iniPath))
+                    {
+                        string who = (sender == receiver || (sender == "Croc" && receiver == "Croc"))
+                            ? sender + " got his own " + itemName
+                            : (isOutgoing ? "[OUT] " : "[IN] ") + sender + " sent " + itemName + " to " + receiver;
+                        string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + who +
+                                      (string.IsNullOrEmpty(location) ? "" : "  @ " + location) + Environment.NewLine;
+                        System.IO.File.AppendAllText(
+                            System.IO.Path.Combine(System.IO.Path.GetDirectoryName(iniPath), "croc2ap_activity.log"), line);
+                    }
+                }
+                catch { }
             });
         }
 

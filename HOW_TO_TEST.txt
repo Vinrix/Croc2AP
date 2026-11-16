@@ -1,0 +1,31 @@
+CROC 2 ARCHIPELAGO - TEST BUILD
+===============================
+
+This is a test build from a pull request. It is set up so you don't have to edit any files.
+
+INSTALL
+  1. Close Croc 2 and the launcher.
+  2. Run Install_Croc2AP.bat (or Croc2AP_Setup.exe). It keeps your existing croc2_mod.ini.
+  3. Start the launcher from your Croc 2 folder and start a NEW game in an EMPTY save slot.
+     Saves made with an older build use old rules and old crystal numbers.
+
+WHAT IS DIFFERENT IN A TEST BUILD
+  - The debug log is always on. You do not need debug_watch = 1 in croc2_mod.ini.
+  - The launcher's activity list shows where each item came from, and is also saved to
+    croc2ap_activity.log in your Croc 2 folder.
+
+IF SOMETHING GOES WRONG
+  1. Do NOT start the game again yet.
+  2. Run Collect_Report.bat. It puts the logs in a folder on your Desktop and opens it.
+  3. Drag those files into the GitHub issue or pull request, with a line about what you were doing.
+
+CHECKING THE LOGIC
+  logic.md        what every check needs, stage by stage
+  crystal_ids.md  which crystal each "White Crystal N" is, and where it sits
+  Lines in croc2_ap_debug.log that start with "CRYSTALS pickup" name the numbers you collected.
+
+If a crystal listed as needing "nothing" turned out to need an ability, that is the most useful thing you
+can report: tell us the stage, the number, and what you needed.
+
+GOING BACK
+  Run Uninstall_Croc2AP.bat, or Toggle_Vanilla_Mode.bat to play without the mod.
