@@ -1,0 +1,532 @@
+{
+ "_about": "Per-stage logic. Atoms: TW Tail Whack, BS Butt Stomp, HJ High Jump (needs BS too), LJ Long Jump, CC Climbing Claws, PG Power Gloves, LW Lever Wrench, VL Vehicle License, JB orange/blue jelly, JG lime/green jelly, JP strawberry/purple jelly, CG Clockwork Gobbo, GG the stage's Golden Gobbo area (all five of its coloured crystals), TH carry and throw an object (Power Gloves). '&' and, '|' or, '' nothing. A crystal number's rule = default & (box rule if it is a box crystal) & every matching entry in rules. Sources: StrategyWiki walkthrough and the GameFAQs guide by Robshi, matched to crystal clusters by landmarks (tools/crystal_clusters.py).",
+ "T1L2": {
+  "name": "Find the Key! Save the Gobbo!",
+  "default": "",
+  "box": "BS",
+  "rules": [
+   [
+    "81-89,100",
+    "CG",
+    "Clockwork Gobbo section (both guides)"
+   ]
+  ],
+  "colours": {
+   "red": "",
+   "green": "",
+   "purple": "",
+   "blue": "",
+   "yellow": "JB"
+  },
+  "golden": "",
+  "clear": "",
+  "notes": "Open level: pits are jumped, the third uses a rope, hippos lift Croc. Yellow needs the orange jelly marker (both guides)."
+ },
+ "T1L3": {
+  "name": "Find 5 Lost Treasure Chests",
+  "default": "",
+  "box": "BS",
+  "award": "",
+  "rules": [
+   [
+    "39-47",
+    "CG",
+    "Clockwork Gobbo section (both guides)"
+   ]
+  ],
+  "colours": {
+   "red": "HJ",
+   "green": "",
+   "purple": "",
+   "blue": "",
+   "yellow": "JB"
+  },
+  "golden": "",
+  "clear": "",
+  "notes": "Mine carts and bomb boxes need no ability. Red needs a triple jump and yellow the orange jelly (both guides). Numbers 51-100 are the five chests, 10 each."
+ },
+ "T1L4": {
+  "name": "Get the Gobbo's Sandwich!",
+  "default": "CC",
+  "box": "BS",
+  "rules": [
+   [
+    "76-86",
+    "CG",
+    "Clockwork Gobbo section"
+   ],
+   [
+    "44-53,59-70,92-95",
+    "BS",
+    "past the gear box in the cave after the clearing (platforms only appear once it is stomped)"
+   ],
+   [
+    "54-58",
+    "BS&HJ",
+    "box on top of the monkey bars; Robshi: triple jump onto the bars"
+   ],
+   [
+    "87-91",
+    "BS&JG",
+    "box above the lime jelly marker (both guides)"
+   ]
+  ],
+  "colours": {
+   "red": "BS",
+   "green": "",
+   "purple": "",
+   "blue": "BS",
+   "yellow": "BS"
+  },
+  "golden": "",
+  "clear": "BS&TW",
+  "notes": "The level opens with monkey bars over spikes, so everything needs Climbing Claws. The crow is killed with the tail and the exit gong is hit with it."
+ },
+ "T1L6": {
+  "name": "Save the Bird from the Thief",
+  "default": "",
+  "box": "BS",
+  "rules": [
+   [
+    "1-4,100",
+    "CC",
+    "on the monkey bars in the first cave, with the red crystal"
+   ],
+   [
+    "95-99",
+    "JG&CG",
+    "Clockwork Gobbo section, reached from the lime jelly marker (both guides)"
+   ]
+  ],
+  "colours": {
+   "red": "CC",
+   "green": "JG&CG",
+   "purple": "JB",
+   "blue": "",
+   "yellow": ""
+  },
+  "golden": "",
+  "clear": "TW",
+  "notes": "Ropes, hippos and crumbling boxes need no ability. The thief is killed with an attack and the exit gong is hit with the tail."
+ },
+ "T1L5": {
+  "name": "Croc Vs Dantini Boat Race",
+  "default": "VL",
+  "award": "",
+  "rules": [],
+  "colours": {
+   "red": "",
+   "green": "",
+   "purple": "",
+   "blue": "",
+   "yellow": ""
+  },
+  "golden": "",
+  "clear": "",
+  "notes": "A boat race. All 100 crystals are the prize (100 for 1st, 70 for 2nd, 50 for 3rd). Red is on the shortcut, green on the normal track."
+ },
+ "T2L2": {
+  "name": "Save the Ice Trapped Gobbos!",
+  "default": "",
+  "box": "BS",
+  "rules": [
+   [
+    "86-95",
+    "JP",
+    "the platform above the strawberry jelly marker, with the red crystal (both guides)"
+   ],
+   [
+    "96-100",
+    "BS&CG",
+    "Clockwork Gobbo section; reaching the marker needs the ice holes stomped"
+   ],
+   [
+    "76-80",
+    "TH",
+    "the box behind the Gobbo freed with the TNT barrel"
+   ]
+  ],
+  "colours": {
+   "red": "JP",
+   "green": "BS&CG",
+   "purple": "BS&HJ",
+   "blue": "BS",
+   "yellow": ""
+  },
+  "golden": "BS",
+  "clear": "BS&TH",
+  "notes": "Nineteen of the twenty sources are boxes. Caves are entered by stomping cracked ice. Purple needs a triple jump off a gear box (both guides). The exit is opened by throwing a TNT barrel."
+ },
+ "T2L3": {
+  "name": "Chase the Choo Choo Train",
+  "default": "",
+  "box": "BS",
+  "rules": [
+   [
+    "73-77,94-95",
+    "BS",
+    "on the crumbling platforms a gear box creates, with the purple crystal"
+   ],
+   [
+    "9-13",
+    "HJ",
+    "box reached with a triple jump (both guides)"
+   ],
+   [
+    "96-100",
+    "HJ",
+    "box beside the key, on the hidden path reached by a triple jump off the cage (both guides)"
+   ],
+   [
+    "78-93",
+    "CG",
+    "Clockwork Gobbo section"
+   ]
+  ],
+  "colours": {
+   "red": "JB",
+   "green": "",
+   "purple": "BS",
+   "blue": "",
+   "yellow": "BS&HJ"
+  },
+  "golden": "",
+  "clear": "TW&LW",
+  "notes": "Yellow is caged; its key is on the triple-jump path. The level ends by hitting the red lever with the tail."
+ },
+ "T2L5": {
+  "name": "It's just Snowball Madness!",
+  "default": "",
+  "box": "",
+  "rules": [],
+  "colours": {
+   "red": "",
+   "green": "",
+   "purple": "",
+   "blue": "",
+   "yellow": ""
+  },
+  "golden": "",
+  "clear": "",
+  "notes": "Croc rides a snowball for the whole level; boxes are broken by rolling into them, so no ability is used."
+ },
+ "T2L6": {
+  "name": "Hang Glider Valley",
+  "default": "VL",
+  "award": "",
+  "rules": [],
+  "colours": {
+   "red": "",
+   "green": "",
+   "purple": "",
+   "blue": "",
+   "yellow": ""
+  },
+  "golden": "",
+  "clear": "",
+  "notes": "A hang glider flight. Crystals come from nine hoops of ten and the landing."
+ },
+ "T2L7": {
+  "name": "KaBooom! It's Roger Red Ant",
+  "default": "",
+  "box": "BS",
+  "rules": [
+   [
+    "1-5,16-26",
+    "JB",
+    "the ledge and corridor above the orange jelly marker at the start (both guides)"
+   ],
+   [
+    "6-10,96-100",
+    "TH&BS",
+    "first room, left path: the timer-switch room behind the first TNT door"
+   ],
+   [
+    "93-95",
+    "TH",
+    "first room, right path: over the bomb boxes behind a TNT door"
+   ],
+   [
+    "11-15,46-70,88-92",
+    "TH&BS",
+    "second room and its left path: only open once both first-room paths are done, which needs the stomp switches"
+   ],
+   [
+    "74-87",
+    "TH&BS",
+    "second room, right path: the multi-arrow platform room"
+   ],
+   [
+    "37-45,71-73",
+    "TH&BS&CG",
+    "Clockwork Gobbo section in the third room"
+   ]
+  ],
+  "colours": {
+   "red": "TH&BS",
+   "green": "TH&BS",
+   "purple": "TH&BS&CG",
+   "blue": "TH&BS",
+   "yellow": "TH&BS"
+  },
+  "golden": "",
+  "clear": "TH&BS",
+  "notes": "Every door past the first room is blown open by carrying a TNT box to it and throwing it. Only the boxes by the entrance and the jelly ledge are free of that."
+ },
+ "T3L2": {
+  "name": "Find the Wheels in the Jungle!",
+  "default": "",
+  "box": "BS",
+  "rules": [
+   [
+    "11-100",
+    "CC",
+    "everything past the first vine wall"
+   ],
+   [
+    "21-30",
+    "HJ",
+    "two boxes on top of the monkey bars by the first key: triple jump (both guides)"
+   ],
+   [
+    "84-100",
+    "CG",
+    "Clockwork Gobbo section"
+   ],
+   [
+    "31-83",
+    "BS",
+    "past the gear box whose platforms cross the lava after the first wheel"
+   ],
+   [
+    "55-65",
+    "HJ",
+    "crystals on top of the monkey bars in the large cave: triple jump"
+   ],
+   [
+    "46-50,79-83",
+    "JB",
+    "boxes above the two orange jelly markers"
+   ]
+  ],
+  "colours": {
+   "red": "CC",
+   "green": "CC&BS",
+   "purple": "CC&BS&JB",
+   "blue": "CC&BS",
+   "yellow": "CC&BS&HJ"
+  },
+  "golden": "CC&BS",
+  "clear": "CC&BS",
+  "notes": "Only the two boxes by the entrance come before the first climb. The second wheel and yellow are at the far end; yellow needs a triple jump."
+ },
+ "T3L3": {
+  "name": "Find the Wheels in the Mine!",
+  "default": "",
+  "box": "BS",
+  "rules": [
+   [
+    "85-100",
+    "CG",
+    "Clockwork Gobbo section, straight after the first mine cart"
+   ],
+   [
+    "75-84",
+    "JG",
+    "two boxes above the lime jelly marker (both guides)"
+   ],
+   [
+    "35-74",
+    "TW&LW",
+    "along and beyond the rails cleared by hitting the red levers"
+   ]
+  ],
+  "colours": {
+   "red": "CG",
+   "green": "JG",
+   "purple": "TW&LW",
+   "blue": "TW&LW",
+   "yellow": "TW&LW"
+  },
+  "golden": "TW&LW",
+  "clear": "CC&TH&TW&LW",
+  "notes": "First wheel: explosive crates are picked up from the monkey bars and thrown at the glass crate. Second wheel: two levers. The exit is a Swap Meet Pete gong. Whether the second cave can be reached without the first lever is not settled by the guides, so it is treated as needing it."
+ },
+ "T3L4": {
+  "name": "Race Day at Goldrock",
+  "default": "VL",
+  "award": "",
+  "rules": [],
+  "colours": {
+   "red": "",
+   "green": "",
+   "purple": "",
+   "blue": "",
+   "yellow": ""
+  },
+  "golden": "",
+  "clear": "",
+  "notes": "A kart race; all 100 crystals are the prize. In the unmodified game the door needs the four racer wheels."
+ },
+ "T3L5": {
+  "name": "Climb The Devil's Tower",
+  "default": "CC",
+  "box": "BS",
+  "rules": [
+   [
+    "44-55",
+    "CG",
+    "Clockwork Gobbo section, with the blue crystal"
+   ],
+   [
+    "91-100",
+    "JG",
+    "two boxes above the lime jelly marker (both guides)"
+   ],
+   [
+    "39-43,86-90",
+    "GG",
+    "two boxes inside the Golden Gobbo area"
+   ]
+  ],
+  "colours": {
+   "red": "CC&BS",
+   "green": "CC",
+   "purple": "CC",
+   "blue": "CC&CG",
+   "yellow": "CC"
+  },
+  "golden": "CC",
+  "clear": "CC",
+  "notes": "The second screen already needs two rock walls climbed, so everything needs Climbing Claws. Red is reached by platforms a gear box creates."
+ },
+ "T3L7": {
+  "name": "Save 50 Trapped Gobbos!",
+  "default": "",
+  "award": "",
+  "rules": [
+   [
+    "13-40",
+    "CC",
+    "Gobbos past the first rock wall"
+   ],
+   [
+    "41-100",
+    "CC&BS&HJ",
+    "the last Gobbos need gear boxes stomped and a triple jump onto a rock; 51-100 are the bonus for rescuing all fifty"
+   ]
+  ],
+  "colours": {
+   "red": "CC&CG",
+   "green": "JB",
+   "purple": "CC&HJ",
+   "blue": "CC&HJ",
+   "yellow": "HJ"
+  },
+  "golden": "CC",
+  "clear": "CC&BS&HJ",
+  "notes": "No loose crystals: one per Gobbo rescued, in the order they are saved, then fifty for saving them all. Water for the fires is picked up in the level. About a dozen Gobbos come before the first climb (StrategyWiki route)."
+ },
+ "T4L2": {
+  "name": "Save 30 Gobbo babies!",
+  "default": "",
+  "award": "TH",
+  "rules": [
+   [
+    "19-29",
+    "HJ",
+    "crystals on the raised walkway, reached by a triple jump from the flowerbed"
+   ],
+   [
+    "17-18",
+    "HJ",
+    "crystals on roofs: triple jump (both guides)"
+   ],
+   [
+    "35-37",
+    "CG",
+    "Clockwork Gobbo section"
+   ],
+   [
+    "41-100",
+    "HJ",
+    "two per baby put in a crib without crying; three babies are on the walkway"
+   ]
+  ],
+  "colours": {
+   "red": "",
+   "green": "",
+   "purple": "CG",
+   "blue": "",
+   "yellow": ""
+  },
+  "golden": "TW&LW",
+  "clear": "TH&HJ",
+  "notes": "Babies are carried and thrown into cribs. The Golden Gobbo is in a cage opened by a red lever."
+ },
+ "T4L3": {
+  "name": "Up the Waterfall",
+  "default": "HJ&CC",
+  "box": "BS",
+  "rules": [
+   [
+    "80-82,94-99",
+    "CG",
+    "Clockwork Gobbo section, with the blue crystal"
+   ]
+  ],
+  "free": [
+   [
+    "39-45",
+    "",
+    "the box and crystals on the first ledge, before the triple jump"
+   ],
+   [
+    "46-49",
+    "JB",
+    "above the orange jelly marker at the start, with the yellow crystal"
+   ]
+  ],
+  "colours": {
+   "red": "HJ&CC",
+   "green": "HJ&CC",
+   "purple": "HJ&CC",
+   "blue": "HJ&CC&CG",
+   "yellow": "JB"
+  },
+  "golden": "HJ&CC",
+  "clear": "HJ&CC",
+  "notes": "Both guides: the ledge after the first box needs a triple jump, then a vine wall. Which crystals sit on the first ledge is judged from positions next to the start and the jelly marker."
+ },
+ "T4L5": {
+  "name": "Bride of the Dungeon of Defright",
+  "default": "",
+  "award": "",
+  "rules": [
+   [
+    "21-60",
+    "BS",
+    "puzzles 2 and 3: stomping the arrows, and stomping the runaway box"
+   ],
+   [
+    "61-100",
+    "BS&TH",
+    "puzzles 4 and 5: reached after throwing three TNT barrels"
+   ]
+  ],
+  "colours": {},
+  "golden": "",
+  "clear": "BS&TH",
+  "notes": "Five timed puzzles worth 20 each, in a fixed order."
+ },
+ "T4L6": {
+  "name": "Goo Man Chu's Tower",
+  "default": "",
+  "box": "BS",
+  "rules": [],
+  "colours": {},
+  "golden": "",
+  "clear": "TW&LW",
+  "notes": "Fifteen boxes, three rings of eight and one loose crystal on a running-and-jumping climb. The level ends by hitting the valve with the tail."
+ }
+}

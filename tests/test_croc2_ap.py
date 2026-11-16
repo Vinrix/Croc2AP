@@ -436,6 +436,8 @@ class TestCroc2Archipelago(unittest.TestCase):
         # Grant Tail Whack, Power Gloves, and Sailor Village Door Keys so Croc can reach Find the Key! Save the Gobbo!
         state.collect(world.create_item("Tail Whack"))
         state.collect(world.create_item("Power Gloves"))
+        # The yellow crystal in this stage sits above an orange jelly marker (docs/logic.md).
+        state.collect(world.create_item("Jelly Jump (Blue Jelly)"))
         for item in mw.itempool:
             if item.name.endswith(" Key"):
                 state.collect(item)
@@ -636,21 +638,14 @@ class TestCroc2Archipelago(unittest.TestCase):
                 self.assertTrue(locked_toggle["mod_enabled_toggle"])
                 self.assertTrue(locked_toggle["save_locked_to_mod"])
 
-                # Claiming all 15 Sphere 1 checks (white crystals across Sailor Village stages 0..4)
-                # must logically unlock all 5 core progression abilities (Tail Whack, Butt Stomp, Climbing Claws, Power Gloves, Lever Wrench)!
-                for s_idx in range(5):
-                    for c_idx in range(3):
-                        chk_res = await bridge.send_command({
-                            "command": "claim_solo_check",
-                            "stage_idx": s_idx,
-                            "sub_check_idx": c_idx,
-                        })
-                final_ab = chk_res["state"]["abilities"]
-                self.assertTrue(final_ab["tail_whack"], "Sphere 1 checks must logically grant Tail Whack")
-                self.assertTrue(final_ab["butt_stomp"], "Sphere 1 checks must logically grant Butt Stomp")
-                self.assertTrue(final_ab["climbing_claws"], "Sphere 1 checks must logically grant Climbing Claws")
-                self.assertTrue(final_ab["power_gloves"], "Sphere 1 checks must logically grant Power Gloves")
-                self.assertTrue(final_ab["lever_wrench"], "Sphere 1 checks must logically grant Lever Wrench")
+                # A solo seed must be beatable in logic: playing it sphere by sphere (collect everything in reach,
+                # see what that opens, repeat) must find every ability, key and consumable, and must not hand
+                # them all out in the first sphere.
+                logic = await bridge.send_command({"command": "debug_solo_logic"})
+                self.assertEqual(logic["status"], "ok")
+                self.assertEqual(logic["stranded_items"], 0, "Every needed item must be reachable in logic")
+                self.assertGreater(len(logic["spheres"]), 2, "Needed items must be spread over several spheres")
+                self.assertGreater(logic["spheres"][0]["checks"], 20, "The first stage must have checks reachable with a plain jump")
 
                 # 8. Verify every regular White Crystal (1..100) is a one-time check:
                 #    First time collecting White Crystal #7 in Stage 0 sends a check AND adds currency;

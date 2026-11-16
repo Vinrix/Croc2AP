@@ -314,14 +314,123 @@ static void unpack_abilities_mask(uint8_t m, PlayerAbilities& a) {
     a.long_jump          = (m & (1 << 7)) != 0;
 }
 
+// The stages played entirely in a vehicle: the boat race, the hang glider and the kart race. (This list used to
+// include Find 5 Lost Treasure Chests, Chase the Choo Choo Train, Climb The Devil's Tower and Up the Waterfall,
+// which are on foot, and locked their doors behind Vehicle License.)
 static bool is_vehicle_stage_wad(const std::string& wad) {
-    return (wad == "T1L3M001" || // Sailor Glider
-            wad == "T1L5M001" || // Sailor Speedboat
-            wad == "T2L3M001" || // Cossack Train Chase
-            wad == "T2L6M001" || // Cossack Hang Glider
-            wad == "T3L4M001" || // Caveman Minecart Race
-            wad == "T3L5M001" || // Caveman Devil's Tower
-            wad == "T4L3M001");  // Inca Waterfall (Plane/Boat)
+    return wad == "T1L5M001" || wad == "T2L6M001" || wad == "T3L4M001";
+}
+
+// ---- Solo seed logic. logic_rules.inc is generated from worlds/croc2/data/logic.json (tools/build_logic.py): what
+// every white crystal number, coloured crystal and stage clear needs, as alternatives of item bits.
+#include "logic_rules.inc"
+static constexpr int kLogicStages = static_cast<int>(sizeof(kClearLogic) / sizeof(kClearLogic[0]));
+static constexpr uint32_t kLogicGoldenBit = 1u << 13;
+// Item -> bit. Abilities and consumables use the bits of logic_rules.inc; the key to door d is bit 14 + d.
+static uint64_t logic_item_bit(int id) {
+    switch (id) {
+        case 7200001: return 1ull << 0;   // Tail Whack
+        case 7200002: return 1ull << 1;   // Butt Stomp
+        case 7200162: return 1ull << 2;   // High Jump
+        case 7200161: return 1ull << 3;   // Long Jump
+        case 7200003: return 1ull << 4;   // Climbing Claws
+        case 7200004: return 1ull << 5;   // Power Gloves
+        case 7200005: return 1ull << 6;   // Lever Wrench
+        case 7200006: return 1ull << 7;   // Vehicle License
+        case 7200007: return 1ull << 8;   // Airplane Ammo Feed
+        case 7200144: return 1ull << 9;   // orange ("blue") jelly
+        case 7200145: return 1ull << 10;  // lime ("green") jelly
+        case 7200143: return 1ull << 11;  // strawberry ("red") jelly
+        case 7200142: return 1ull << 12;  // Clockwork Gobbo
+        default: break;
+    }
+    if (id >= 7200023 && id <= 7200041) return 1ull << (14 + (id - 7200022)); // key to door 1..19
+    return 0;
+}
+static bool logic_met(const LogicRef& r, uint64_t have) {
+    for (int i = 0; i < r.count; ++i) {
+        const uint32_t t = kLogicTerms[r.first + i];
+        if ((t & kLogicGoldenBit) == 0 && (static_cast<uint64_t>(t) & ~have) == 0) return true;
+    }
+    return false; // no alternative, or only ones inside a Golden Gobbo area (never used to hold a needed item)
+}
+// A solo seed's checks, as one list: 0..179 are stage*9 + sub (0-2 crystal-count milestones, 3-7 coloured
+// crystals Red, Blue, Green, Yellow, Purple, 8 stage clear); 180..2179 are stage*100 + (crystal number - 1).
+static constexpr int kSoloLocations = SOLO_CHECK_POOL_SIZE + 2000;
+static int& solo_item_at(int loc) {
+    return loc < SOLO_CHECK_POOL_SIZE ? g_state.solo_check_items[loc] : g_state.solo_white_crystal_items[loc - SOLO_CHECK_POOL_SIZE];
+}
+static bool solo_location_reachable(int loc, uint64_t have) {
+    const bool white = loc >= SOLO_CHECK_POOL_SIZE;
+    const int stage = white ? (loc - SOLO_CHECK_POOL_SIZE) / 100 : loc / 9;
+    if (stage < 0 || stage >= kLogicStages) return false; // the 20th door has no real stage behind it
+    int door = -1;
+    for (int d = 0; d < 20; ++d) if (g_state.door_perm[d] == stage) { door = d; break; }
+    if (door < 0) return false;
+    if (door > 0 && g_state.lock_level_access && !(have & (1ull << (14 + door)))) return false;
+    // The later villages open by beating bosses, which takes the tail and the stomp. Not modelled further.
+    if (door >= 5 && (have & 3) != 3) return false;
+    if (white) {
+        if (g_state.shuffle_white_crystals != 3) return false; // only "every crystal is a check" is by number
+        return logic_met(kCrystalLogic[stage][(loc - SOLO_CHECK_POOL_SIZE) % 100], have);
+    }
+    const int sub = loc % 9;
+    if (sub < 3) return false; // crystal-count milestones: not used to hold a needed item
+    if (sub < 8) return logic_met(kColourLogic[stage][sub - 3], have);
+    return logic_met(kClearLogic[stage], have);
+}
+// Makes the seed beatable. The pools above are shuffled without regard to what each check needs; this walks the
+// seed the way a player would (collect everything reachable, see what that opens, repeat) and, whenever no new
+// ability, key, jelly or Clockwork Gobbo is within reach, swaps one in from where it was stranded. Each swap goes
+// to a random check that is reachable at that moment, so items end up spread through the game in the order they
+// are needed, not piled up by the first door. Revisits are implicit: a late item can open leftovers anywhere.
+static void solo_logic_repair_locked(std::mt19937_64& rng) {
+    // First undo the old "safe" placement, which put every ability on a handful of checks in the first stage:
+    // shuffle every item over every check. What has to be early is then decided by the walk below alone.
+    {
+        std::vector<int> all(kSoloLocations);
+        for (int loc = 0; loc < kSoloLocations; ++loc) all[loc] = solo_item_at(loc);
+        std::shuffle(all.begin(), all.end(), rng);
+        for (int loc = 0; loc < kSoloLocations; ++loc) solo_item_at(loc) = all[loc];
+    }
+    uint64_t have = 0;
+    int swaps = 0;
+    for (int round = 0; round < 400; ++round) {
+        bool grew = true;
+        while (grew) {
+            grew = false;
+            for (int loc = 0; loc < kSoloLocations; ++loc) {
+                const uint64_t bit = logic_item_bit(solo_item_at(loc));
+                if (bit && !(have & bit) && solo_location_reachable(loc, have)) { have |= bit; grew = true; }
+            }
+        }
+        std::vector<int> stranded, open;
+        int reach_now = 0;
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            const uint64_t bit = logic_item_bit(solo_item_at(loc));
+            const bool r = solo_location_reachable(loc, have);
+            if (r) ++reach_now;
+            if (bit && !(have & bit)) { if (!r) stranded.push_back(loc); }
+            else if (r && bit == 0) open.push_back(loc); // only a check holding nothing needed may give its place up
+        }
+        if (stranded.empty() || open.empty()) break;
+        std::shuffle(stranded.begin(), stranded.end(), rng);
+        // Prefer an item that opens something new; otherwise any.
+        int pick = stranded[0];
+        for (int cand : stranded) {
+            const uint64_t with = have | logic_item_bit(solo_item_at(cand));
+            int n = 0;
+            for (int loc = 0; loc < kSoloLocations; ++loc) if (solo_location_reachable(loc, with)) ++n;
+            if (n > reach_now) { pick = cand; break; }
+        }
+        const int target = open[rng() % open.size()];
+        std::swap(solo_item_at(pick), solo_item_at(target));
+        ++swaps;
+    }
+    int reachable = 0;
+    for (int loc = 0; loc < kSoloLocations; ++loc) if (solo_location_reachable(loc, have)) ++reachable;
+    debug_log_locked("LOGIC solo seed: " + std::to_string(swaps) + " items moved into reach; " + std::to_string(reachable) +
+                     " checks in logic with everything collected");
 }
 
 static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
@@ -331,7 +440,10 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     // Door 1 (index 0) is open from the start (Sphere 1).
     // It MUST be an on-foot platforming stage (Stage 2: "Get the Gobbo's Sandwich!" or Stage 4: "Save the Bird from the Thief").
     // It must NEVER be a vehicle stage (1 or 3) or vanilla Stage 0!
-    int door1_target = (rng() % 2 == 0) ? 2 : 4;
+    // Door 1 must lead somewhere with plenty to collect on a plain jump: Find 5 Lost Treasure Chests (1) or Save
+    // the Bird from the Thief (4). (Get the Gobbo's Sandwich, used before, opens with monkey bars: nothing in it
+    // can be reached without Climbing Claws.)
+    int door1_target = (rng() % 2 == 0) ? 1 : 4;
     g_state.door_perm[0] = static_cast<uint8_t>(door1_target);
     g_state.door_overrides[kStageDoors[0].door_id] = kStageDoors[door1_target].vanilla_wad;
     g_state.door_overrides[kStageDoors[0].vanilla_wad] = kStageDoors[door1_target].vanilla_wad;
@@ -486,7 +598,14 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     // The start stage's 20 "safe" checks hold the abilities and keys. Crystal checks are now specific crystals, so
     // these must be ones Croc can pick up with a plain jump: loose crystals in the stage's first map, never a
     // smash box's (those need Butt Stomp). Stages without enough loose crystals fall back to the lowest numbers.
-    const std::vector<int> start_numbers = early_loose_crystal_numbers(door1_target, 20);
+    // Spread over the whole first map, picked by the seed: with "the first 20" every ability was sitting on the
+    // crystals right in front of the door and the locks were over within seconds.
+    std::vector<int> start_numbers = early_loose_crystal_numbers(door1_target, 0);
+    std::shuffle(start_numbers.begin(), start_numbers.end(), rng);
+    if (start_numbers.size() > 20) start_numbers.resize(20);
+    for (int n = 1; n <= 100 && start_numbers.size() < 20; ++n) {
+        if (std::find(start_numbers.begin(), start_numbers.end(), n) == start_numbers.end()) start_numbers.push_back(n);
+    }
     for (int s = 0; s < 20; ++s) {
         for (int c = 0; c < 100; ++c) {
             int wc_idx = s * 100 + c;
@@ -569,6 +688,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     for (size_t i = 0; i < wc_remaining_slots.size(); ++i) {
         g_state.solo_white_crystal_items[wc_remaining_slots[i]] = wc_pool[i];
     }
+    solo_logic_repair_locked(rng);
 }
 
 static void sync_state_to_save_footer_locked() {
@@ -1766,6 +1886,45 @@ static std::string handle_command_locked(const std::string& req) {
             g_state.add_log("Started New Vanilla Save (Slot " + std::to_string(slot + 1) + ").");
         }
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
+    }
+
+    // Plays the current solo seed in logic and reports it sphere by sphere: how many checks open up, and which
+    // abilities, keys and consumables are found there. Used to check the seed is beatable and well spread.
+    if (cmd == "debug_solo_logic") {
+        uint64_t have = 0;
+        std::vector<char> seen(kSoloLocations, 0);
+        std::ostringstream ss;
+        ss << "{\"status\":\"ok\",\"door1_stage\":" << static_cast<int>(g_state.door_perm[0]) << ",\"spheres\":[";
+        int total = 0;
+        for (int sphere = 0; sphere < 64; ++sphere) {
+            std::vector<int> fresh;
+            for (int loc = 0; loc < kSoloLocations; ++loc) {
+                if (!seen[loc] && solo_location_reachable(loc, have)) fresh.push_back(loc);
+            }
+            if (fresh.empty()) break;
+            if (sphere) ss << ",";
+            ss << "{\"checks\":" << fresh.size() << ",\"items\":[";
+            bool first = true;
+            for (int loc : fresh) {
+                seen[loc] = 1;
+                const int id = solo_item_at(loc);
+                const uint64_t bit = logic_item_bit(id);
+                if (bit && !(have & bit)) {
+                    have |= bit;
+                    ss << (first ? "" : ",") << id;
+                    first = false;
+                }
+            }
+            ss << "]}";
+            total += static_cast<int>(fresh.size());
+        }
+        int stranded = 0;
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            const uint64_t bit = logic_item_bit(solo_item_at(loc));
+            if (bit && !(have & bit)) ++stranded;
+        }
+        ss << "],\"reachable\":" << total << ",\"stranded_items\":" << stranded << "}";
+        return ss.str();
     }
 
     if (cmd == "get_state") {
@@ -4601,7 +4760,7 @@ static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected
 //     in the front flip                    4 44 10 16384 138 130 <skip> 7 16 10 0 18 5 178 10 0 18 5 177 1 78 18
 //   Tail Whack (8192), Square = 32768 newly pressed:
 //     on foot                              4 44 10 32768 138 3 18 10 0 19 135 130
-//     swimming (tail attack)               4 44 10 32768 138 130 <skip> 5 177 1 116 18
+//   (the throw of a carried object is a different Square check, in the carrying state; see MOVE_GATES)
 //   Long Jump (front flip, 36864), L1 = 1024 and R1 = 2048 both held:
 //     on foot                              4 42 10 1024 138 4 42 10 2048 138 135 130
 // While a move is locked, its button bit is cleared from those reads only, so the script never takes the branch.
@@ -4624,7 +4783,10 @@ static const MoveGate MOVE_GATES[] = {
     {"Butt Stomp (flip)", &g_jump_lock_active, 44, 0x4000, 20,
      {10, 16384, 138, 130, ANYW, 7, 16, 10, 0, 18, 5, 178, 10, 0, 18, 5, 177, 1, 78, 18}},
     {"Tail Whack", &g_tail_lock_active, 44, 0x8000, 10, {10, 32768, 138, 3, 18, 10, 0, 19, 135, 130}},
-    {"Tail Whack (swim)", &g_tail_lock_active, 44, 0x8000, 10, {10, 32768, 138, 130, ANYW, 5, 177, 1, 116, 18}},
+    // (A second Square check, "4 44 10 32768 138 130 <skip> 5 177 1 116 18", sits in state 32768. That state is
+    // "carrying something" - the script enters it when global 13, the game's "Croc is holding an object" flag at
+    // 0x140BC82C0 + 13*4, is set - and the check is the throw. It is deliberately not locked: picking the object up
+    // already needed Power Gloves.)
     {"Long Jump", &g_flip_lock_active, 42, 0x0400, 10, {10, 1024, 138, 4, 42, 10, 2048, 138, 135, 130}},
     // High Jump: in the stomp's bounce (state 24576, sub-state 12288) Jump held launches it; a Jump press while
     // the stomp is falling is remembered in var 181 for the same launch.
@@ -4679,12 +4841,6 @@ static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t 
         bool match = true;
         for (int i = 0; i < g.n && match; ++i) match = g.sig[i] == ANYW || g.sig[i] == q[i];
         if (!match) continue;
-        // Square on foot is also "throw what Croc is carrying" (the script picks the throw when var 27 is set).
-        // The Tail Whack lock must not stop a throw.
-        if (g.locked == &g_tail_lock_active) {
-            const int32_t* cv = *reinterpret_cast<int32_t* const*>(sp + 0x118);
-            if (cv && readable_memory(cv + 27, 4) && cv[27] != 0) return;
-        }
         *top &= ~g.bit;
         if (g_state.debug_watch) {
             char b[64];
@@ -4787,6 +4943,7 @@ enum { CRYSTAL_LOOSE = 0, CRYSTAL_BOX = 1, CRYSTAL_RING = 2, CRYSTAL_AWARD = 3 }
 static const CrystalSource kCrystalSources[] = {
 #include "crystal_ids.inc"
 };
+// The numbers of the loose crystals in a stage's first map (want = 0: all of them).
 static std::vector<int> early_loose_crystal_numbers(int stage, size_t want) {
     std::vector<int> out;
     const char* first_map = nullptr;
@@ -4794,10 +4951,7 @@ static std::vector<int> early_loose_crystal_numbers(int stage, size_t want) {
         if (s.stage != stage || s.kind != CRYSTAL_LOOSE) continue;
         if (!first_map) first_map = s.wad;
         if (std::strcmp(first_map, s.wad) != 0) break;
-        if (out.size() < want) out.push_back(s.first);
-    }
-    for (int n = 1; n <= 100 && out.size() < want; ++n) {
-        if (std::find(out.begin(), out.end(), n) == out.end()) out.push_back(n);
+        if (want == 0 || out.size() < want) out.push_back(s.first);
     }
     return out;
 }
@@ -4809,25 +4963,42 @@ static int unclaimed_in_source_locked(const CrystalSource& s) {
     for (int n = s.first; n < s.first + s.count; ++n) if (!crystal_number_claimed_locked(s.stage, n)) ++left;
     return left;
 }
-// Where a white crystal pickup came from: the loose crystal at that exact spot, the nearest smash box or ring for
-// one of their crystals (those land in a different place every time), or nullptr for crystals the level awards.
+// Where a white crystal pickup came from:
+// - a loose crystal: the table entry at the same x and z. Height is not compared: a placed crystal's height in
+//   the level file is nominal (4096 for a whole row) and the game sets the real one, up to a few thousand away.
+//   Where several share a spot, the nearest in height that is still unclaimed.
+// - otherwise the nearest smash box or ring, for one of their crystals. Those land somewhere different every
+//   time, and they are named "Blank" while flying and "crystal" once settled, so the name can't tell them apart
+//   from a loose crystal; only the position can.
+// - nullptr: a crystal the level awards.
 static const CrystalSource* find_crystal_source_locked(const uint8_t* sp, int stage) {
-    const char* nm = *reinterpret_cast<const char* const*>(sp + 0x30);
-    const bool loose = nm && readable_memory(nm, 8) && !std::strcmp(nm, "crystal");
     const int32_t x = *reinterpret_cast<const int32_t*>(sp + 0x4C), y = *reinterpret_cast<const int32_t*>(sp + 0x50),
                   z = *reinterpret_cast<const int32_t*>(sp + 0x54);
-    const CrystalSource* best = nullptr;
-    int64_t best_d = INT64_MAX;
+    const CrystalSource* loose = nullptr;
+    int64_t loose_dy = INT64_MAX;
+    bool loose_free = false;
+    const CrystalSource* box = nullptr;
+    int64_t box_d = INT64_MAX;
     for (const CrystalSource& s : kCrystalSources) {
         if (s.stage != stage || s.kind == CRYSTAL_AWARD || g_state.current_wad != s.wad) continue;
-        if (loose != (s.kind == CRYSTAL_LOOSE)) continue;
         const int64_t dx = s.x - x, dy = s.y - y, dz = s.z - z;
-        const int64_t d = dx * dx + dz * dz + (loose ? dy * dy : 0);
-        if (d < best_d) { best_d = d; best = &s; }
+        if (s.kind == CRYSTAL_LOOSE) {
+            if (std::llabs(dx) > 96 || std::llabs(dz) > 96) continue;
+            const bool free_now = !crystal_number_claimed_locked(stage, s.first);
+            const int64_t ady = std::llabs(dy);
+            if (!loose || (free_now && !loose_free) || (free_now == loose_free && ady < loose_dy)) {
+                loose = &s;
+                loose_dy = ady;
+                loose_free = free_now;
+            }
+        } else {
+            const int64_t d = dx * dx + dz * dz;
+            if (d < box_d) { box_d = d; box = &s; }
+        }
     }
-    if (!best) return nullptr;
-    const int64_t reach = loose ? 1024 : 16384; // a loose crystal sits on its spot; box crystals scatter a few thousand units
-    return best_d <= reach * reach ? best : nullptr;
+    if (loose) return loose;
+    const int64_t reach = 16384; // box and ring crystals scatter a few thousand units from their source
+    return (box && box_d <= reach * reach) ? box : nullptr;
 }
 // Send the checks for `amount` crystals from `src` (nullptr = the stage's awarded crystals).
 static void claim_crystal_numbers_locked(int stage, const CrystalSource* src, int amount) {

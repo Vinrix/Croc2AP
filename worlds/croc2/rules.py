@@ -30,6 +30,29 @@ def has_all_requirements(
     return all(has_ability(state, player, options, r) for r in reqs)
 
 
+def meets_dnf(
+    state: CollectionState,
+    player: int,
+    options: Croc2Options,
+    dnf: List[List[str]],
+    level_prefix: str = "",
+) -> bool:
+    """True if any one alternative is fully held. "@GG" is the stage's Golden Gobbo area."""
+    for alternative in dnf:
+        ok = True
+        for name in alternative:
+            if name == "@GG":
+                if not can_activate_golden_gobbo(state, player, options, level_prefix):
+                    ok = False
+                    break
+            elif not has_ability(state, player, options, name):
+                ok = False
+                break
+        if ok:
+            return True
+    return False
+
+
 def can_activate_golden_gobbo(
     state: CollectionState,
     player: int,
@@ -142,6 +165,22 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
             continue
         reqs = loc_data.get("requires", [])
         cat = loc_data.get("category", "")
+
+        # Mapped stages: the requirement written from the walkthroughs (docs/logic.md) replaces the old guesses.
+        dnf = loc_data.get("requires_dnf")
+        if dnf is not None:
+            level_prefix = loc_data.get("level_prefix") or loc.name.rpartition(" - ")[0]
+            if cat == "Golden Gobbos":
+                set_rule(
+                    loc,
+                    lambda state, d=dnf, lp=level_prefix: (
+                        meets_dnf(state, player, options, d, lp)
+                        and can_activate_golden_gobbo(state, player, options, lp)
+                    ),
+                )
+            elif dnf != [[]]:
+                set_rule(loc, lambda state, d=dnf, lp=level_prefix: meets_dnf(state, player, options, d, lp))
+            continue
 
         if cat == "Golden Gobbos":
             level_prefix = loc_data["level_prefix"]
