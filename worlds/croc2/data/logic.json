@@ -1,5 +1,5 @@
 {
- "_about": "Per-stage logic. Atoms: TW Tail Whack, BS Butt Stomp, HJ High Jump (needs BS too), LJ Long Jump, CC Climbing Claws, PG Power Gloves, LW Lever Wrench, VL Vehicle License, JB orange/blue jelly, JG lime/green jelly, JP strawberry/purple jelly, CG Clockwork Gobbo, GG the stage's Golden Gobbo area (all five of its coloured crystals), TH carry and throw an object (Power Gloves). '&' and, '|' or, '' nothing. A crystal number's rule = default & (box rule if it is a box crystal) & every matching entry in rules. Sources: StrategyWiki walkthrough and the GameFAQs guide by Robshi, matched to crystal clusters by landmarks (tools/crystal_clusters.py).",
+ "_about": "Per-stage logic. Atoms: TW Tail Whack, BS Butt Stomp, HJ High Jump (needs BS too), LJ Long Jump, CC Climbing Claws, PG Power Gloves, LW Lever Wrench, VL Vehicle License, JB orange/blue jelly, JG lime/green jelly, JP strawberry/purple jelly, CG Clockwork Gobbo, MC Mine Cart, GG the stage's Golden Gobbo area (all five of its coloured crystals), TH carry and throw an object (Power Gloves). '&' and, '|' or, '' nothing. A crystal number's rule = default & (box rule if it is a box crystal) & every matching entry in rules. Sources: StrategyWiki walkthrough and the GameFAQs guide by Robshi, matched to crystal clusters by landmarks (tools/crystal_clusters.py).",
  "T1L2": {
   "name": "Find the Key! Save the Gobbo!",
   "default": "",
@@ -24,7 +24,7 @@
  },
  "T1L3": {
   "name": "Find 5 Lost Treasure Chests",
-  "default": "",
+  "default": "MC",
   "box": "BS",
   "award": "",
   "rules": [
@@ -43,7 +43,7 @@
   },
   "golden": "",
   "clear": "",
-  "notes": "Mine carts and bomb boxes need no ability. Red needs a triple jump and yellow the orange jelly (both guides). Numbers 51-100 are the five chests, 10 each."
+  "notes": "The level is a hub of mine cart tracks; every chest and almost every crystal is reached by cart, so everything needs Mine Cart. Red needs a triple jump and yellow the orange jelly (both guides). Numbers 51-100 are the five chests, 10 each."
  },
  "T1L4": {
   "name": "Get the Gobbo's Sandwich!",
@@ -322,7 +322,7 @@
  },
  "T3L3": {
   "name": "Find the Wheels in the Mine!",
-  "default": "",
+  "default": "MC",
   "box": "BS",
   "rules": [
    [
@@ -350,7 +350,7 @@
   },
   "golden": "TW&LW",
   "clear": "CC&TH&TW&LW",
-  "notes": "First wheel: explosive crates are picked up from the monkey bars and thrown at the glass crate. Second wheel: two levers. The exit is a Swap Meet Pete gong. Whether the second cave can be reached without the first lever is not settled by the guides, so it is treated as needing it."
+  "notes": "The level starts on a mine cart, so everything needs Mine Cart. First wheel: explosive crates are picked up from the monkey bars and thrown at the glass crate. Second wheel: two levers. The exit is a Swap Meet Pete gong. Whether the second cave can be reached without the first lever is not settled by the guides, so it is treated as needing it."
  },
  "T3L4": {
   "name": "Race Day at Goldrock",

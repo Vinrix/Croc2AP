@@ -21,6 +21,7 @@ namespace Croc2Launcher
             RegisterItem(7200007, "Airplane Ammo Feed", "progression");
             RegisterItem(7200161, "Long Jump", "progression");
             RegisterItem(7200162, "High Jump", "progression");
+            RegisterItem(7200163, "Mine Cart", "progression");
 
             RegisterItem(7200010, "Heart Pot", "useful");
             RegisterItem(7200011, "Heart Pot", "useful");

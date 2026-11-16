@@ -620,7 +620,9 @@ class TestCroc2Archipelago(unittest.TestCase):
                     st = save_res["state"]
                     self.assertTrue(st["save_locked_to_mod"], "Mod must lock ON when a randomizer save is created")
                     self.assertTrue(st["in_active_save"])
-                    self.assertNotEqual(st["door_1_target"], "T1L2M001", "Door 1 must never be vanilla T1L2M001")
+                    # Door 1 leads to one of the two Sailor stages with plenty reachable on a plain jump (which
+                    # includes its own vanilla stage): see build_logical_item_pool_for_seed_locked.
+                    self.assertIn(st["door_1_target"], ("T1L2M001", "T1L6M001"))
                     door1_targets.add(st["door_1_target"])
                     seeds_seen.add(st["current_seed_hex"])
 

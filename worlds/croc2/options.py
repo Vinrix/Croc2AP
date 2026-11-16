@@ -105,6 +105,7 @@ class ShuffleAbilities(DefaultOnToggle):
     - **Tail Whack** (360-degree tail spin attack)
     - **Long Jump** (L1 + R1 front flip)
     - **High Jump** (holding Jump as a Butt Stomp lands: the "triple jump". Needs Butt Stomp as well)
+    - **Mine Cart** (riding the mine carts in the two mine levels and the secret mines)
     - **Climbing Claws** (ability to climb ropes, ladders, monkey bars, and climbable walls)
     - **Power Gloves** (ability to pick up and carry crates, pots, snowballs, and wheels when walking up to them)
     """

@@ -25,7 +25,7 @@ ATOMS = {
     'TW': (0, 'Tail Whack'), 'BS': (1, 'Butt Stomp'), 'HJ': (2, 'High Jump'), 'LJ': (3, 'Long Jump'),
     'CC': (4, 'Climbing Claws'), 'PG': (5, 'Power Gloves'), 'LW': (6, 'Lever Wrench'), 'VL': (7, 'Vehicle License'),
     'AA': (8, 'Airplane Ammo Feed'), 'JB': (9, 'Jelly Jump (Blue Jelly)'), 'JG': (10, 'High Jelly Jump (Green Jelly)'),
-    'JP': (11, 'Gummi Jump (Red Jelly)'), 'CG': (12, 'Clockwork Gobbo'),
+    'JP': (11, 'Gummi Jump (Red Jelly)'), 'CG': (12, 'Clockwork Gobbo'), 'MC': (14, 'Mine Cart'),
 }
 GG_BIT = 13  # the stage's Golden Gobbo area: all five of its coloured crystal items
 # What an atom in logic.json expands to. A better jelly works on a lesser marker; the High Jump comes out of a

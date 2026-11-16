@@ -248,6 +248,7 @@ struct PlayerAbilities {
     bool airplane_ammo_feed = false;
     bool long_jump = false;
     bool high_jump = false; // the jump out of a stomp (the "triple jump")
+    bool mine_cart = false; // riding the mine carts
 };
 
 struct ServerConnectionConfig {

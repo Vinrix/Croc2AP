@@ -30,13 +30,13 @@ Open level: pits are jumped, the third uses a rope, hippos lift Croc. Yellow nee
 
 ## T1L3 Find 5 Lost Treasure Chests
 
-Mine carts and bomb boxes need no ability. Red needs a triple jump and yellow the orange jelly (both guides). Numbers 51-100 are the five chests, 10 each.
+The level is a hub of mine cart tracks; every chest and almost every crystal is reached by cart, so everything needs Mine Cart. Red needs a triple jump and yellow the orange jelly (both guides). Numbers 51-100 are the five chests, 10 each.
 
 | Needs | White crystal numbers |
 |---|---|
-| nothing | 6-10, 16-38, 48-100 (81) |
-| Butt Stomp | 1-5, 11-15 (10) |
-| Clockwork Gobbo | 39-47 (9) |
+| Butt Stomp + Mine Cart | 1-5, 11-15 (10) |
+| Mine Cart | 6-10, 16-38, 48-100 (81) |
+| Clockwork Gobbo + Mine Cart | 39-47 (9) |
 
 | Check | Needs |
 |---|---|
@@ -234,15 +234,15 @@ Only the two boxes by the entrance come before the first climb. The second wheel
 
 ## T3L3 Find the Wheels in the Mine!
 
-First wheel: explosive crates are picked up from the monkey bars and thrown at the glass crate. Second wheel: two levers. The exit is a Swap Meet Pete gong. Whether the second cave can be reached without the first lever is not settled by the guides, so it is treated as needing it.
+The level starts on a mine cart, so everything needs Mine Cart. First wheel: explosive crates are picked up from the monkey bars and thrown at the glass crate. Second wheel: two levers. The exit is a Swap Meet Pete gong. Whether the second cave can be reached without the first lever is not settled by the guides, so it is treated as needing it.
 
 | Needs | White crystal numbers |
 |---|---|
-| nothing | 1-9 (9) |
-| Butt Stomp | 10-34 (25) |
-| Butt Stomp + Lever Wrench + Tail Whack | 35-74 (40) |
-| Butt Stomp + High Jelly Jump (Green Jelly) or Butt Stomp + Gummi Jump (Red Jelly) | 75-84 (10) |
-| Clockwork Gobbo | 85-100 (16) |
+| Mine Cart | 1-9 (9) |
+| Butt Stomp + Mine Cart | 10-34 (25) |
+| Butt Stomp + Lever Wrench + Mine Cart + Tail Whack | 35-74 (40) |
+| Butt Stomp + High Jelly Jump (Green Jelly) + Mine Cart or Butt Stomp + Gummi Jump (Red Jelly) + Mine Cart | 75-84 (10) |
+| Clockwork Gobbo + Mine Cart | 85-100 (16) |
 
 | Check | Needs |
 |---|---|

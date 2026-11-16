@@ -72,6 +72,14 @@
     "ability_enum": "HIGH_JUMP"
   },
   {
+    "id": 7200163,
+    "name": "Mine Cart",
+    "classification": "progression",
+    "group": "Abilities",
+    "default_count": 1,
+    "ability_enum": "MINE_CART"
+  },
+  {
     "id": 7200008,
     "name": "Pete's VIP Pass (Sailor Village)",
     "classification": "progression",

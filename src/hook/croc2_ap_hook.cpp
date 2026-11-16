@@ -85,6 +85,7 @@ static std::atomic<bool> g_high_jump_lock_active{false}; // High Jump (the jump 
 static std::atomic<bool> g_lead_boots_active{false};     // Lead Boots trap: no jumping at all
 static std::atomic<bool> g_gloves_lock_active{false};    // Power Gloves: picking up carryable objects (Hooked_SetPickable)
 static std::atomic<bool> g_lever_lock_active{false};     // Lever Wrench: tail-hit levers (Hooked_RegisterEvent)
+static std::atomic<bool> g_cart_lock_active{false};      // Mine Cart: the carts ignore Croc standing on them
 struct QueuedCrystal { void* strat; DWORD spawned; };
 static std::vector<QueuedCrystal> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
@@ -342,6 +343,7 @@ static uint64_t logic_item_bit(int id) {
         case 7200145: return 1ull << 10;  // lime ("green") jelly
         case 7200143: return 1ull << 11;  // strawberry ("red") jelly
         case 7200142: return 1ull << 12;  // Clockwork Gobbo
+        case 7200163: return 1ull << 14;  // Mine Cart (bit 13 is the Golden Gobbo area; door keys start at 15)
         default: break;
     }
     if (id >= 7200023 && id <= 7200041) return 1ull << (14 + (id - 7200022)); // key to door 1..19
@@ -440,10 +442,11 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     // Door 1 (index 0) is open from the start (Sphere 1).
     // It MUST be an on-foot platforming stage (Stage 2: "Get the Gobbo's Sandwich!" or Stage 4: "Save the Bird from the Thief").
     // It must NEVER be a vehicle stage (1 or 3) or vanilla Stage 0!
-    // Door 1 must lead somewhere with plenty to collect on a plain jump: Find 5 Lost Treasure Chests (1) or Save
-    // the Bird from the Thief (4). (Get the Gobbo's Sandwich, used before, opens with monkey bars: nothing in it
-    // can be reached without Climbing Claws.)
-    int door1_target = (rng() % 2 == 0) ? 1 : 4;
+    // Door 1 must lead somewhere with plenty to collect on a plain jump: Find the Key! Save the Gobbo! (0) or
+    // Save the Bird from the Thief (4), about 45 crystals each. The other Sailor stages have none: Get the Gobbo's
+    // Sandwich opens with monkey bars, Find 5 Lost Treasure Chests is ridden on mine carts, and the boat race is
+    // a vehicle.
+    int door1_target = (rng() % 2 == 0) ? 0 : 4;
     g_state.door_perm[0] = static_cast<uint8_t>(door1_target);
     g_state.door_overrides[kStageDoors[0].door_id] = kStageDoors[door1_target].vanilla_wad;
     g_state.door_overrides[kStageDoors[0].vanilla_wad] = kStageDoors[door1_target].vanilla_wad;
@@ -567,6 +570,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     }
     pool.push_back(7200007); // Airplane Ammo Feed
     pool.push_back(7200162); // High Jump
+    pool.push_back(7200163); // Mine Cart
     pool.push_back(7200146); // Binoculars
     for (int id = 7200008; id <= 7200015; ++id) pool.push_back(id); // 4 VIP Passes + 4 Jigsaw Pieces
     for (int i = 0; i < 16; ++i) pool.push_back(7200017); // 16 Trophies
@@ -667,6 +671,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     wc_pool.push_back(7200006); // Vehicle License
     wc_pool.push_back(7200007); // Airplane Ammo Feed
     wc_pool.push_back(7200162); // High Jump
+    wc_pool.push_back(7200163); // Mine Cart
     for (int id = 7200008; id <= 7200015; ++id) wc_pool.push_back(id); // VIP Passes + Jigsaw Pieces
     for (int i = 0; i < 16; ++i) wc_pool.push_back(7200017); // 16 Trophies
     for (int id = 7200047; id <= 7200141; ++id) wc_pool.push_back(id); // Colored Crystals
@@ -722,7 +727,8 @@ static void sync_state_to_save_footer_locked() {
         footer->green_jellies = static_cast<uint8_t>(g_state.green_jellies);
         footer->clockwork_gobbos = static_cast<uint8_t>(g_state.clockwork_gobbos);
         // Bit 0 binoculars, bit 1 High Jump (the abilities byte above is full).
-        footer->binoculars = static_cast<uint8_t>((g_state.binoculars ? 1 : 0) | (g_state.abilities.high_jump ? 2 : 0));
+        footer->binoculars = static_cast<uint8_t>((g_state.binoculars ? 1 : 0) | (g_state.abilities.high_jump ? 2 : 0) |
+                                                  (g_state.abilities.mine_cart ? 4 : 0)); // bit 2 Mine Cart
         footer->ap_items_applied = static_cast<uint32_t>(g_state.ap_items_applied);
     } else {
         footer->magic = VANILLA_SAVE_MAGIC;
@@ -766,6 +772,7 @@ static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& fo
     g_state.clockwork_gobbos = footer.clockwork_gobbos;
     g_state.binoculars = (footer.binoculars & 1) != 0;
     g_state.abilities.high_jump = (footer.binoculars & 2) != 0;
+    g_state.abilities.mine_cart = (footer.binoculars & 4) != 0;
 
     g_state.stage_colored_crystals.clear();
     g_state.activated_golden_gobbos.clear();
@@ -814,6 +821,7 @@ static void generate_new_save_seed_locked(uint64_t seed) {
         g_state.abilities.power_gloves = true;
         g_state.abilities.long_jump = true;
         g_state.abilities.high_jump = true;
+        g_state.abilities.mine_cart = true;
     }
     if (!g_state.shuffle_levers) g_state.abilities.lever_wrench = true;
     if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
@@ -1281,6 +1289,7 @@ static void load_config_ini(const char* ini_path) {
             g_state.abilities.power_gloves = true;
             g_state.abilities.long_jump = true;
             g_state.abilities.high_jump = true;
+            g_state.abilities.mine_cart = true;
         } else {
             g_state.abilities.tail_whack = false;
             g_state.abilities.butt_stomp = false;
@@ -1288,6 +1297,7 @@ static void load_config_ini(const char* ini_path) {
             g_state.abilities.power_gloves = false;
             g_state.abilities.long_jump = false;
             g_state.abilities.high_jump = false;
+            g_state.abilities.mine_cart = false;
         }
         g_state.abilities.lever_wrench = !g_state.shuffle_levers;
         g_state.abilities.vehicle_license = !g_state.shuffle_vehicles;
@@ -1445,6 +1455,7 @@ static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance&
         case 7200007: out_name = "Airplane Ammo Feed"; return;
         case 7200161: out_name = "Long Jump"; return;
         case 7200162: out_name = "High Jump"; return;
+        case 7200163: out_name = "Mine Cart"; return;
         case 7200008: out_name = "Sailor Village VIP Pass"; return;
         case 7200009: out_name = "Cossack Village VIP Pass"; return;
         case 7200010: out_name = "Caveman Village VIP Pass"; return;
@@ -1535,6 +1546,7 @@ static void apply_ap_item_by_id_locked(int item_id,
         case 7200006: g_state.abilities.vehicle_license = true; g_state.add_log("Unlocked Ability: Vehicle License!"); break;
         case 7200007: g_state.abilities.airplane_ammo_feed = true; g_state.add_log("Unlocked Ability: Airplane Ammo Feed!"); break;
         case 7200162: g_state.abilities.high_jump = true; g_state.add_log("Unlocked Ability: High Jump!"); break;
+        case 7200163: g_state.abilities.mine_cart = true; g_state.add_log("Unlocked Ability: Mine Cart!"); break;
         case 7200161: g_state.abilities.long_jump = true; g_state.add_log("Unlocked Ability: Long Jump!"); break;
         case 7200008: g_state.vip_passes.insert("Sailor Village"); g_state.add_log("Received Pete's VIP Pass (Sailor Village)!"); break;
         case 7200009: g_state.vip_passes.insert("Cossack Village"); g_state.add_log("Received Pete's VIP Pass (Cossack Village)!"); break;
@@ -1809,6 +1821,7 @@ static std::string build_state_json_locked() {
        << "\"butt_stomp\":" << (g_state.abilities.butt_stomp ? "true" : "false") << ","
        << "\"long_jump\":" << (g_state.abilities.long_jump ? "true" : "false") << ","
        << "\"high_jump\":" << (g_state.abilities.high_jump ? "true" : "false") << ","
+       << "\"mine_cart\":" << (g_state.abilities.mine_cart ? "true" : "false") << ","
        << "\"climbing_claws\":" << (g_state.abilities.climbing_claws ? "true" : "false") << ","
        << "\"power_gloves\":" << (g_state.abilities.power_gloves ? "true" : "false") << ","
        << "\"lever_wrench\":" << (g_state.abilities.lever_wrench ? "true" : "false") << ","
@@ -1903,7 +1916,11 @@ static std::string handle_command_locked(const std::string& req) {
             }
             if (fresh.empty()) break;
             if (sphere) ss << ",";
-            ss << "{\"checks\":" << fresh.size() << ",\"items\":[";
+            int per_stage[20] = {0};
+            for (int loc : fresh) ++per_stage[loc >= SOLO_CHECK_POOL_SIZE ? (loc - SOLO_CHECK_POOL_SIZE) / 100 : loc / 9];
+            ss << "{\"checks\":" << fresh.size() << ",\"stages\":[";
+            for (int s = 0; s < 20; ++s) ss << (s ? "," : "") << per_stage[s];
+            ss << "],\"items\":[";
             bool first = true;
             for (int loc : fresh) {
                 seen[loc] = 1;
@@ -1977,6 +1994,7 @@ static std::string handle_command_locked(const std::string& req) {
             g_state.abilities.power_gloves = true;
             g_state.abilities.long_jump = true;
             g_state.abilities.high_jump = true;
+            g_state.abilities.mine_cart = true;
         }
         if (!g_state.shuffle_levers) g_state.abilities.lever_wrench = true;
         if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
@@ -2176,6 +2194,7 @@ static std::string handle_command_locked(const std::string& req) {
         else if (item_name == "Airplane Ammo Feed") g_state.abilities.airplane_ammo_feed = true;
         else if (item_name == "Long Jump") g_state.abilities.long_jump = true;
         else if (item_name == "High Jump") g_state.abilities.high_jump = true;
+        else if (item_name == "Mine Cart") g_state.abilities.mine_cart = true;
         else if (item_name == "Jigsaw Piece" || group == "Jigsaw Pieces") {
             g_state.jigsaw_pieces += 1;
             g_pending_jigsaws.fetch_add(1);
@@ -3993,6 +4012,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             g_lead_boots_active.store(false);
             g_gloves_lock_active.store(false);
             g_lever_lock_active.store(false);
+            g_cart_lock_active.store(false);
         }
         if (g_state.is_randomizer_active() && paused == 0 && curr->map_type != 3) {
             bool has_tail_knot = false;
@@ -4028,6 +4048,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             g_lead_boots_active.store(has_lead_boots);
             g_gloves_lock_active.store(!g_state.abilities.power_gloves);
             g_lever_lock_active.store(!g_state.abilities.lever_wrench);
+            g_cart_lock_active.store(!g_state.abilities.mine_cart);
 
             if (g_state.debug_watch) {
                 static int32_t s_prev_state = -1;
@@ -4795,6 +4816,16 @@ static const MoveGate MOVE_GATES[] = {
 };
 static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t which) {
     g_orig_strat_read_value(strat, source, which);
+    // Mine Cart lock: a rideable cart ("MineCartFlat", "BoneMineCartFlat") sets off when its script reads value 32,
+    // "Croc is on me", as set. While Mine Cart is locked the cart reads 0, so Croc can stand on it but it stays put.
+    if (which == 32 && g_cart_lock_active.load(std::memory_order_relaxed)) {
+        uint8_t* cs = static_cast<uint8_t*>(strat);
+        const char* nm = *reinterpret_cast<const char* const*>(cs + 0x30);
+        if (nm && readable_memory(nm, 20) && (!std::strcmp(nm, "MineCartFlat") || !std::strcmp(nm, "BoneMineCartFlat")) &&
+            *reinterpret_cast<int32_t*>(cs + 0x138) > 0) {
+            *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(cs + 0x130) - 4) = 0;
+        }
+    }
     // Lead Boots trap: Croc's own script never sees Jump (every jump, on foot, swimming or climbing, starts from
     // one of his reads of values 42, 44 or 144). The controller is left alone.
     if ((which == 42 || which == 44 || which == 144) && g_lead_boots_active.load(std::memory_order_relaxed) &&

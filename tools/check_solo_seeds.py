@@ -16,7 +16,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 43831
-NAMES = {7200001: 'Tail Whack', 7200002: 'Butt Stomp', 7200003: 'Climbing Claws', 7200004: 'Power Gloves',
+NAMES = {7200163: 'Mine Cart', 7200001: 'Tail Whack', 7200002: 'Butt Stomp', 7200003: 'Climbing Claws', 7200004: 'Power Gloves',
          7200005: 'Lever Wrench', 7200006: 'Vehicle License', 7200007: 'Airplane Ammo', 7200161: 'Long Jump',
          7200162: 'High Jump', 7200142: 'Clockwork', 7200143: 'Strawberry jelly', 7200144: 'Orange jelly',
          7200145: 'Lime jelly'}
@@ -49,18 +49,52 @@ def main():
                 break
             except OSError:
                 time.sleep(0.1)
+        depth = []          # spheres per seed
+        last_ability = []   # sphere in which the last ability is found
+        revisit_seeds = 0   # seeds where an item found in sphere 2+ opens more checks in a stage already entered
+        late_revisits = 0   # ... where that item was found in sphere 4 or later
+        chains = 0          # seeds where a revisit itself holds a needed item (unlock -> old stage -> another unlock)
+        verbose = count <= 5
         for seed in range(1, count + 1):
             send({'command': 'start_new_save', 'slot': 0, 'seed': seed * 7919})
             r = send({'command': 'debug_solo_logic'})
-            line = []
-            for k, sp in enumerate(r['spheres']):
-                items = [NAMES.get(i, 'Key %d' % (i - 7200022)) for i in sp['items']]
-                line.append('%d: %d checks%s' % (k, sp['checks'], (' [' + ', '.join(items) + ']') if items else ''))
-            print('seed %d  door 1 -> stage %d  reachable %d  stranded %d' % (seed, r['door1_stage'], r['reachable'], r['stranded_items']))
-            for l in line:
-                print('    ' + l)
+            spheres = r['spheres']
+            first_seen = {}
+            revisit = late = chain = False
+            for k, sp in enumerate(spheres):
+                back = [s for s, n in enumerate(sp['stages']) if n and s in first_seen and first_seen[s] < k]
+                for s, n in enumerate(sp['stages']):
+                    if n and s not in first_seen:
+                        first_seen[s] = k
+                if back and k >= 2:
+                    revisit = True
+                    if k >= 4:
+                        late = True
+                    # Does a later sphere open only because of something found here? Approximated by: this
+                    # sphere re-enters an old stage and also yields a needed item.
+                    if sp['items']:
+                        chain = True
+            depth.append(len(spheres))
+            ab = [k for k, sp in enumerate(spheres) if any(i in NAMES and i not in (7200142, 7200143, 7200144, 7200145) for i in sp['items'])]
+            last_ability.append(max(ab) if ab else 0)
+            revisit_seeds += revisit
+            late_revisits += late
+            chains += chain
             if r['stranded_items']:
                 bad += 1
+                print('seed %d: %d needed items out of reach' % (seed, r['stranded_items']))
+            if verbose:
+                print('seed %d  door 1 -> stage %d  reachable %d  stranded %d' % (seed, r['door1_stage'], r['reachable'], r['stranded_items']))
+                for k, sp in enumerate(spheres):
+                    items = [NAMES.get(i, 'Key %d' % (i - 7200022)) for i in sp['items']]
+                    where = ' '.join('s%d:%d' % (s, n) for s, n in enumerate(sp['stages']) if n)
+                    print('    %d: %d checks (%s)%s' % (k, sp['checks'], where, (' [' + ', '.join(items) + ']') if items else ''))
+        n = float(count)
+        print('seeds %d   spheres min %d / avg %.1f / max %d' % (count, min(depth), sum(depth) / n, max(depth)))
+        print('last ability found in sphere: min %d / avg %.1f / max %d' % (min(last_ability), sum(last_ability) / n, max(last_ability)))
+        print('seeds where a later find re-opens a stage already entered: %d (%.0f%%)' % (revisit_seeds, 100 * revisit_seeds / n))
+        print('  of those, the find was in sphere 4 or later: %d (%.0f%%)' % (late_revisits, 100 * late_revisits / n))
+        print('  and the re-opened checks held another needed item: %d (%.0f%%)' % (chains, 100 * chains / n))
     finally:
         proc.terminate()
         try:
