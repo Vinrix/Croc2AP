@@ -169,14 +169,16 @@
     "name": "Silver Key",
     "classification": "progression",
     "group": "Keys",
-    "default_count": 8
+    "default_count": 0,
+    "note": "Opens nothing in the game. Kept so old seeds still know the id; no longer placed."
   },
   {
     "id": 7200020,
     "name": "Gold Key",
     "classification": "progression",
     "group": "Keys",
-    "default_count": 4
+    "default_count": 0,
+    "note": "Opens nothing in the game. Kept so old seeds still know the id; no longer placed."
   },
   {
     "id": 7200021,

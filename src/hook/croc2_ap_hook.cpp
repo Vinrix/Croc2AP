@@ -76,7 +76,6 @@ static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
 static void clear_held_objects(); // Power Gloves / Lever Wrench lists, per map
 static void release_unlocked_objects();
-static std::vector<int> early_loose_crystal_numbers(int stage, size_t want);
 // Move locks, set in Hooked_ReadInput and applied in Hooked_StratReadValue (see there).
 static std::atomic<bool> g_jump_lock_active{false}; // Butt Stomp (and the High Jump out of it)
 static std::atomic<bool> g_tail_lock_active{false}; // Tail Whack (locked, or the Tail Knot trap)
@@ -560,7 +559,6 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     // - 16 Trophies (7200017)
     // - 97 remaining Colored Crystals (7200045..7200141)
     // - 8 Heart Pots (7200021)
-    // - 6 Silver Keys (7200019) + 4 Gold Keys (7200020)
     // - 4 Clockwork Gobbos (7200142), 4 Red Jellies (7200143), 4 Blue Jellies (7200144), 4 Green Jellies (7200145)
     // - Traps (Fire Breakout, Ice Physics, Reverse Controls, Dantini Ambush, Speed)
     std::vector<int> pool;
@@ -576,8 +574,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     for (int i = 0; i < 16; ++i) pool.push_back(7200017); // 16 Trophies
     for (int id = 7200045; id <= 7200141; ++id) pool.push_back(id); // Colored Crystals
     for (int i = 0; i < 8; ++i) pool.push_back(7200021); // 8 Heart Pots
-    for (int i = 0; i < 6; ++i) pool.push_back(7200019); // 6 Silver Keys
-    for (int i = 0; i < 4; ++i) pool.push_back(7200020); // 4 Gold Keys
+    for (int i = 0; i < 10; ++i) pool.push_back(7200150); // Croc Crystals (10), where the Silver / Gold Keys used to be
     for (int i = 0; i < 4; ++i) {
         pool.push_back(7200142); // Clockwork Gobbo
         pool.push_back(7200143); // Gummi Jump (Red Jelly)
@@ -599,21 +596,10 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     std::vector<int> wc_start_stage_slots;
     std::vector<int> wc_sphere1_slots;
     std::vector<int> wc_remaining_slots;
-    // The start stage's 20 "safe" checks hold the abilities and keys. Crystal checks are now specific crystals, so
-    // these must be ones Croc can pick up with a plain jump: loose crystals in the stage's first map, never a
-    // smash box's (those need Butt Stomp). Stages without enough loose crystals fall back to the lowest numbers.
-    // Spread over the whole first map, picked by the seed: with "the first 20" every ability was sitting on the
-    // crystals right in front of the door and the locks were over within seconds.
-    std::vector<int> start_numbers = early_loose_crystal_numbers(door1_target, 0);
-    std::shuffle(start_numbers.begin(), start_numbers.end(), rng);
-    if (start_numbers.size() > 20) start_numbers.resize(20);
-    for (int n = 1; n <= 100 && start_numbers.size() < 20; ++n) {
-        if (std::find(start_numbers.begin(), start_numbers.end(), n) == start_numbers.end()) start_numbers.push_back(n);
-    }
     for (int s = 0; s < 20; ++s) {
         for (int c = 0; c < 100; ++c) {
             int wc_idx = s * 100 + c;
-            if (s == door1_target && std::find(start_numbers.begin(), start_numbers.end(), c + 1) != start_numbers.end()) {
+            if (s == door1_target && c < 20) {
                 wc_start_stage_slots.push_back(wc_idx);
             } else if (s < 5 && c < 20) {
                 wc_sphere1_slots.push_back(wc_idx);
@@ -635,7 +621,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200144,                                     // Jelly Jump Blue Jelly (Inventory Wheel)
         7200145,                                     // High Jelly Jump Green Jelly (Inventory Wheel)
         7200146,                                     // Binoculars (HUD / Inventory)
-        7200019, 7200020,                            // Silver Key + Gold Key (Inventory Wheel & HUD)
+        7200150, 7200150,                            // Croc Crystals (10) x2 (were Silver Key + Gold Key)
         7200021,                                     // Heart Pot
         7200042,                                     // Find the Key! Save the Gobbo! - Red Crystal
         7200161                                      // Long Jump
@@ -649,7 +635,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200143, 7200143,                            // 2 Gummi Jump Red Jellies
         7200144, 7200144,                            // 2 Jelly Jump Blue Jellies
         7200145, 7200145,                            // 2 High Jelly Jump Green Jellies
-        7200019, 7200020,                            // Silver Key + Gold Key
+        7200150, 7200150,                            // Croc Crystals (10) x2 (were Silver Key + Gold Key)
         7200012, 7200018,                            // 1 Jigsaw Piece + 1 Golden Gobbo
         7200021, 7200021,                            // 2 Heart Pots
         7200043, 7200044, 7200045, 7200046,          // Sailor Door 1 Colored Crystals
@@ -676,8 +662,8 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     for (int i = 0; i < 16; ++i) wc_pool.push_back(7200017); // 16 Trophies
     for (int id = 7200047; id <= 7200141; ++id) wc_pool.push_back(id); // Colored Crystals
     for (int i = 0; i < 8; ++i) wc_pool.push_back(7200021); // 8 Heart Pots
-    for (int i = 0; i < 6; ++i) wc_pool.push_back(7200019); // 6 Silver Keys
-    for (int i = 0; i < 4; ++i) wc_pool.push_back(7200020); // 4 Gold Keys
+    // (Silver Keys and Gold Keys used to be here. They open nothing in the game; the pool is topped up with
+    // Croc Crystals below instead.)
     for (int i = 0; i < 10; ++i) {
         wc_pool.push_back(7200142); // Clockwork Gobbo
         wc_pool.push_back(7200143); // Red Jelly
@@ -3759,6 +3745,11 @@ static void drain_pending_native_inventory_grants() {
     // The game holds at most 9 of each of these (AddInventoryItem adds nothing once a count is at 9, and does not
     // clamp below that). Without the cap here, a received total above 9 made this call AddInventoryItem every
     // frame for ever, which rebuilds the item wheel each time: the wheel couldn't be cycled or used.
+    //
+    // Jellies and Clockwork Gobbos are kept topped up to the number RECEIVED (up to 9 held). Using one does not
+    // reduce the received total, so the count comes straight back: once the first one arrives, that kind never
+    // runs out, and nothing received beyond 9 is lost. That is deliberate: the logic treats each kind as
+    // "have it or not" (a marker can then never become unreachable by spending the item somewhere else).
     auto sync_item = [&](int32_t current_count, int32_t desired_count, int32_t item_type) {
         const int32_t cap = 9;
         if (desired_count > cap) desired_count = cap;
@@ -4836,24 +4827,6 @@ static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t 
         }
     }
     if (which != 44 && which != 42) return;
-    // Research: which scripts act on Circle (0x2000) - carrying, pushing, levers. Logged once per script position.
-    if (g_state.debug_watch) {
-        uint8_t* rs = static_cast<uint8_t*>(strat);
-        if (*reinterpret_cast<int32_t*>(rs + 0x138) > 0) {
-            const int32_t v = *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(rs + 0x130) - 4);
-            const int32_t* rpc = *reinterpret_cast<const int32_t**>(rs);
-            static const int32_t* s_last_pc = nullptr;
-            if ((v & 0x2000) && rpc != s_last_pc && readable_memory(rpc, 6 * sizeof(int32_t))) {
-                s_last_pc = rpc;
-                const char* nm = *reinterpret_cast<const char**>(rs + 0x30);
-                char b[160];
-                std::snprintf(b, sizeof(b), "CIRCLE read %d by %.40s next=%d %d %d %d %d %d", which,
-                              (nm && readable_memory(nm, 1)) ? nm : "?", rpc[0], rpc[1], rpc[2], rpc[3], rpc[4], rpc[5]);
-                std::lock_guard<std::mutex> lock(g_mutex);
-                debug_log_locked(b);
-            }
-        }
-    }
     uint8_t* sp = static_cast<uint8_t*>(strat);
     if (*reinterpret_cast<int32_t*>(sp + 0x138) <= 0) return;
     int32_t* top = reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4);
@@ -4974,18 +4947,6 @@ enum { CRYSTAL_LOOSE = 0, CRYSTAL_BOX = 1, CRYSTAL_RING = 2, CRYSTAL_AWARD = 3 }
 static const CrystalSource kCrystalSources[] = {
 #include "crystal_ids.inc"
 };
-// The numbers of the loose crystals in a stage's first map (want = 0: all of them).
-static std::vector<int> early_loose_crystal_numbers(int stage, size_t want) {
-    std::vector<int> out;
-    const char* first_map = nullptr;
-    for (const CrystalSource& s : kCrystalSources) {
-        if (s.stage != stage || s.kind != CRYSTAL_LOOSE) continue;
-        if (!first_map) first_map = s.wad;
-        if (std::strcmp(first_map, s.wad) != 0) break;
-        if (want == 0 || out.size() < want) out.push_back(s.first);
-    }
-    return out;
-}
 static bool crystal_number_claimed_locked(int stage, int n) {
     return (g_state.white_crystals_claimed[stage][(n - 1) / 8] & (1u << ((n - 1) % 8))) != 0;
 }
