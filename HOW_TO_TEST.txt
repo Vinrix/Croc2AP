@@ -4,9 +4,22 @@ CROC 2 ARCHIPELAGO - TEST BUILD
 This is a test build from a pull request. It is set up so you don't have to edit any files.
 
 INSTALL
-  1. Close Croc 2 and the launcher.
-  2. Run Install_Croc2AP.bat (or Croc2AP_Setup.exe). It keeps your existing croc2_mod.ini.
-  3. Start the launcher from your Croc 2 folder and start a NEW game in an EMPTY save slot.
+  1. Unzip the download into a folder of its own first (right-click the zip, Extract All).
+     Running files from inside the zip does not work.
+  2. Close Croc 2 and the launcher.
+  3. Double-click Install_Croc2AP.bat and say Yes when Windows asks for permission.
+     If Windows shows "Windows protected your PC", click More info, then Run anyway.
+     It keeps your existing croc2_mod.ini. Wait for "Installation Complete!".
+
+START A TEST RUN
+  1. Open your Croc 2 folder and start Croc2ArchipelagoLauncher.exe.
+  2. Choose "Solo randomizer".
+  3. On the settings page pick the Standard preset, then change "White crystal checks" to
+     "All 100 per stage (2,000 checks)".
+     THIS IS THE ONLY VALID MODE FOR NOW. The logic for "None", "Every 50th" and "Every 10th" is not
+     built yet: a solo game in those modes is not checked for being finishable and can leave you stuck.
+     Please don't test them or report problems from them yet.
+  4. Click "Start solo run", pick an EMPTY save slot and choose New Game.
      Saves made with an older build use old rules and old crystal numbers.
 
 WHAT IS DIFFERENT IN A TEST BUILD
