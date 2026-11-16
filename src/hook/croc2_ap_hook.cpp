@@ -695,12 +695,14 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     for (int i = 0; i < 8; ++i) wc_pool.push_back(7200021); // 8 Heart Pots
     // (Silver Keys and Gold Keys used to be here. They open nothing in the game; the pool is topped up with
     // Croc Crystals below instead.)
-    for (int i = 0; i < 10; ++i) {
-        wc_pool.push_back(7200142); // Clockwork Gobbo
-        wc_pool.push_back(7200143); // Red Jelly
-        wc_pool.push_back(7200144); // Blue Jelly
-        wc_pool.push_back(7200145); // Green Jelly
-    }
+    // Consumables: about three times what the levels need, so spending one in the wrong place doesn't lock a
+    // check out. The levels have 13 Clockwork Gobbo markers, 9 orange jelly markers, 4 lime and 1 strawberry
+    // (docs/logic.md). Counting the copies placed above (7 or more of each kind), these bring the totals to at
+    // least 39 Clockwork Gobbos, 27 orange jellies, 13 lime and 9 strawberry.
+    for (int i = 0; i < 32; ++i) wc_pool.push_back(7200142); // Clockwork Gobbo
+    for (int i = 0; i < 20; ++i) wc_pool.push_back(7200144); // orange ("Blue") jelly
+    for (int i = 0; i < 6; ++i) wc_pool.push_back(7200145);  // lime ("Green") jelly
+    for (int i = 0; i < 2; ++i) wc_pool.push_back(7200143);  // strawberry ("Red") jelly
     for (int i = 0; i < 45; ++i) wc_pool.push_back(trap_cycle[i % 5]); // 45 Traps
     const int filler_cycle[3] = {7200148, 7200149, 7200150};
     while (wc_pool.size() < wc_remaining_slots.size()) {
@@ -743,6 +745,7 @@ static void sync_state_to_save_footer_locked() {
         footer->blue_jellies = static_cast<uint8_t>(g_state.blue_jellies);
         footer->green_jellies = static_cast<uint8_t>(g_state.green_jellies);
         footer->clockwork_gobbos = static_cast<uint8_t>(g_state.clockwork_gobbos);
+        for (int k = 0; k < 4; ++k) footer->items_delivered[k] = static_cast<uint8_t>(g_state.items_delivered[k]);
         // Bit 0 binoculars, bit 1 High Jump (the abilities byte above is full).
         footer->binoculars = static_cast<uint8_t>((g_state.binoculars ? 1 : 0) | (g_state.abilities.high_jump ? 2 : 0) |
                                                   (g_state.abilities.mine_cart ? 4 : 0)); // bit 2 Mine Cart
@@ -787,6 +790,7 @@ static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& fo
     g_state.blue_jellies = footer.blue_jellies;
     g_state.green_jellies = footer.green_jellies;
     g_state.clockwork_gobbos = footer.clockwork_gobbos;
+    for (int k = 0; k < 4; ++k) g_state.items_delivered[k] = footer.items_delivered[k];
     g_state.binoculars = (footer.binoculars & 1) != 0;
     g_state.abilities.high_jump = (footer.binoculars & 2) != 0;
     g_state.abilities.mine_cart = (footer.binoculars & 4) != 0;
@@ -855,6 +859,7 @@ static void generate_new_save_seed_locked(uint64_t seed) {
     g_state.red_jellies = 0;
     g_state.blue_jellies = 0;
     g_state.green_jellies = 0;
+    for (int k = 0; k < 4; ++k) g_state.items_delivered[k] = 0;
     g_state.binoculars = false;
     g_state.stage_colored_crystals.clear();
     g_state.activated_golden_gobbos.clear();
@@ -3781,11 +3786,6 @@ static void drain_pending_native_inventory_grants() {
     // The game holds at most 9 of each of these (AddInventoryItem adds nothing once a count is at 9, and does not
     // clamp below that). Without the cap here, a received total above 9 made this call AddInventoryItem every
     // frame for ever, which rebuilds the item wheel each time: the wheel couldn't be cycled or used.
-    //
-    // Jellies and Clockwork Gobbos are kept topped up to the number RECEIVED (up to 9 held). Using one does not
-    // reduce the received total, so the count comes straight back: once the first one arrives, that kind never
-    // runs out, and nothing received beyond 9 is lost. That is deliberate: the logic treats each kind as
-    // "have it or not" (a marker can then never become unreachable by spending the item somewhere else).
     auto sync_item = [&](int32_t current_count, int32_t desired_count, int32_t item_type) {
         const int32_t cap = 9;
         if (desired_count > cap) desired_count = cap;
@@ -3794,18 +3794,29 @@ static void drain_pending_native_inventory_grants() {
         }
     };
 
-    // Gummi Jump (Red Jelly) -> Wheel item_type 5 (0x140BA9B48)
-    sync_item(i32(RVA_INV_STRAWBERRY_JELLIES), g_state.red_jellies, 5);
-
-    // Jelly Jump (Blue Jelly) -> Wheel item_type 7 (0x140BA9B4C)
-    sync_item(i32(RVA_INV_ORANGE_JELLIES), g_state.blue_jellies, 7);
-
-    // High Jelly Jump (Green Jelly) -> Wheel item_type 6 (0x140BA9B50)
-    sync_item(i32(RVA_INV_LIME_JELLIES), g_state.green_jellies, 6);
-
+    // Jellies and Clockwork Gobbos are consumables, as in the unmodified game: using one uses it up.
+    // Each one received is handed to the backpack exactly once. The backpack holds 9 of a kind; anything received
+    // beyond that waits in reserve and is handed over as room appears, so nothing is lost. The backpack counts
+    // live in the game's own save data (0x140BA9B48.. is inside the save table), and the number handed over so far
+    // is kept in the randomizer footer beside them, so the two always describe the same moment.
+    // (Before, the count was simply kept topped up to the number received, so a kind never ran out once the first
+    // one had arrived.)
+    bool delivered_any = false;
+    auto deliver = [&](uintptr_t count_rva, int received, int& delivered, int32_t item_type) {
+        const int reserve = received - delivered;
+        const int room = 9 - i32(count_rva);
+        if (reserve <= 0 || room <= 0) return;
+        const int n = reserve < room ? reserve : room;
+        fn_add_item(item_type, 0, n, 0, 0);
+        delivered += n;
+        delivered_any = true;
+    };
+    deliver(RVA_INV_STRAWBERRY_JELLIES, g_state.red_jellies, g_state.items_delivered[0], 5);  // "Gummi Jump (Red Jelly)"
+    deliver(RVA_INV_ORANGE_JELLIES, g_state.blue_jellies, g_state.items_delivered[1], 7);     // "Jelly Jump (Blue Jelly)"
+    deliver(RVA_INV_LIME_JELLIES, g_state.green_jellies, g_state.items_delivered[2], 6);      // "High Jelly Jump (Green Jelly)"
     // Clockwork Gobbo -> item type 8 (0x140BA9B58). (This used to also write 0x140BA9B38, taken for a HUD
     // clockwork count; that address is the jigsaw piece counter.)
-    sync_item(i32(RVA_INV_CLOCKWORK), g_state.clockwork_gobbos, 8);
+    deliver(RVA_INV_CLOCKWORK, g_state.clockwork_gobbos, g_state.items_delivered[3], 8);
 
     // Golden Gobbos: the game's counter is 0x140BA9B30 (opcode 249). Received Golden Gobbos are not written to
     // it yet: whether a village's Golden Gobbo door reads this counter or per-level state is not known. The
@@ -3837,6 +3848,10 @@ static void drain_pending_native_inventory_grants() {
 
     reset_pending_native_grants();
     g_need_full_inventory_sync.store(false);
+    if (delivered_any) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        sync_state_to_save_footer_locked(); // the handed-over counts go into the save data with the backpack counts
+    }
 }
 
 static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {

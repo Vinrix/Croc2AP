@@ -186,8 +186,12 @@ struct Croc2RandoSaveFooter {
     // Added later; zero on older saves. Bits: 0..19 Golden Gobbo per stage, 20..23 Jigsaw per village,
     // 24..43 Pete's Store slot (village*5 + slot), 44..51 bosses. See EXTRA_CHECK_* in croc2_ap_hook.cpp.
     uint8_t extra_checks[8] = {0};
+    // Added later; zero on older saves. See ModState::items_delivered.
+    uint8_t items_delivered[4] = {0};
 };
 #pragma pack(pop)
+// The footer sits at RVA_RANDO_SAVE_FOOTER_OFF (0x17800) inside the game's 0x17A30-byte save table.
+static_assert(sizeof(Croc2RandoSaveFooter) <= 0x17A30 - 0x17800, "the randomizer footer must fit in the save table");
 
 // Archipelago Text Client Importance Color Classification
 enum class ItemImportance : uint8_t {
@@ -355,6 +359,9 @@ struct ModState {
     int red_jellies = 0;
     int blue_jellies = 0;
     int green_jellies = 0;
+    // How many of the received jellies / Clockwork Gobbos have been put into Croc's backpack so far, in the order
+    // strawberry ("red"), orange ("blue"), lime ("green"), Clockwork Gobbo. The rest wait in reserve.
+    int items_delivered[4] = {0, 0, 0, 0};
     bool binoculars = false;
 
     PlayerAbilities abilities;

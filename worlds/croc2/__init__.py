@@ -122,13 +122,14 @@ class Croc2World(World):
                     pool.append(self.create_item(key_name))
 
         # 3b. Jellies and Clockwork Gobbos gate checks (docs/logic.md): markers above jelly points, and every
-        #     Clockwork Gobbo section. They are progression, and are always in the pool. Once one of a kind has
-        #     been received the mod keeps the backpack topped up, so one is enough; the extras are spares.
+        #     Clockwork Gobbo section. They are progression, and are always in the pool. They are consumables
+        #     (using one uses it up), so the pool holds three times what the levels need: 13 Clockwork Gobbo
+        #     markers, 9 orange ("Blue") jelly markers, 4 lime ("Green") and 1 strawberry ("Red").
         for consumable, copies in (
-            ("Jelly Jump (Blue Jelly)", 3),
-            ("High Jelly Jump (Green Jelly)", 3),
-            ("Gummi Jump (Red Jelly)", 2),
-            ("Clockwork Gobbo", 4),
+            ("Jelly Jump (Blue Jelly)", 27),
+            ("High Jelly Jump (Green Jelly)", 12),
+            ("Gummi Jump (Red Jelly)", 3),
+            ("Clockwork Gobbo", 39),
         ):
             for _ in range(copies):
                 pool.append(self.create_item(consumable))

@@ -40,15 +40,19 @@ def main():
     ini = os.path.join(ROOT, 'build', 'check_solo.ini')
     with open(ini, 'w') as f:
         f.write('[ArchipelagoMod]\nenabled = true\nport = %d\n' % PORT)
-    proc = subprocess.Popen([os.path.join(ROOT, 'build', 'test_host.exe'), ini], cwd=ROOT)
-    bad = 0
-    try:
-        for _ in range(40):
+    def start_host():
+        p = subprocess.Popen([os.path.join(ROOT, 'build', 'test_host.exe'), ini], cwd=ROOT)
+        for _ in range(150):  # it can take a few seconds to start listening
             try:
                 send({'command': 'get_state'})
                 break
             except OSError:
                 time.sleep(0.1)
+        return p, time.time()
+
+    proc, started = start_host()
+    bad = 0
+    try:
         depth = []          # spheres per seed
         last_ability = []   # sphere in which the last ability is found
         revisit_seeds = 0   # seeds where an item found in sphere 2+ opens more checks in a stage already entered
@@ -56,6 +60,10 @@ def main():
         chains = 0          # seeds where a revisit itself holds a needed item (unlock -> old stage -> another unlock)
         verbose = count <= 5
         for seed in range(1, count + 1):
+            if time.time() - started > 7:  # tests/test_host.cpp exits by itself after 12 seconds
+                proc.terminate()
+                proc.wait()
+                proc, started = start_host()
             send({'command': 'start_new_save', 'slot': 0, 'seed': seed * 7919})
             r = send({'command': 'debug_solo_logic'})
             spheres = r['spheres']
