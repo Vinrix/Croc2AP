@@ -38,6 +38,15 @@ def _load_logic() -> List[dict]:
 
 
 LOGIC: List[dict] = _load_logic()
+
+
+def _load_consumable_need() -> Dict[str, int]:
+    """How many of each consumable must be held before a check behind one of its markers is in logic."""
+    raw = pkgutil.get_data(__package__ or "worlds.croc2", "data/logic_compiled.json")
+    return json.loads(raw.decode("utf-8")).get("consumable_need", {}) if raw else {}
+
+
+CONSUMABLE_NEED: Dict[str, int] = _load_consumable_need()
 LOGIC_BY_NAME: Dict[str, dict] = {entry["name"].lower(): entry for entry in LOGIC}
 
 

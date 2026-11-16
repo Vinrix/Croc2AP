@@ -1,5 +1,5 @@
 {
- "_about": "Per-stage logic. Atoms: TW Tail Whack, BS Butt Stomp, HJ High Jump (needs BS too), LJ Long Jump, CC Climbing Claws, PG Power Gloves, LW Lever Wrench, VL Vehicle License, JB orange/blue jelly, JG lime/green jelly, JP strawberry/purple jelly, CG Clockwork Gobbo, MC Mine Cart, GG the stage's Golden Gobbo area (all five of its coloured crystals), TH carry and throw an object (Power Gloves). '&' and, '|' or, '' nothing. A crystal number's rule = default & (box rule if it is a box crystal) & every matching entry in rules. Sources: StrategyWiki walkthrough and the GameFAQs guide by Robshi, matched to crystal clusters by landmarks (tools/crystal_clusters.py).",
+ "_about": "Per-stage logic. Atoms: TW Tail Whack, BS Butt Stomp, HJ High Jump (needs BS too), LJ Long Jump, CC Climbing Claws, PG Power Gloves, LW Lever Wrench, VL Vehicle License, JB orange/blue jelly, JG lime/green jelly, JP strawberry/purple jelly, CG Clockwork Gobbo, MC Mine Cart, GG the stage's Golden Gobbo area (all five of its coloured crystals), TH carry and throw an object (Power Gloves). '&' and, '|' or, '' nothing. A crystal number's rule = default & (box rule if it is a box crystal) & every matching entry in rules. Sources: StrategyWiki walkthrough and the GameFAQs guide by Robshi, matched to crystal clusters by landmarks (tools/crystal_clusters.py). 'markers' gives how many jelly points of each kind and Clockwork Gobbo markers a stage has; the totals are how many of each consumable must have been collected before a check behind one counts as in logic. 'entry' is what it takes to get into the stage at all; it is added to every check of the stage.",
  "T1L2": {
   "name": "Find the Key! Save the Gobbo!",
   "default": "",
@@ -20,10 +20,15 @@
   },
   "golden": "",
   "clear": "",
-  "notes": "Open level: pits are jumped, the third uses a rope, hippos lift Croc. Yellow needs the orange jelly marker (both guides)."
+  "notes": "Open level: pits are jumped, the third uses a rope, hippos lift Croc. Yellow needs the orange jelly marker (both guides).",
+  "markers": {
+   "JB": 1,
+   "CG": 1
+  }
  },
  "T1L3": {
   "name": "Find 5 Lost Treasure Chests",
+  "entry": "MC",
   "default": "MC",
   "box": "BS",
   "award": "",
@@ -43,10 +48,15 @@
   },
   "golden": "",
   "clear": "",
-  "notes": "The level is a hub of mine cart tracks; every chest and almost every crystal is reached by cart, so everything needs Mine Cart. Red needs a triple jump and yellow the orange jelly (both guides). Numbers 51-100 are the five chests, 10 each."
+  "notes": "The level is a hub of mine cart tracks; every chest and almost every crystal is reached by cart, so everything needs Mine Cart. Red needs a triple jump and yellow the orange jelly (both guides). Numbers 51-100 are the five chests, 10 each.",
+  "markers": {
+   "JB": 1,
+   "CG": 1
+  }
  },
  "T1L4": {
   "name": "Get the Gobbo's Sandwich!",
+  "entry": "CC",
   "default": "CC",
   "box": "BS",
   "rules": [
@@ -80,7 +90,11 @@
   },
   "golden": "",
   "clear": "BS&TW",
-  "notes": "The level opens with monkey bars over spikes, so everything needs Climbing Claws. The crow is killed with the tail and the exit gong is hit with it."
+  "notes": "The level opens with monkey bars over spikes, so everything needs Climbing Claws. The crow is killed with the tail and the exit gong is hit with it.",
+  "markers": {
+   "JG": 1,
+   "CG": 1
+  }
  },
  "T1L6": {
   "name": "Save the Bird from the Thief",
@@ -107,10 +121,16 @@
   },
   "golden": "",
   "clear": "TW",
-  "notes": "Ropes, hippos and crumbling boxes need no ability. The thief is killed with an attack and the exit gong is hit with the tail."
+  "notes": "Ropes, hippos and crumbling boxes need no ability. The thief is killed with an attack and the exit gong is hit with the tail.",
+  "markers": {
+   "JB": 1,
+   "JG": 1,
+   "CG": 1
+  }
  },
  "T1L5": {
   "name": "Croc Vs Dantini Boat Race",
+  "entry": "VL",
   "default": "VL",
   "award": "",
   "rules": [],
@@ -155,7 +175,11 @@
   },
   "golden": "BS",
   "clear": "BS&TH",
-  "notes": "Nineteen of the twenty sources are boxes. Caves are entered by stomping cracked ice. Purple needs a triple jump off a gear box (both guides). The exit is opened by throwing a TNT barrel."
+  "notes": "Nineteen of the twenty sources are boxes. Caves are entered by stomping cracked ice. Purple needs a triple jump off a gear box (both guides). The exit is opened by throwing a TNT barrel.",
+  "markers": {
+   "JP": 1,
+   "CG": 1
+  }
  },
  "T2L3": {
   "name": "Chase the Choo Choo Train",
@@ -192,7 +216,11 @@
   },
   "golden": "",
   "clear": "TW&LW",
-  "notes": "Yellow is caged; its key is on the triple-jump path. The level ends by hitting the red lever with the tail."
+  "notes": "Yellow is caged; its key is on the triple-jump path. The level ends by hitting the red lever with the tail.",
+  "markers": {
+   "JB": 1,
+   "CG": 1
+  }
  },
  "T2L5": {
   "name": "It's just Snowball Madness!",
@@ -212,6 +240,7 @@
  },
  "T2L6": {
   "name": "Hang Glider Valley",
+  "entry": "VL",
   "default": "VL",
   "award": "",
   "rules": [],
@@ -271,7 +300,11 @@
   },
   "golden": "",
   "clear": "TH&BS",
-  "notes": "Every door past the first room is blown open by carrying a TNT box to it and throwing it. Only the boxes by the entrance and the jelly ledge are free of that."
+  "notes": "Every door past the first room is blown open by carrying a TNT box to it and throwing it. Only the boxes by the entrance and the jelly ledge are free of that.",
+  "markers": {
+   "JB": 1,
+   "CG": 1
+  }
  },
  "T3L2": {
   "name": "Find the Wheels in the Jungle!",
@@ -318,10 +351,15 @@
   },
   "golden": "CC&BS",
   "clear": "CC&BS",
-  "notes": "Only the two boxes by the entrance come before the first climb. The second wheel and yellow are at the far end; yellow needs a triple jump."
+  "notes": "Only the two boxes by the entrance come before the first climb. The second wheel and yellow are at the far end; yellow needs a triple jump.",
+  "markers": {
+   "JB": 2,
+   "CG": 1
+  }
  },
  "T3L3": {
   "name": "Find the Wheels in the Mine!",
+  "entry": "MC",
   "default": "MC",
   "box": "BS",
   "rules": [
@@ -350,10 +388,15 @@
   },
   "golden": "TW&LW",
   "clear": "CC&TH&TW&LW",
-  "notes": "The level starts on a mine cart, so everything needs Mine Cart. First wheel: explosive crates are picked up from the monkey bars and thrown at the glass crate. Second wheel: two levers. The exit is a Swap Meet Pete gong. Whether the second cave can be reached without the first lever is not settled by the guides, so it is treated as needing it."
+  "notes": "The level starts on a mine cart, so everything needs Mine Cart. First wheel: explosive crates are picked up from the monkey bars and thrown at the glass crate. Second wheel: two levers. The exit is a Swap Meet Pete gong. Whether the second cave can be reached without the first lever is not settled by the guides, so it is treated as needing it.",
+  "markers": {
+   "JG": 1,
+   "CG": 1
+  }
  },
  "T3L4": {
   "name": "Race Day at Goldrock",
+  "entry": "VL",
   "default": "VL",
   "award": "",
   "rules": [],
@@ -370,6 +413,7 @@
  },
  "T3L5": {
   "name": "Climb The Devil's Tower",
+  "entry": "CC",
   "default": "CC",
   "box": "BS",
   "rules": [
@@ -398,7 +442,11 @@
   },
   "golden": "CC",
   "clear": "CC",
-  "notes": "The second screen already needs two rock walls climbed, so everything needs Climbing Claws. Red is reached by platforms a gear box creates."
+  "notes": "The second screen already needs two rock walls climbed, so everything needs Climbing Claws. Red is reached by platforms a gear box creates.",
+  "markers": {
+   "JG": 1,
+   "CG": 1
+  }
  },
  "T3L7": {
   "name": "Save 50 Trapped Gobbos!",
@@ -425,7 +473,11 @@
   },
   "golden": "CC",
   "clear": "CC&BS&HJ",
-  "notes": "No loose crystals: one per Gobbo rescued, in the order they are saved, then fifty for saving them all. Water for the fires is picked up in the level. About a dozen Gobbos come before the first climb (StrategyWiki route)."
+  "notes": "No loose crystals: one per Gobbo rescued, in the order they are saved, then fifty for saving them all. Water for the fires is picked up in the level. About a dozen Gobbos come before the first climb (StrategyWiki route).",
+  "markers": {
+   "JB": 1,
+   "CG": 1
+  }
  },
  "T4L2": {
   "name": "Save 30 Gobbo babies!",
@@ -462,7 +514,10 @@
   },
   "golden": "TW&LW",
   "clear": "TH&HJ",
-  "notes": "Babies are carried and thrown into cribs. The Golden Gobbo is in a cage opened by a red lever."
+  "notes": "Babies are carried and thrown into cribs. The Golden Gobbo is in a cage opened by a red lever.",
+  "markers": {
+   "CG": 1
+  }
  },
  "T4L3": {
   "name": "Up the Waterfall",
@@ -496,7 +551,11 @@
   },
   "golden": "HJ&CC",
   "clear": "HJ&CC",
-  "notes": "Both guides: the ledge after the first box needs a triple jump, then a vine wall. Which crystals sit on the first ledge is judged from positions next to the start and the jelly marker."
+  "notes": "Both guides: the ledge after the first box needs a triple jump, then a vine wall. Which crystals sit on the first ledge is judged from positions next to the start and the jelly marker.",
+  "markers": {
+   "JB": 1,
+   "CG": 1
+  }
  },
  "T4L5": {
   "name": "Bride of the Dungeon of Defright",

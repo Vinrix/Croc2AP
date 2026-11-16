@@ -436,8 +436,13 @@ class TestCroc2Archipelago(unittest.TestCase):
         # Grant Tail Whack, Power Gloves, and Sailor Village Door Keys so Croc can reach Find the Key! Save the Gobbo!
         state.collect(world.create_item("Tail Whack"))
         state.collect(world.create_item("Power Gloves"))
-        # The yellow crystal in this stage sits above an orange jelly marker (docs/logic.md).
-        state.collect(world.create_item("Jelly Jump (Blue Jelly)"))
+        # The yellow crystal in this stage sits above an orange jelly marker (docs/logic.md). Jellies are used
+        # up, so one is in logic only once as many are held as the game has orange markers.
+        from worlds.croc2.locations import CONSUMABLE_NEED
+        self.assertEqual(CONSUMABLE_NEED, {"Jelly Jump (Blue Jelly)": 9, "High Jelly Jump (Green Jelly)": 4,
+                                           "Gummi Jump (Red Jelly)": 1, "Clockwork Gobbo": 13})
+        for _ in range(CONSUMABLE_NEED["Jelly Jump (Blue Jelly)"]):
+            state.collect(world.create_item("Jelly Jump (Blue Jelly)"))
         for item in mw.itempool:
             if item.name.endswith(" Key"):
                 state.collect(item)
@@ -646,6 +651,7 @@ class TestCroc2Archipelago(unittest.TestCase):
                 logic = await bridge.send_command({"command": "debug_solo_logic"})
                 self.assertEqual(logic["status"], "ok")
                 self.assertEqual(logic["stranded_items"], 0, "Every needed item must be reachable in logic")
+                self.assertEqual(logic["short_consumables"], 0, "Enough of every consumable must be reachable in logic")
                 self.assertEqual(logic["lost_items"], 0, "Nothing but filler may sit on a check that cannot be collected")
                 self.assertGreater(len(logic["spheres"]), 2, "Needed items must be spread over several spheres")
                 self.assertGreater(logic["spheres"][0]["checks"], 20, "The first stage must have checks reachable with a plain jump")

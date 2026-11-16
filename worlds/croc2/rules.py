@@ -3,7 +3,7 @@
 from typing import List
 from BaseClasses import CollectionState, MultiWorld
 from worlds.generic.Rules import set_rule
-from .locations import LEVEL_MAPPING, LOCATION_NAME_TO_DATA
+from .locations import CONSUMABLE_NEED, LEVEL_MAPPING, LOCATION_NAME_TO_DATA
 from .options import ColoredCrystalsMode, Croc2Options, Goal, ShufflePeteStore
 from .regions import VEHICLE_STAGE_WADS
 
@@ -18,7 +18,9 @@ def has_ability(state: CollectionState, player: int, options: Croc2Options, abil
         return not options.shuffle_vehicles.value or state.has("Vehicle License", player)
     if ability_name == "Airplane Ammo Feed":
         return not options.shuffle_plane_guns.value or state.has("Airplane Ammo Feed", player)
-    return state.has(ability_name, player)
+    # Jellies and Clockwork Gobbos are used up, and the player chooses where. A check behind one of their markers
+    # is in logic once as many of that kind are held as the game has markers for it (docs/logic.md).
+    return state.has(ability_name, player, CONSUMABLE_NEED.get(ability_name, 1))
 
 
 def has_all_requirements(

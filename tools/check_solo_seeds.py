@@ -88,8 +88,9 @@ def main():
             revisit_seeds += revisit
             late_revisits += late
             chains += chain
-            if r['stranded_items'] or r.get('lost_items'):
+            if r['stranded_items'] or r.get('lost_items') or r.get('short_consumables'):
                 bad += 1
+                print('seed %d: consumables in logic %s' % (seed, r.get('consumables')))
                 print('seed %d: %d needed items out of reach, %d items on checks that cannot be collected' % (
                     seed, r['stranded_items'], r.get('lost_items', 0)))
             if verbose:

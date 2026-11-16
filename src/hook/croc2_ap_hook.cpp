@@ -326,7 +326,8 @@ static bool is_vehicle_stage_wad(const std::string& wad) {
 #include "logic_rules.inc"
 static constexpr int kLogicStages = static_cast<int>(sizeof(kClearLogic) / sizeof(kClearLogic[0]));
 static constexpr uint32_t kLogicGoldenBit = 1u << 13;
-// Item -> bit. Abilities and consumables use the bits of logic_rules.inc; the key to door d is bit 14 + d.
+// Item -> bit, for abilities and door keys. Abilities use the bits of logic_rules.inc; the key to door d is bit
+// 14 + d. Jellies and Clockwork Gobbos are not here: they are counted (solo_consumable_kind).
 static uint64_t logic_item_bit(int id) {
     switch (id) {
         case 7200001: return 1ull << 0;   // Tail Whack
@@ -338,16 +339,39 @@ static uint64_t logic_item_bit(int id) {
         case 7200005: return 1ull << 6;   // Lever Wrench
         case 7200006: return 1ull << 7;   // Vehicle License
         case 7200007: return 1ull << 8;   // Airplane Ammo Feed
-        case 7200144: return 1ull << 9;   // orange ("blue") jelly
-        case 7200145: return 1ull << 10;  // lime ("green") jelly
-        case 7200143: return 1ull << 11;  // strawberry ("red") jelly
-        case 7200142: return 1ull << 12;  // Clockwork Gobbo
         case 7200163: return 1ull << 14;  // Mine Cart (bit 13 is the Golden Gobbo area; door keys start at 15)
         default: break;
     }
     if (id >= 7200023 && id <= 7200041) return 1ull << (14 + (id - 7200022)); // key to door 1..19
     return 0;
 }
+// Consumables, in the order of kConsumableNeed / kConsumableBit (logic_rules.inc): orange jelly, lime jelly,
+// strawberry jelly, Clockwork Gobbo. -1 for anything else.
+static int solo_consumable_kind(int id) {
+    switch (id) {
+        case 7200144: return 0; // "Jelly Jump (Blue Jelly)": the orange one
+        case 7200145: return 1; // "High Jelly Jump (Green Jelly)": lime
+        case 7200143: return 2; // "Gummi Jump (Red Jelly)": strawberry
+        case 7200142: return 3; // Clockwork Gobbo
+        default: return -1;
+    }
+}
+// What the player holds at some point of a walk through the seed: abilities and keys as bits, consumables as
+// how many have been collected.
+struct SoloHave {
+    uint64_t bits = 0;
+    int count[4] = {0, 0, 0, 0};
+    // A consumable is spent where it is used, and the player chooses where. So a check behind a marker only
+    // counts as reachable once as many of that kind have been collected as there are markers for it in the whole
+    // game: then every marker can be used once, in any order. (A better jelly also works on a lesser marker in
+    // play; the logic does not lean on that. Waste is covered by the spare copies in the pool and by the shop,
+    // not by the logic.)
+    uint64_t effective() const {
+        uint64_t b = bits;
+        for (int k = 0; k < 4; ++k) if (count[k] >= kConsumableNeed[k]) b |= 1ull << kConsumableBit[k];
+        return b;
+    }
+};
 static bool logic_met(const LogicRef& r, uint64_t have) {
     for (int i = 0; i < r.count; ++i) {
         const uint32_t t = kLogicTerms[r.first + i];
@@ -361,6 +385,7 @@ static constexpr int kSoloLocations = SOLO_CHECK_POOL_SIZE + 2000;
 static int& solo_item_at(int loc) {
     return loc < SOLO_CHECK_POOL_SIZE ? g_state.solo_check_items[loc] : g_state.solo_white_crystal_items[loc - SOLO_CHECK_POOL_SIZE];
 }
+// `have` is SoloHave::effective().
 static bool solo_location_reachable(int loc, uint64_t have) {
     const bool white = loc >= SOLO_CHECK_POOL_SIZE;
     const int stage = white ? (loc - SOLO_CHECK_POOL_SIZE) / 100 : loc / 9;
@@ -380,21 +405,58 @@ static bool solo_location_reachable(int loc, uint64_t have) {
     if (sub < 8) return logic_met(kColourLogic[stage][sub - 3], have);
     return logic_met(kClearLogic[stage], have);
 }
-// Makes the seed beatable. The pools above are shuffled without regard to what each check needs; this walks the
-// seed the way a player would (collect everything reachable, see what that opens, repeat) and, whenever no new
-// ability, key, jelly or Clockwork Gobbo is within reach, swaps one in from where it was stranded. Each swap goes
-// to a random check that is reachable at that moment, so items end up spread through the game in the order they
-// are needed, not piled up by the first door. Revisits are implicit: a late item can open leftovers anywhere.
 // Croc Crystals, Extra Lives and traps: the only items that may sit on a check nobody can ever collect.
 static bool solo_item_is_filler(int id) {
     return id == 0 || (id >= 7200147 && id <= 7200160);
 }
-// A check that cannot be collected in this mode: the 20th door's (no real stage), and the crystal-count milestones
-// (sub 0..2), which only exist when white crystals are not checks.
+// A check the walk can never collect, whatever is held: the 20th door's (no real stage); the crystal-count
+// milestones (sub 0..2), which only exist when white crystals are not checks; and any check with no rule that can
+// be met (crystal numbers a stage does not have, coloured crystals of the stages that have none, checks inside a
+// Golden Gobbo area).
 static bool solo_location_is_dead(int loc) {
-    if (loc >= SOLO_CHECK_POOL_SIZE) return (loc - SOLO_CHECK_POOL_SIZE) / 100 >= kLogicStages;
-    return loc / 9 >= kLogicStages || loc % 9 < 3;
+    const uint64_t everything = ~0ull;
+    if (loc >= SOLO_CHECK_POOL_SIZE) {
+        const int stage = (loc - SOLO_CHECK_POOL_SIZE) / 100;
+        return stage >= kLogicStages || !logic_met(kCrystalLogic[stage][(loc - SOLO_CHECK_POOL_SIZE) % 100], everything);
+    }
+    const int stage = loc / 9, sub = loc % 9;
+    if (stage >= kLogicStages || sub < 3) return true;
+    return !logic_met(sub < 8 ? kColourLogic[stage][sub - 3] : kClearLogic[stage], everything);
 }
+// Collects everything reachable, repeatedly, until nothing new opens. `taken` marks the checks already collected.
+// Returns the number of checks collected by this call.
+static int solo_walk(SoloHave& have, std::vector<char>& taken) {
+    int collected = 0;
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        const uint64_t eff = have.effective();
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            if (taken[loc] || !solo_location_reachable(loc, eff)) continue;
+            taken[loc] = 1;
+            ++collected;
+            const int id = solo_item_at(loc);
+            const int kind = solo_consumable_kind(id);
+            if (kind >= 0) ++have.count[kind];
+            have.bits |= logic_item_bit(id);
+            grew = true;
+        }
+    }
+    return collected;
+}
+// Is this item still wanted by the walk: an ability or key not yet held, or a consumable of a kind still short?
+static bool solo_item_wanted(int id, const SoloHave& have) {
+    const uint64_t bit = logic_item_bit(id);
+    if (bit) return !(have.bits & bit);
+    const int kind = solo_consumable_kind(id);
+    return kind >= 0 && have.count[kind] < kConsumableNeed[kind];
+}
+// Makes the seed beatable. The pools are shuffled without regard to what each check needs; this walks the seed the
+// way a player would (collect everything reachable, see what that opens, repeat) and, whenever the walk stops with
+// abilities, keys or consumables still out of reach, swaps one in from where it was stranded. Each swap goes to a
+// random check reachable at that moment that holds only filler, so items end up spread through the game in the
+// order they are needed, not piled up by the first door. Revisits are implicit: a late item can open leftovers
+// anywhere.
 static void solo_logic_repair_locked(std::mt19937_64& rng) {
     // The numbered-crystal logic only exists for "every white crystal is a check". In the other modes most white
     // crystal slots are never collected, so mixing them with the 180 main checks would throw items away: leave
@@ -408,7 +470,7 @@ static void solo_logic_repair_locked(std::mt19937_64& rng) {
         std::shuffle(all.begin(), all.end(), rng);
         for (int loc = 0; loc < kSoloLocations; ++loc) solo_item_at(loc) = all[loc];
     }
-    // Anything that matters (not just what the walk below tracks: also jigsaw pieces, coloured crystals, trophies,
+    // Anything that matters (not just what the walk tracks: also jigsaw pieces, coloured crystals, trophies,
     // heart pots, VIP passes) is moved off dead checks, swapping with filler on live ones.
     {
         std::vector<int> live_filler;
@@ -423,44 +485,51 @@ static void solo_logic_repair_locked(std::mt19937_64& rng) {
             }
         }
     }
-    uint64_t have = 0;
+    SoloHave have;
+    std::vector<char> taken(kSoloLocations, 0);
     int swaps = 0;
-    for (int round = 0; round < 400; ++round) {
-        bool grew = true;
-        while (grew) {
-            grew = false;
-            for (int loc = 0; loc < kSoloLocations; ++loc) {
-                const uint64_t bit = logic_item_bit(solo_item_at(loc));
-                if (bit && !(have & bit) && solo_location_reachable(loc, have)) { have |= bit; grew = true; }
-            }
-        }
-        std::vector<int> stranded, open;
+    for (int round = 0; round < 600; ++round) {
+        solo_walk(have, taken);
+        const uint64_t eff = have.effective();
+        // Stranded: a wanted item on a live check the walk has not reached. Open: a reached check holding filler
+        // (it has been "collected" already, so whatever is swapped onto it is collected at once).
+        std::vector<int> stranded_bits, stranded_consumables, open;
         int reach_now = 0;
         for (int loc = 0; loc < kSoloLocations; ++loc) {
-            const uint64_t bit = logic_item_bit(solo_item_at(loc));
-            const bool r = solo_location_reachable(loc, have);
-            if (r) ++reach_now;
-            if (bit && !(have & bit)) { if (!r) stranded.push_back(loc); }
-            // Only a check holding filler may give its place up: what it holds goes to wherever the stranded item
-            // was, which may be a check that can never be collected.
-            else if (r && solo_item_is_filler(solo_item_at(loc))) open.push_back(loc);
+            const int id = solo_item_at(loc);
+            if (taken[loc]) {
+                ++reach_now;
+                if (solo_item_is_filler(id)) open.push_back(loc);
+            } else if (!solo_location_is_dead(loc) && solo_item_wanted(id, have)) {
+                (logic_item_bit(id) ? stranded_bits : stranded_consumables).push_back(loc);
+            }
         }
-        if (stranded.empty() || open.empty()) break;
-        std::shuffle(stranded.begin(), stranded.end(), rng);
-        // Prefer an item that opens something new; otherwise any.
-        int pick = stranded[0];
-        for (int cand : stranded) {
-            const uint64_t with = have | logic_item_bit(solo_item_at(cand));
+        if ((stranded_bits.empty() && stranded_consumables.empty()) || open.empty()) break;
+        std::shuffle(stranded_bits.begin(), stranded_bits.end(), rng);
+        std::shuffle(stranded_consumables.begin(), stranded_consumables.end(), rng);
+        // Which to bring in: first an ability or key that opens something new by itself; failing that any ability
+        // or key (two may be needed together); consumables once no ability or key is left out of reach, so the
+        // few open checks of the first stage are not spent on them.
+        int pick = -1;
+        for (int cand : stranded_bits) {
+            const uint64_t with = eff | logic_item_bit(solo_item_at(cand));
             int n = 0;
             for (int loc = 0; loc < kSoloLocations; ++loc) if (solo_location_reachable(loc, with)) ++n;
             if (n > reach_now) { pick = cand; break; }
         }
+        if (pick < 0 && !stranded_bits.empty()) pick = stranded_bits[0];
+        if (pick < 0) pick = stranded_consumables[0];
         const int target = open[rng() % open.size()];
         std::swap(solo_item_at(pick), solo_item_at(target));
+        // The target was already collected holding filler; it now holds the wanted item, so collect that.
+        const int id = solo_item_at(target);
+        const int kind = solo_consumable_kind(id);
+        if (kind >= 0) ++have.count[kind];
+        have.bits |= logic_item_bit(id);
         ++swaps;
     }
     int reachable = 0;
-    for (int loc = 0; loc < kSoloLocations; ++loc) if (solo_location_reachable(loc, have)) ++reachable;
+    for (int loc = 0; loc < kSoloLocations; ++loc) reachable += taken[loc] ? 1 : 0;
     debug_log_locked("LOGIC solo seed: " + std::to_string(swaps) + " items moved into reach; " + std::to_string(reachable) +
                      " checks in logic with everything collected");
 }
@@ -468,10 +537,7 @@ static void solo_logic_repair_locked(std::mt19937_64& rng) {
 static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     std::mt19937_64 rng(seed ^ 0xA5A5F0F05A5A0F0FULL);
 
-    // 1. Sailor Village (v = 0):
-    // Door 1 (index 0) is open from the start (Sphere 1).
-    // It MUST be an on-foot platforming stage (Stage 2: "Get the Gobbo's Sandwich!" or Stage 4: "Save the Bird from the Thief").
-    // It must NEVER be a vehicle stage (1 or 3) or vanilla Stage 0!
+    // 1. Sailor Village (v = 0): Door 1 (index 0) is open from the start.
     // Door 1 must lead somewhere with plenty to collect on a plain jump: Find the Key! Save the Gobbo! (0) or
     // Save the Bird from the Thief (4), about 45 crystals each. The other Sailor stages have none: Get the Gobbo's
     // Sandwich opens with monkey bars, Find 5 Lost Treasure Chests is ridden on mine carts, and the boat race is
@@ -540,13 +606,18 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         std::string("Door 1 (") + kStageDoors[0].level_name + ") -> " +
         kStageDoors[target_idx0].level_name + " (Seed #" + g_state.current_seed_hex + ")";
 
-    // 2. Build a logically solvable 180-check item/move/trap pool (9 checks per stage across 20 stages):
-    //    Sub-checks 0..2: 15, 30, 45 White Crystals collected in stage (always reachable without abilities!)
+    // 2. Build the 180-check pool (9 checks per stage across 20 stages):
+    //    Sub-checks 0..2: 10, 25, 40 White Crystals collected in stage (only when white crystals are not checks)
     //    Sub-checks 3..7: Colored Crystal slots 1..5 in stage
     //    Sub-check  8:    Stage Completion
     //
-    // Sphere 1: 15 early White Crystal checks (0..2) across the 5 Sailor Village stages (stages 0..4).
-    // Guarantees all 5 core abilities + Vehicle License + Sailor Village Stage Keys so the player CAN NEVER GET SOFTLOCKED!
+    // The abilities, the Vehicle License and the Sailor Village keys start on the 15 crystal-count checks of the
+    // Sailor Village stages. That is all the modes without a logic walk (white crystals not every-one-a-check)
+    // get: it keeps these items early, but it is not a guarantee. Those 15 checks include the boat race's (needs
+    // the Vehicle License) and others with a requirement of their own, and an item can land behind itself; in the
+    // two milestone modes these crystal-count checks do not exist at all. Only "every white crystal is a check"
+    // mode is checked for being beatable: there solo_logic_repair_locked (called at the end) reshuffles
+    // everything and places by the logic instead.
     std::vector<int> sphere1_slots;
     std::vector<int> remaining_slots;
     for (int s = 0; s < 20; ++s) {
@@ -563,67 +634,59 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     std::shuffle(sphere1_slots.begin(), sphere1_slots.end(), rng);
     std::shuffle(remaining_slots.begin(), remaining_slots.end(), rng);
 
-    // Sphere 1 items (15 items):
-    // 5 core abilities: Tail Whack (7200001), Butt Stomp (7200002), Climbing Claws (7200003),
-    //                   Power Gloves (7200004), Lever Wrench (7200005)
-    // Vehicle License (7200006)
-    // 3 Sailor Village Stage Door Keys (7200023, 7200024, 7200025)
-    // Useful inventory items + Heart Pot + Colored Crystal + 1 Trap
     const int sphere1_items[15] = {
-        7200001, 7200002, 7200003, 7200004, 7200005, // 5 core abilities
-        7200006,                                     // Vehicle License!
-        7200023, 7200024, 7200025,                   // 3 Sailor Village Stage Door Keys!
+        7200001, 7200002, 7200003, 7200004, 7200005, // Tail Whack, Butt Stomp, Climbing Claws, Power Gloves, Lever Wrench
+        7200006,                                     // Vehicle License
+        7200023, 7200024, 7200025,                   // 3 Sailor Village Stage Door Keys
         7200142, 7200143, 7200144,                   // Clockwork Gobbo, Red Jelly, Blue Jelly
-        7200021,                                     // Heart Pot
-        7200042,                                     // Red Crystal
-        7200161                                      // Long Jump
+        7200161, 7200162, 7200163                    // Long Jump, High Jump, Mine Cart
     };
     for (size_t i = 0; i < 15 && i < sphere1_slots.size(); ++i) {
         g_state.solo_check_items[sphere1_slots[i]] = sphere1_items[i];
     }
 
-    // Remaining 165 items:
-    // - Remaining 16 Stage Keys (7200026..7200041)
-    // - Airplane Ammo Feed (7200007), Binoculars (7200146)
-    // - 4 Village VIP Passes (7200008..7200011)
-    // - 4 Jigsaw Pieces (7200012..7200015)
-    // - 16 Trophies (7200017)
-    // - 97 remaining Colored Crystals (7200045..7200141)
-    // - 8 Heart Pots (7200021)
-    // - 4 Clockwork Gobbos (7200142), 4 Red Jellies (7200143), 4 Blue Jellies (7200144), 4 Green Jellies (7200145)
-    // - Traps (Fire Breakout, Ice Physics, Reverse Controls, Dantini Ambush, Speed)
+    // The other 165 checks get exactly 165 items (16 keys, Airplane Ammo Feed, Binoculars, 4 VIP Passes, 4 Jigsaw
+    // Pieces, 16 Trophies, the Red Crystal and 97 more Colored Crystals, 9 Heart Pots, 16 consumables). There is
+    // no room to spare: anything added here must take a Heart Pot's place, or it pushes a random item out.
     std::vector<int> pool;
     pool.reserve(remaining_slots.size());
     for (int key_id = 7200026; key_id <= 7200041; ++key_id) {
         pool.push_back(key_id); // All remaining Stage Keys in pool!
     }
     pool.push_back(7200007); // Airplane Ammo Feed
-    pool.push_back(7200162); // High Jump
-    pool.push_back(7200163); // Mine Cart
     pool.push_back(7200146); // Binoculars
+    pool.push_back(7200042); // Find the Key! Save the Gobbo! - Red Crystal
     for (int id = 7200008; id <= 7200015; ++id) pool.push_back(id); // 4 VIP Passes + 4 Jigsaw Pieces
     for (int i = 0; i < 16; ++i) pool.push_back(7200017); // 16 Trophies
     for (int id = 7200045; id <= 7200141; ++id) pool.push_back(id); // Colored Crystals
-    for (int i = 0; i < 8; ++i) pool.push_back(7200021); // 8 Heart Pots
-    for (int i = 0; i < 10; ++i) pool.push_back(7200150); // Croc Crystals (10), where the Silver / Gold Keys used to be
-    for (int i = 0; i < 4; ++i) {
-        pool.push_back(7200142); // Clockwork Gobbo
-        pool.push_back(7200143); // Gummi Jump (Red Jelly)
-        pool.push_back(7200144); // Jelly Jump (Blue Jelly)
-        pool.push_back(7200145); // High Jelly Jump (Green Jelly)
-    }
+    for (int i = 0; i < 9; ++i) pool.push_back(7200021); // 9 Heart Pots
+    // Consumables, in proportion to the markers the levels have (13 Clockwork Gobbo, 9 orange, 4 lime, 1
+    // strawberry). With the three above that is 8 Clockwork Gobbos, 6 orange, 4 lime and 1 strawberry on the 180
+    // checks: fewer than the markers, because there is no room for more. When white crystals are not checks
+    // these are all there is, and Swap Meet Pete is where more come from (after his check has been collected a
+    // purchase is an ordinary purchase). In "every white crystal is a check" mode the crystal pool below adds
+    // enough to make three times the markers.
+    for (int i = 0; i < 7; ++i) pool.push_back(7200142); // Clockwork Gobbo
+    for (int i = 0; i < 5; ++i) pool.push_back(7200144); // orange ("Blue") jelly
+    for (int i = 0; i < 4; ++i) pool.push_back(7200145); // lime ("Green") jelly
     const int trap_cycle[5] = {7200151, 7200152, 7200153, 7200154, 7200155};
     while (pool.size() < remaining_slots.size()) {
         pool.push_back(trap_cycle[pool.size() % 5]);
     }
+    // Nothing may fall off the end: if the list above ever outgrows the checks, say so loudly in the log.
+    if (pool.size() > remaining_slots.size()) {
+        debug_log_locked("SEED ERROR: " + std::to_string(pool.size()) + " items for " +
+                         std::to_string(remaining_slots.size()) + " checks; some are left out");
+    }
     std::shuffle(pool.begin(), pool.end(), rng);
-    for (size_t i = 0; i < remaining_slots.size(); ++i) {
+    for (size_t i = 0; i < remaining_slots.size() && i < pool.size(); ++i) {
         g_state.solo_check_items[remaining_slots[i]] = pool[i];
     }
 
-    // 3. Build the 2,000-entry Individual White Crystal check pool (100 crystals per stage * 20 stages):
-    //    Ensure the starting stage (door1_target, behind Sailor Village Door 1) has core abilities,
-    //    Stage Keys, and inventory wheel items in its first 20 White Crystals so the player can never softlock!
+    // 3. Build the 2,000-entry Individual White Crystal check pool (100 crystals per stage * 20 stages).
+    //    (The "first 20 crystals of the starting stage" grouping below is from before crystals had fixed numbers.
+    //    It no longer decides anything: in the one mode where every crystal is a check, solo_logic_repair_locked
+    //    reshuffles the lot and places by the logic.)
     std::vector<int> wc_start_stage_slots;
     std::vector<int> wc_sphere1_slots;
     std::vector<int> wc_remaining_slots;
@@ -697,8 +760,8 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     // Croc Crystals below instead.)
     // Consumables: about three times what the levels need, so spending one in the wrong place doesn't lock a
     // check out. The levels have 13 Clockwork Gobbo markers, 9 orange jelly markers, 4 lime and 1 strawberry
-    // (docs/logic.md). Counting the copies placed above (7 or more of each kind), these bring the totals to at
-    // least 39 Clockwork Gobbos, 27 orange jellies, 13 lime and 9 strawberry.
+    // (docs/logic.md). Counting the copies placed above and on the 180 checks, these bring the totals to at
+    // least 43 Clockwork Gobbos, 29 orange jellies, 13 lime and 6 strawberry.
     for (int i = 0; i < 32; ++i) wc_pool.push_back(7200142); // Clockwork Gobbo
     for (int i = 0; i < 20; ++i) wc_pool.push_back(7200144); // orange ("Blue") jelly
     for (int i = 0; i < 6; ++i) wc_pool.push_back(7200145);  // lime ("Green") jelly
@@ -1923,24 +1986,26 @@ static std::string handle_command_locked(const std::string& req) {
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
     }
 
-    // Plays the current solo seed in logic and reports it sphere by sphere: how many checks open up, and which
-    // abilities, keys and consumables are found there. Used to check the seed is beatable and well spread.
+    // Plays the current solo seed in logic and reports it sphere by sphere: how many checks open up, in which
+    // stages, and which abilities, keys and consumables are found there. Used to check the seed is beatable and
+    // well spread (tools/check_solo_seeds.py).
     if (cmd == "debug_solo_logic") {
-        uint64_t have = 0;
+        SoloHave have;
         std::vector<char> seen(kSoloLocations, 0);
         std::ostringstream ss;
         ss << "{\"status\":\"ok\",\"door1_stage\":" << static_cast<int>(g_state.door_perm[0]) << ",\"spheres\":[";
         int total = 0;
         for (int sphere = 0; sphere < 64; ++sphere) {
+            // One sphere: everything reachable with what was held when the sphere began.
+            const uint64_t eff = have.effective();
             std::vector<int> fresh;
             for (int loc = 0; loc < kSoloLocations; ++loc) {
-                if (!seen[loc] && solo_location_reachable(loc, have)) fresh.push_back(loc);
+                if (!seen[loc] && solo_location_reachable(loc, eff)) fresh.push_back(loc);
             }
             if (fresh.empty()) break;
-            if (sphere) ss << ",";
             int per_stage[20] = {0};
             for (int loc : fresh) ++per_stage[loc >= SOLO_CHECK_POOL_SIZE ? (loc - SOLO_CHECK_POOL_SIZE) / 100 : loc / 9];
-            ss << "{\"checks\":" << fresh.size() << ",\"stages\":[";
+            ss << (sphere ? "," : "") << "{\"checks\":" << fresh.size() << ",\"stages\":[";
             for (int s = 0; s < 20; ++s) ss << (s ? "," : "") << per_stage[s];
             ss << "],\"items\":[";
             bool first = true;
@@ -1948,8 +2013,14 @@ static std::string handle_command_locked(const std::string& req) {
                 seen[loc] = 1;
                 const int id = solo_item_at(loc);
                 const uint64_t bit = logic_item_bit(id);
-                if (bit && !(have & bit)) {
-                    have |= bit;
+                const int kind = solo_consumable_kind(id);
+                bool report = false;
+                if (bit && !(have.bits & bit)) { have.bits |= bit; report = true; }
+                if (kind >= 0) {
+                    ++have.count[kind];
+                    report = have.count[kind] == kConsumableNeed[kind]; // the copy that makes the kind usable in logic
+                }
+                if (report) {
                     ss << (first ? "" : ",") << id;
                     first = false;
                 }
@@ -1957,17 +2028,19 @@ static std::string handle_command_locked(const std::string& req) {
             ss << "]}";
             total += static_cast<int>(fresh.size());
         }
-        int stranded = 0;
+        // Abilities and keys the walk never reached, and consumable kinds it never collected enough of.
+        int stranded = 0, short_kinds = 0, lost = 0;
         for (int loc = 0; loc < kSoloLocations; ++loc) {
-            const uint64_t bit = logic_item_bit(solo_item_at(loc));
-            if (bit && !(have & bit)) ++stranded;
+            const int id = solo_item_at(loc);
+            const uint64_t bit = logic_item_bit(id);
+            if (bit && !(have.bits & bit)) ++stranded;
+            // Items that matter sitting on checks that can never be collected (there should be none).
+            if (solo_location_is_dead(loc) && !solo_item_is_filler(id)) ++lost;
         }
-        // Items that matter sitting on checks that can never be collected (there should be none).
-        int lost = 0;
-        for (int loc = 0; loc < kSoloLocations; ++loc) {
-            if (solo_location_is_dead(loc) && !solo_item_is_filler(solo_item_at(loc))) ++lost;
-        }
-        ss << "],\"reachable\":" << total << ",\"stranded_items\":" << stranded << ",\"lost_items\":" << lost << "}";
+        for (int k = 0; k < 4; ++k) if (have.count[k] < kConsumableNeed[k]) ++short_kinds;
+        ss << "],\"reachable\":" << total << ",\"stranded_items\":" << stranded << ",\"short_consumables\":" << short_kinds
+           << ",\"consumables\":[" << have.count[0] << "," << have.count[1] << "," << have.count[2] << "," << have.count[3]
+           << "],\"lost_items\":" << lost << "}";
         return ss.str();
     }
 
@@ -3801,22 +3874,30 @@ static void drain_pending_native_inventory_grants() {
     // is kept in the randomizer footer beside them, so the two always describe the same moment.
     // (Before, the count was simply kept topped up to the number received, so a kind never ran out once the first
     // one had arrived.)
+    // Order: strawberry ("Gummi Jump (Red Jelly)"), orange ("Jelly Jump (Blue Jelly)"), lime ("High Jelly Jump
+    // (Green Jelly)"), Clockwork Gobbo (item type 8, 0x140BA9B58. This used to also write 0x140BA9B38, taken for
+    // a HUD clockwork count; that address is the jigsaw piece counter.)
+    static const uintptr_t kCountRva[4] = {RVA_INV_STRAWBERRY_JELLIES, RVA_INV_ORANGE_JELLIES, RVA_INV_LIME_JELLIES, RVA_INV_CLOCKWORK};
+    static const int32_t kItemType[4] = {5, 7, 6, 8};
+    int hand_over[4] = {0, 0, 0, 0};
     bool delivered_any = false;
-    auto deliver = [&](uintptr_t count_rva, int received, int& delivered, int32_t item_type) {
-        const int reserve = received - delivered;
-        const int room = 9 - i32(count_rva);
-        if (reserve <= 0 || room <= 0) return;
-        const int n = reserve < room ? reserve : room;
-        fn_add_item(item_type, 0, n, 0, 0);
-        delivered += n;
-        delivered_any = true;
-    };
-    deliver(RVA_INV_STRAWBERRY_JELLIES, g_state.red_jellies, g_state.items_delivered[0], 5);  // "Gummi Jump (Red Jelly)"
-    deliver(RVA_INV_ORANGE_JELLIES, g_state.blue_jellies, g_state.items_delivered[1], 7);     // "Jelly Jump (Blue Jelly)"
-    deliver(RVA_INV_LIME_JELLIES, g_state.green_jellies, g_state.items_delivered[2], 6);      // "High Jelly Jump (Green Jelly)"
-    // Clockwork Gobbo -> item type 8 (0x140BA9B58). (This used to also write 0x140BA9B38, taken for a HUD
-    // clockwork count; that address is the jigsaw piece counter.)
-    deliver(RVA_INV_CLOCKWORK, g_state.clockwork_gobbos, g_state.items_delivered[3], 8);
+    {
+        // The received totals are changed by the network and command threads, so the bookkeeping is done under
+        // the lock; the game's own function is called after it is released.
+        std::lock_guard<std::mutex> lock(g_mutex);
+        const int received[4] = {g_state.red_jellies, g_state.blue_jellies, g_state.green_jellies, g_state.clockwork_gobbos};
+        for (int k = 0; k < 4; ++k) {
+            const int reserve = received[k] - g_state.items_delivered[k];
+            const int room = 9 - i32(kCountRva[k]);
+            if (reserve <= 0 || room <= 0) continue;
+            hand_over[k] = reserve < room ? reserve : room;
+            g_state.items_delivered[k] += hand_over[k];
+            delivered_any = true;
+        }
+    }
+    for (int k = 0; k < 4; ++k) {
+        if (hand_over[k] > 0) fn_add_item(kItemType[k], 0, hand_over[k], 0, 0);
+    }
 
     // Golden Gobbos: the game's counter is 0x140BA9B30 (opcode 249). Received Golden Gobbos are not written to
     // it yet: whether a village's Golden Gobbo door reads this counter or per-level state is not known. The
@@ -4353,6 +4434,9 @@ static bool handle_pickup_locked(Pickup kind, const std::string& desc) {
             slot = SHOP_JELLY_JUMP;
         }
         if (slot < 0) return false;
+        // Jellies and Clockwork Gobbos are used up. Once Pete's check for one has been collected, buying it again
+        // is an ordinary purchase: that is where more come from if a seed's own supply has been spent.
+        if (kind != Pickup::HeartPot && extra_check_claimed_locked(EXTRA_CHECK_SHOP + village * 5 + slot)) return false;
         static const char* kSlotNames[5] = {"Heart Pot Purchase 1", "Heart Pot Purchase 2", "Clockwork Gobbo Purchase",
                                             "Gummi Jump Purchase", "Jelly Jump Purchase"};
         claim_extra_check_locked(EXTRA_CHECK_SHOP + village * 5 + slot,
