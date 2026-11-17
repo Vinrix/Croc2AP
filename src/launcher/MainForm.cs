@@ -81,6 +81,7 @@ namespace Croc2Launcher
         private readonly List<ApNetworkItem> _receivedItemsQueue = new List<ApNetworkItem>();
         private int _itemsAppliedCount = 0;
         private int _soloItemsReceivedCount = 0;
+        private int _lastSoloTotalsTick = 0;
         private readonly HashSet<long> _checkedLocations = new HashSet<long>();
         private Dictionary<string, object> _cachedSlotData = null;
         private bool _slotDataConfigured = false;
@@ -959,6 +960,19 @@ namespace Croc2Launcher
                         await _apClient.SendStatusUpdateAsync(ApClient.ClientGoal);
                         LogFormatted("🏁 Goal complete! Victory reported to the Archipelago server.", Color.Gold);
                     }
+                }
+
+                // Solo: show the save's totals, not what happened since the launcher was opened. The mod knows
+                // every check the save has collected, and in a solo game each check gives exactly one item.
+                if (!_apClient.IsConnected && Environment.TickCount - _lastSoloTotalsTick > 2000)
+                {
+                    _lastSoloTotalsTick = Environment.TickCount;
+                    var stored = await _hookClient.GetClaimedLocationsAsync();
+                    _checkedLocations.Clear();
+                    foreach (long id in stored) _checkedLocations.Add(id);
+                    _soloItemsReceivedCount = _checkedLocations.Count;
+                    _lblChecksCount.Text = "Checks: " + _checkedLocations.Count;
+                    _lblItemsCount.Text = "Items: " + _soloItemsReceivedCount;
                 }
             }
         }
