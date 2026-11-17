@@ -4633,12 +4633,18 @@ static void __fastcall Hooked_HurtOp4(void* s) { log_hurt_op(4, s); g_orig_hurt_
 // Wallet: in vanilla, leaving a level adds that level's crystal counter (0xBA9B3C) to the wallet (0xBA9A9C) in
 // two places: 0x14002BE51 "add eax, [counter]" in OnDoorTransition (wallet = min(9999, wallet + counter)) and
 // 0x14002EFB6 "add [wallet], eax" in the map loader. In randomizer saves crystals are checks, not currency, so
-// both 6-byte instructions are replaced with NOPs; the original bytes are restored for vanilla saves.
+// those instructions are replaced with NOPs; the original bytes are restored for vanilla saves.
+// There are two more, found when the wallet was seen to grow by the stage's count on every walk out of a stage
+// (the mod restores the count on the way in, so it was banked again each time):
+// 0x140034F61 "add ecx, eax" in the function at 0x140034F50 (wallet += counter, capped at 9999, counter = 0;
+// called from four places), and 0x14005CD90 "add [wallet], eax" in the routine at 0x14005CD80.
 // ============================================================================
-struct CodePatch { uintptr_t rva; uint8_t expect[6]; bool applied; };
-static CodePatch g_wallet_patches[2] = {
-    {0x0002BE51, {0x03, 0x05, 0xE5, 0xDC, 0xB7, 0x00}, false},
-    {0x0002EFB6, {0x01, 0x05, 0xE0, 0xAA, 0xB7, 0x00}, false},
+struct CodePatch { uintptr_t rva; int len; uint8_t expect[6]; bool applied; };
+static CodePatch g_wallet_patches[4] = {
+    {0x0002BE51, 6, {0x03, 0x05, 0xE5, 0xDC, 0xB7, 0x00}, false},
+    {0x0002EFB6, 6, {0x01, 0x05, 0xE0, 0xAA, 0xB7, 0x00}, false},
+    {0x00034F61, 2, {0x01, 0xC1, 0, 0, 0, 0}, false},
+    {0x0005CD90, 6, {0x01, 0x05, 0x06, 0xCD, 0xB4, 0x00}, false},
 };
 
 static void set_wallet_patches(bool enable) {
@@ -4646,12 +4652,15 @@ static void set_wallet_patches(bool enable) {
         if (pt.applied == enable) continue;
         uint8_t* code = reinterpret_cast<uint8_t*>(g_exe_base + pt.rva);
         static const uint8_t kNop6[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
-        if (std::memcmp(code, enable ? pt.expect : kNop6, 6) != 0) continue; // unexpected bytes: leave alone
+        static const uint8_t kNop2[2] = {0x66, 0x90};
+        const uint8_t* nop = pt.len == 2 ? kNop2 : kNop6;
+        const size_t len = static_cast<size_t>(pt.len);
+        if (std::memcmp(code, enable ? pt.expect : nop, len) != 0) continue; // unexpected bytes: leave alone
         DWORD old = 0;
-        VirtualProtect(code, 6, PAGE_EXECUTE_READWRITE, &old);
-        std::memcpy(code, enable ? kNop6 : pt.expect, 6);
-        VirtualProtect(code, 6, old, &old);
-        FlushInstructionCache(GetCurrentProcess(), code, 6);
+        VirtualProtect(code, len, PAGE_EXECUTE_READWRITE, &old);
+        std::memcpy(code, enable ? nop : pt.expect, len);
+        VirtualProtect(code, len, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), code, len);
         pt.applied = enable;
         debug_log_locked(std::string("WALLET level-crystal transfer ") + (enable ? "disabled" : "restored") +
                          " at croc2.exe+" + [&] { char b[16]; std::snprintf(b, sizeof(b), "0x%llX", (unsigned long long)pt.rva); return std::string(b); }());
