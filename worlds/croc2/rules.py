@@ -3,7 +3,7 @@
 from typing import List
 from BaseClasses import CollectionState, MultiWorld
 from worlds.generic.Rules import set_rule
-from .locations import CONSUMABLE_NEED, LEVEL_MAPPING, LOCATION_NAME_TO_DATA
+from .locations import CONSUMABLE_NEED, LEVEL_MAPPING, LOCATION_NAME_TO_DATA, LOGIC
 from .options import ColoredCrystalsMode, Croc2Options, Goal, ShufflePeteStore
 from .regions import VEHICLE_STAGE_WADS
 
@@ -80,15 +80,39 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
     """Applies entrance and location rules across all regions in the Croc 2 world."""
     hubs = LEVEL_MAPPING["hubs"]
 
-    # 1. Hub-to-Hub progression rules (requires defeating boss of previous hub)
+    # 1. Hub-to-Hub progression rules. The game opens the next village only when every stage of this one has
+    #    been cleared and both its bosses beaten. So leaving a village takes, for each of its doors, whatever
+    #    the door itself takes (its key, a Vehicle License for a vehicle stage) and whatever clearing the stage
+    #    behind it takes (docs/logic.md), plus both bosses' requirements.
+    clear_dnf_by_stage = {entry["stage"]: entry["clear"] for entry in LOGIC}
     for idx in range(len(hubs) - 1):
         curr_hub = hubs[idx]
         next_hub = hubs[idx + 1]
         ent_name = f"{curr_hub['name']} to {next_hub['name']}"
-        boss_reqs = curr_hub["bosses"][0]["requires"]
+        boss_reqs = sorted({r for boss in curr_hub["bosses"] for r in boss["requires"]})
+        doors = []
+        for lvl in curr_hub["levels"]:
+            door_ent = multiworld.get_entrance(f"{curr_hub['name']} Door {lvl['door_num']} Entrance", player)
+            needs_key = bool(options.lock_level_access.value) and not (
+                curr_hub["id"] == "sailor_village" and lvl["door_num"] == 1
+            )
+            target_wad = REGION_TO_WAD.get(door_ent.connected_region.name if door_ent.connected_region else "") or ""
+            doors.append((
+                f"{lvl['name']} Key" if needs_key else None,
+                target_wad in VEHICLE_STAGE_WADS,
+                clear_dnf_by_stage.get(target_wad[:4]),
+            ))
         set_rule(
             multiworld.get_entrance(ent_name, player),
-            lambda state, reqs=boss_reqs: has_all_requirements(state, player, options, reqs),
+            lambda state, reqs=boss_reqs, doors=doors: (
+                has_all_requirements(state, player, options, reqs)
+                and all(
+                    (key is None or state.has(key, player))
+                    and (not licence or has_ability(state, player, options, "Vehicle License"))
+                    and (dnf is None or meets_dnf(state, player, options, dnf))
+                    for key, licence, dnf in doors
+                )
+            ),
         )
 
     # 2. Per-Hub Entrances (Pete's Store, Stage Doors, Secret Level, Bosses)

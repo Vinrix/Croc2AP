@@ -335,6 +335,9 @@ struct ModState {
     bool shuffle_vehicles = true;
     bool shuffle_plane_guns = true;
     int shuffle_pete_store = 1;
+    // Solo seeds: 0 leaves every trap out of the pool; fire_breakout_trap false leaves that one out.
+    int trap_weight = 20;
+    bool fire_breakout_trap = true;
 
     // Solo / Seed-linked check pool (180 logical checks + 2000 individual white crystal checks across all 20 stages)
     uint8_t door_perm[20] = {0};

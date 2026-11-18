@@ -385,6 +385,30 @@ static constexpr int kSoloLocations = SOLO_CHECK_POOL_SIZE + 2000;
 static int& solo_item_at(int loc) {
     return loc < SOLO_CHECK_POOL_SIZE ? g_state.solo_check_items[loc] : g_state.solo_white_crystal_items[loc - SOLO_CHECK_POOL_SIZE];
 }
+// What leaving a village takes besides clearing its stages: its two bosses. Sailor: Soveena is beaten by carrying
+// bombs to her and throwing them, Cannon Boat Keith by firing cannons with the tail. Cossack and Caveman: the
+// bosses' needs as the Archipelago world lists them (level_mapping.json), taken together.
+static const uint64_t kVillageBossNeeds[3] = {
+    (1ull << 0) | (1ull << 1) | (1ull << 5),               // Tail Whack, Butt Stomp, Power Gloves
+    (1ull << 0) | (1ull << 1) | (1ull << 5) | (1ull << 6), // + Lever Wrench
+    (1ull << 0) | (1ull << 1) | (1ull << 5) | (1ull << 6),
+};
+// Can the player be in village v (0 Sailor .. 3 Inca)? The game opens the next village only when every stage of
+// the one before has been cleared and both its bosses beaten ("you can do them in any order as long as you do
+// them all"), so each earlier village needs the key to each of its doors and whatever clearing the stage behind
+// each door takes. `have` is SoloHave::effective().
+static bool solo_village_open(int v, uint64_t have) {
+    for (int u = 0; u < v && u < 3; ++u) {
+        if ((have & kVillageBossNeeds[u]) != kVillageBossNeeds[u]) return false;
+        for (int d = u * 5; d < u * 5 + 5; ++d) {
+            const int stage = g_state.door_perm[d];
+            if (stage < 0 || stage >= kLogicStages) continue;
+            if (d > 0 && g_state.lock_level_access && !(have & (1ull << (14 + d)))) return false;
+            if (!logic_met(kClearLogic[stage], have)) return false;
+        }
+    }
+    return true;
+}
 // `have` is SoloHave::effective().
 static bool solo_location_reachable(int loc, uint64_t have) {
     const bool white = loc >= SOLO_CHECK_POOL_SIZE;
@@ -394,8 +418,7 @@ static bool solo_location_reachable(int loc, uint64_t have) {
     for (int d = 0; d < 20; ++d) if (g_state.door_perm[d] == stage) { door = d; break; }
     if (door < 0) return false;
     if (door > 0 && g_state.lock_level_access && !(have & (1ull << (14 + door)))) return false;
-    // The later villages open by beating bosses, which takes the tail and the stomp. Not modelled further.
-    if (door >= 5 && (have & 3) != 3) return false;
+    if (door >= 5 && !solo_village_open(door / 5, have)) return false;
     if (white) {
         if (g_state.shuffle_white_crystals != 3) return false; // only "every crystal is a check" is by number
         return logic_met(kCrystalLogic[stage][(loc - SOLO_CHECK_POOL_SIZE) % 100], have);
@@ -669,7 +692,10 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     for (int i = 0; i < 7; ++i) pool.push_back(7200142); // Clockwork Gobbo
     for (int i = 0; i < 5; ++i) pool.push_back(7200144); // orange ("Blue") jelly
     for (int i = 0; i < 4; ++i) pool.push_back(7200145); // lime ("Green") jelly
-    const int trap_cycle[5] = {7200151, 7200152, 7200153, 7200154, 7200155};
+    // Only traps that do something: Fire Breakout, Tail-Knot, Lead Boots, Pete's Crystal Tax, Health Drain.
+    // Ice Physics, Dantini Ambush, Speed Distortion and Darkness have no effect yet, and Reverse Controls only
+    // flips the D-pad, so they stay out of the pool until they work.
+    const int trap_cycle[5] = {7200151, 7200157, 7200158, 7200160, 7200156};
     while (pool.size() < remaining_slots.size()) {
         pool.push_back(trap_cycle[pool.size() % 5]);
     }
@@ -733,7 +759,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200012, 7200018,                            // 1 Jigsaw Piece + 1 Golden Gobbo
         7200021, 7200021,                            // 2 Heart Pots
         7200043, 7200044, 7200045, 7200046,          // Sailor Door 1 Colored Crystals
-        7200151, 7200152, 7200155                    // Early traps
+        7200151, 7200157, 7200158                    // Early traps (Fire Breakout, Tail-Knot, Lead Boots)
     };
     const int early_wheel_cycle[6] = {7200143, 7200144, 7200145, 7200142, 7200148, 7200149};
     while (wc_sphere1_items.size() < wc_sphere1_slots.size()) {
@@ -774,6 +800,14 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     std::shuffle(wc_pool.begin(), wc_pool.end(), rng);
     for (size_t i = 0; i < wc_remaining_slots.size(); ++i) {
         g_state.solo_white_crystal_items[wc_remaining_slots[i]] = wc_pool[i];
+    }
+    // The trap settings: trap_weight 0 takes every trap out (Croc Crystals instead); fire_breakout_trap off
+    // swaps that one for a Tail-Knot.
+    for (int loc = 0; loc < kSoloLocations; ++loc) {
+        int& id = solo_item_at(loc);
+        if (id < 7200151 || id > 7200160) continue;
+        if (g_state.trap_weight <= 0) id = 7200149;
+        else if (id == 7200151 && !g_state.fire_breakout_trap) id = 7200157;
     }
     solo_logic_repair_locked(rng);
 }
@@ -1349,6 +1383,10 @@ static void load_config_ini(const char* ini_path) {
             g_state.lock_level_access = (val == "true" || val == "1");
         } else if (key == "shuffle_white_crystals") {
             g_state.shuffle_white_crystals = std::atoi(val.c_str());
+        } else if (key == "trap_weight") {
+            g_state.trap_weight = std::atoi(val.c_str());
+        } else if (key == "fire_breakout_trap") {
+            g_state.fire_breakout_trap = (val == "true" || val == "1");
         } else if (key == "shuffle_pete_store") {
             g_state.shuffle_pete_store = std::atoi(val.c_str());
         } else if (key == "shuffle_abilities") {
@@ -4280,7 +4318,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
     }
 
     // Croc's lava-hurt routine. Traced in-game (debug_watch script tracer): when Croc touches lava his own
-    // strat script jumps to a routine that starts with "124 652720 / 94 0 2 8 0" and, 0x68 bytes later,
+    // strat script jumps to a routine that starts with "124 <a per-level value> / 94 0 2 8 0" and, 0x68 bytes later,
     // "181 0 / 7 16 / 10 4096". It plays the bounce, the tail smoke and the flash, removes a heart through
     // opcode 154, then jumps back into the main script. Script addresses move on every load, so the routine
     // is found by these contents inside the memory region that holds Croc's script, then Croc's script
@@ -4294,7 +4332,10 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         if (player && in_level && state == 0 && paused == 0 && *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT) > 0) {
             g_pending_lava_hurt.fetch_sub(1);
             uintptr_t script_pos = *reinterpret_cast<uintptr_t*>(player);
-            static const int32_t kHead[7] = {124, 652720, 94, 0, 2, 8, 0};
+            // The second word is different in every level's file (652720 is Save the Bird's, where this was
+            // first traced; with it compared, the routine was only ever found there and every other level fell
+            // back to the plain hit). It is not compared.
+            static const int32_t kHead[7] = {124, 0, 94, 0, 2, 8, 0};
             static const int32_t kBody[6] = {181, 0, 7, 16, 10, 4096};
             uintptr_t found = 0;
             // Search every committed region of the allocation that holds Croc's script (the routine sat in an
@@ -4309,7 +4350,8 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                         const uint8_t* lo = static_cast<const uint8_t*>(r.BaseAddress);
                         const uint8_t* hi = lo + r.RegionSize - (0x68 + sizeof(kBody));
                         for (const uint8_t* q = lo; q < hi; q += 4) {
-                            if (std::memcmp(q, kHead, sizeof(kHead)) == 0 && std::memcmp(q + 0x68, kBody, sizeof(kBody)) == 0) {
+                            if (std::memcmp(q, kHead, 4) == 0 && std::memcmp(q + 8, kHead + 2, sizeof(kHead) - 8) == 0 &&
+                                std::memcmp(q + 0x68, kBody, sizeof(kBody)) == 0) {
                                 found = reinterpret_cast<uintptr_t>(q);
                                 break;
                             }

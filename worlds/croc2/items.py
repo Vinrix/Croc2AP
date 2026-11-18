@@ -35,8 +35,15 @@ for _entry in ITEM_TABLE:
     _group = _entry.get("group", "Miscellaneous")
     ITEM_NAME_GROUPS.setdefault(_group, set()).add(_entry["name"])
 
+# Traps that have no effect in the game yet (Reverse Controls only flips the D-pad). They keep their IDs but are
+# not put in a pool until they work. The mod's solo pool leaves out the same ones.
+UNFINISHED_TRAPS = {
+    "Ice Physics Trap", "Dantini Ambush Trap", "Speed Distortion Trap", "Darkness Trap", "Reverse Controls Trap",
+}
+
 TRAP_ITEMS: List[str] = [
-    entry["name"] for entry in ITEM_TABLE if entry["classification"] == "trap"
+    entry["name"] for entry in ITEM_TABLE
+    if entry["classification"] == "trap" and entry["name"] not in UNFINISHED_TRAPS
 ]
 
 FILLER_ITEMS: List[str] = [
