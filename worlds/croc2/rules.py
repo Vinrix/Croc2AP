@@ -80,39 +80,34 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
     """Applies entrance and location rules across all regions in the Croc 2 world."""
     hubs = LEVEL_MAPPING["hubs"]
 
-    # 1. Hub-to-Hub progression rules. The game opens the next village only when every stage of this one has
-    #    been cleared and both its bosses beaten. So leaving a village takes, for each of its doors, whatever
-    #    the door itself takes (its key, a Vehicle License for a vehicle stage) and whatever clearing the stage
-    #    behind it takes (docs/logic.md), plus both bosses' requirements.
+    # 1. Hub-to-Hub travel is free: the mod lifts the game's own gate on Swap Meet Pete's travel menu (it
+    #    wanted the village's second boss beaten, which needs every stage of the village cleared). A stage door
+    #    needs only its key, whichever village it is in.
+
+    # What it takes to have cleared the stages behind some of a village's doors: each door's own needs (its key,
+    # a Vehicle License for a vehicle stage) and whatever clearing the stage behind it takes (docs/logic.md).
     clear_dnf_by_stage = {entry["stage"]: entry["clear"] for entry in LOGIC}
-    for idx in range(len(hubs) - 1):
-        curr_hub = hubs[idx]
-        next_hub = hubs[idx + 1]
-        ent_name = f"{curr_hub['name']} to {next_hub['name']}"
-        boss_reqs = sorted({r for boss in curr_hub["bosses"] for r in boss["requires"]})
-        doors = []
-        for lvl in curr_hub["levels"]:
-            door_ent = multiworld.get_entrance(f"{curr_hub['name']} Door {lvl['door_num']} Entrance", player)
+
+    def door_clears(hub: dict, door_nums) -> list:
+        out = []
+        for lvl in hub["levels"]:
+            if lvl["door_num"] not in door_nums:
+                continue
+            ent = multiworld.get_entrance(f"{hub['name']} Door {lvl['door_num']} Entrance", player)
             needs_key = bool(options.lock_level_access.value) and not (
-                curr_hub["id"] == "sailor_village" and lvl["door_num"] == 1
+                hub["id"] == "sailor_village" and lvl["door_num"] == 1
             )
-            target_wad = REGION_TO_WAD.get(door_ent.connected_region.name if door_ent.connected_region else "") or ""
-            doors.append((
-                f"{lvl['name']} Key" if needs_key else None,
-                target_wad in VEHICLE_STAGE_WADS,
-                clear_dnf_by_stage.get(target_wad[:4]),
-            ))
-        set_rule(
-            multiworld.get_entrance(ent_name, player),
-            lambda state, reqs=boss_reqs, doors=doors: (
-                has_all_requirements(state, player, options, reqs)
-                and all(
-                    (key is None or state.has(key, player))
-                    and (not licence or has_ability(state, player, options, "Vehicle License"))
-                    and (dnf is None or meets_dnf(state, player, options, dnf))
-                    for key, licence, dnf in doors
-                )
-            ),
+            wad = REGION_TO_WAD.get(ent.connected_region.name if ent.connected_region else "") or ""
+            out.append((f"{lvl['name']} Key" if needs_key else None, wad in VEHICLE_STAGE_WADS,
+                        clear_dnf_by_stage.get(wad[:4])))
+        return out
+
+    def clears_met(state: CollectionState, doors: list) -> bool:
+        return all(
+            (key is None or state.has(key, player))
+            and (not licence or has_ability(state, player, options, "Vehicle License"))
+            and (dnf is None or meets_dnf(state, player, options, dnf))
+            for key, licence, dnf in doors
         )
 
     # 2. Per-Hub Entrances (Pete's Store, Stage Doors, Secret Level, Bosses)
@@ -138,11 +133,21 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
             # leading to one (wherever Door Shuffle put it) needs the license in logic too.
             target_wad = REGION_TO_WAD.get(door_ent.connected_region.name if door_ent.connected_region else "")
             needs_license = target_wad in VEHICLE_STAGE_WADS
+            # Kept on the safe side: in the unmodified game the Inca village's last two doors come after Dante's
+            # Peak, which needs the village's first two stages cleared. How they behave in a randomizer save has
+            # not been seen, so they are given those needs too (see solo_location_reachable in the hook).
+            behind_boss = []
+            boss_needs: List[str] = []
+            if hub["id"] == "inca_village" and lvl["door_num"] in (3, 4):
+                behind_boss = door_clears(hub, (1, 2))
+                boss_needs = hub["bosses"][0]["requires"]
             set_rule(
                 door_ent,
-                lambda state, kn=key_name, nk=needs_key, nl=needs_license: (
+                lambda state, kn=key_name, nk=needs_key, nl=needs_license, bb=behind_boss, bn=boss_needs: (
                     (not nk or state.has(kn, player))
                     and (not nl or has_ability(state, player, options, "Vehicle License"))
+                    and has_all_requirements(state, player, options, bn)
+                    and clears_met(state, bb)
                 ),
             )
 
@@ -159,24 +164,35 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
             ),
         )
 
-        # Boss Entrances
+        # Boss Entrances. Boss doors are left as the game has them: a boss appears only when the village's
+        # stages are cleared (Dante's Peak: the Inca village's first two). So nothing needed elsewhere can sit
+        # behind a boss unless everything those clears take is reachable first.
         for boss in hub["bosses"]:
             boss_ent = multiworld.get_entrance(f"{hub_name} -> {boss['name']}", player)
             boss_reqs = boss["requires"]
+            if boss["wad"] == "T4B1M001":
+                stage_clears = door_clears(hub, (1, 2))
+            elif hub["id"] == "inca_village":
+                stage_clears = door_clears(hub, (1, 2, 3, 4))
+            else:
+                stage_clears = door_clears(hub, (1, 2, 3, 4, 5))
             if boss["wad"] == "T4B2M001":
                 # Dante's Final Fight requires the configured Jigsaw Pieces
                 req_jigsaws = options.jigsaw_pieces_required.value
                 set_rule(
                     boss_ent,
-                    lambda state, reqs=boss_reqs, jp=req_jigsaws: (
+                    lambda state, reqs=boss_reqs, jp=req_jigsaws, sc=stage_clears: (
                         state.has("Jigsaw Piece", player, jp)
                         and has_all_requirements(state, player, options, reqs)
+                        and clears_met(state, sc)
                     ),
                 )
             else:
                 set_rule(
                     boss_ent,
-                    lambda state, reqs=boss_reqs: has_all_requirements(state, player, options, reqs),
+                    lambda state, reqs=boss_reqs, sc=stage_clears: (
+                        has_all_requirements(state, player, options, reqs) and clears_met(state, sc)
+                    ),
                 )
 
     # 3. Location-Specific Rules (Ability requirements + 5 Colored Crystal Golden Gobbo rule)

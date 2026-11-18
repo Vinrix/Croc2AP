@@ -385,30 +385,6 @@ static constexpr int kSoloLocations = SOLO_CHECK_POOL_SIZE + 2000;
 static int& solo_item_at(int loc) {
     return loc < SOLO_CHECK_POOL_SIZE ? g_state.solo_check_items[loc] : g_state.solo_white_crystal_items[loc - SOLO_CHECK_POOL_SIZE];
 }
-// What leaving a village takes besides clearing its stages: its two bosses. Sailor: Soveena is beaten by carrying
-// bombs to her and throwing them, Cannon Boat Keith by firing cannons with the tail. Cossack and Caveman: the
-// bosses' needs as the Archipelago world lists them (level_mapping.json), taken together.
-static const uint64_t kVillageBossNeeds[3] = {
-    (1ull << 0) | (1ull << 1) | (1ull << 5),               // Tail Whack, Butt Stomp, Power Gloves
-    (1ull << 0) | (1ull << 1) | (1ull << 5) | (1ull << 6), // + Lever Wrench
-    (1ull << 0) | (1ull << 1) | (1ull << 5) | (1ull << 6),
-};
-// Can the player be in village v (0 Sailor .. 3 Inca)? The game opens the next village only when every stage of
-// the one before has been cleared and both its bosses beaten ("you can do them in any order as long as you do
-// them all"), so each earlier village needs the key to each of its doors and whatever clearing the stage behind
-// each door takes. `have` is SoloHave::effective().
-static bool solo_village_open(int v, uint64_t have) {
-    for (int u = 0; u < v && u < 3; ++u) {
-        if ((have & kVillageBossNeeds[u]) != kVillageBossNeeds[u]) return false;
-        for (int d = u * 5; d < u * 5 + 5; ++d) {
-            const int stage = g_state.door_perm[d];
-            if (stage < 0 || stage >= kLogicStages) continue;
-            if (d > 0 && g_state.lock_level_access && !(have & (1ull << (14 + d)))) return false;
-            if (!logic_met(kClearLogic[stage], have)) return false;
-        }
-    }
-    return true;
-}
 // `have` is SoloHave::effective().
 static bool solo_location_reachable(int loc, uint64_t have) {
     const bool white = loc >= SOLO_CHECK_POOL_SIZE;
@@ -418,7 +394,22 @@ static bool solo_location_reachable(int loc, uint64_t have) {
     for (int d = 0; d < 20; ++d) if (g_state.door_perm[d] == stage) { door = d; break; }
     if (door < 0) return false;
     if (door > 0 && g_state.lock_level_access && !(have & (1ull << (14 + door)))) return false;
-    if (door >= 5 && !solo_village_open(door / 5, have)) return false;
+    // Every village can be travelled to from the start (Hooked_MapFlags lifts the game's own gate on Pete's
+    // travel menu), so a door needs nothing but its key.
+    // One exception, kept on the safe side: in the unmodified game the Inca village's last two doors come after
+    // Dante's Peak, whose door (IncaDoorTrigger) appears once the village's first two stages are cleared. How
+    // those two doors behave in a randomizer save has not been seen, so the logic assumes the worst: they need
+    // the first two Inca doors' keys, their stages cleared, and what Dante's Peak takes (Tail Whack, Butt Stomp,
+    // Climbing Claws). If the doors turn out to be open anyway, this only makes seeds a little stricter.
+    if (door == 17 || door == 18) {
+        const uint64_t boss = (1ull << 0) | (1ull << 1) | (1ull << 4);
+        if ((have & boss) != boss) return false;
+        for (int d = 15; d <= 16; ++d) {
+            const int st = g_state.door_perm[d];
+            if (g_state.lock_level_access && !(have & (1ull << (14 + d)))) return false;
+            if (st >= 0 && st < kLogicStages && !logic_met(kClearLogic[st], have)) return false;
+        }
+    }
     if (white) {
         if (g_state.shuffle_white_crystals != 3) return false; // only "every crystal is a check" is by number
         return logic_met(kCrystalLogic[stage][(loc - SOLO_CHECK_POOL_SIZE) % 100], have);
@@ -4581,6 +4572,38 @@ static void __fastcall Hooked_Reward100(void* strat) {
     if (g_orig_op_reward_100) g_orig_op_reward_100(strat);
 }
 
+// Opcode 276 (handler 0x140063400): pops tribe, level and kind (0 a stage, 1 a boss) and pushes that map's flag
+// byte from the save data, times 4096; scripts test "& 4096", the "cleared" bit. Two of the game's own gates are
+// lifted with it in randomizer saves, so that stage door keys are the only thing a door needs:
+//  - Swap Meet Pete's travel menu. In each village's shop an object offers the next village only when this
+//    village's second boss is flagged beaten ("276(N, 2, 1) & 4096"; the four shops use the opcode for nothing
+//    else). The boss needs every stage of the village cleared first, so without this a seed could not use a
+//    later village until the whole of the earlier one was done. Every such read in a shop now says "beaten".
+//  - "hub3 gold rock door" in the Caveman village (the kart race's door slot) stays shut until the stages in
+//    the village's first two door slots are cleared. Its reads say "cleared" too.
+// Everything else is left as the game has it: the boss doors (CBKDoorTrigger, IncaDoorTrigger, the last hub3
+// door) still count the village's cleared stages, and the Gobbos by the doors still know what has been done.
+static FnStratVmHandler g_orig_op_map_flags = nullptr;
+static void __fastcall Hooked_MapFlags(void* strat) {
+    if (g_orig_op_map_flags) g_orig_op_map_flags(strat);
+    const MapCoords* cur = reinterpret_cast<const MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+    bool lift = false;
+    if (is_shop_coords(*cur)) {
+        lift = true;
+    } else if (is_hub_coords(*cur)) {
+        const char* nm = *reinterpret_cast<const char* const*>(static_cast<uint8_t*>(strat) + 0x30);
+        lift = nm && readable_memory(nm, 20) && std::strcmp(nm, "hub3 gold rock door") == 0;
+    }
+    if (!lift) return;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (!g_state.is_mod_enabled_toggle() || !g_state.is_randomizer_active()) return;
+    }
+    // The result is the top of the strat's value stack: int32 entries, +0x130 points past the last one.
+    int32_t* top = *reinterpret_cast<int32_t**>(static_cast<uint8_t*>(strat) + 0x130);
+    if (top && *reinterpret_cast<int32_t*>(static_cast<uint8_t*>(strat) + 0x138) > 0) top[-1] |= 4096;
+}
+
 // Opcode 172 <type>: GiveInventoryItem -> AddInventoryItem(type, 1, 1, 0) at 0x140041600. The type is the next
 // int32 in the script. Types and who gives them (read from the scripts):
 //   2 binoculars (an object in Sailor Village)      3 key (Key objects)
@@ -5741,6 +5764,7 @@ static void install_croc2_engine_hooks() {
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 173 * 8, 0x00066030, reinterpret_cast<uintptr_t>(&Hooked_GainCrystal), g_orig_gain_crystal);
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_REWARD_100_SLOT, RVA_FN_OP_REWARD_100, reinterpret_cast<uintptr_t>(&Hooked_Reward100), g_orig_op_reward_100);
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 276 * 8, 0x00063400, reinterpret_cast<uintptr_t>(&Hooked_MapFlags), g_orig_op_map_flags);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
     if (g_state.debug_watch) {
