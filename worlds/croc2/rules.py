@@ -133,9 +133,9 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
             # leading to one (wherever Door Shuffle put it) needs the license in logic too.
             target_wad = REGION_TO_WAD.get(door_ent.connected_region.name if door_ent.connected_region else "")
             needs_license = target_wad in VEHICLE_STAGE_WADS
-            # Kept on the safe side: in the unmodified game the Inca village's last two doors come after Dante's
-            # Peak, which needs the village's first two stages cleared. How they behave in a randomizer save has
-            # not been seen, so they are given those needs too (see solo_location_reachable in the hook).
+            # The Inca village has two real doors; door slots 3 and 4 are through the big gate, which opens when
+            # the stages behind those two doors are cleared (regions.py keeps the gate's two stages there), and
+            # come after Dante's Peak. So they need those clears and what the boss takes.
             behind_boss = []
             boss_needs: List[str] = []
             if hub["id"] == "inca_village" and lvl["door_num"] in (3, 4):

@@ -150,6 +150,27 @@ def _fix_first_door(world_random, targets: list, vanilla_wad: str) -> None:
         targets[0], targets[j] = targets[j], targets[0]
 
 
+# The Inca village has only two real stage doors. Everything else there (Dante's Peak, then the stages of door
+# slots 3 and 4) is through one big gate, which the game opens when these two stages are cleared. So they always
+# stay behind the two real doors (in either order); behind the gate they could never be finished.
+INCA_GATE_STAGE_WADS = {"T4L2M001", "T4L3M001"}
+INCA_REAL_DOOR_IDS = ("T4_D1", "T4_D2")
+
+
+def _fix_inca_gate(door_ids: list, targets: list) -> None:
+    """Swap targets so the two real Inca doors lead to the two stages that open the Inca gate."""
+    for door_id in INCA_REAL_DOOR_IDS:
+        if door_id not in door_ids:
+            continue
+        i = door_ids.index(door_id)
+        if targets[i]["wad"] in INCA_GATE_STAGE_WADS:
+            continue
+        for j, target in enumerate(targets):
+            if target["wad"] in INCA_GATE_STAGE_WADS and door_ids[j] not in INCA_REAL_DOOR_IDS:
+                targets[i], targets[j] = targets[j], targets[i]
+                break
+
+
 def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str, dict], Dict[str, str]]:
     """
     Computes the mapping of physical village doors (`T1_D1`..`T4_D5`) to level descriptors and WAD codes.
@@ -180,6 +201,7 @@ def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str,
             targets = [lvl_copy for _, lvl_copy in hub_doors]
             shuffled = list(targets)
             world_random.shuffle(shuffled)
+            _fix_inca_gate([d_id for d_id, _ in hub_doors], shuffled)
             # Ensure Door 1 in Sailor Village is visibly shuffled to a non-vanilla stage
             if hub_id == "sailor_village" and len(shuffled) > 1:
                 _fix_first_door(world_random, shuffled, targets[0]["wad"])
@@ -192,6 +214,7 @@ def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str,
         all_targets = [lvl_copy for _, lvl_copy in all_doors]
         shuffled_targets = list(all_targets)
         world_random.shuffle(shuffled_targets)
+        _fix_inca_gate(all_door_ids, shuffled_targets)
         if len(shuffled_targets) > 1:
             _fix_first_door(world_random, shuffled_targets, all_targets[0]["wad"])
         for door_id, target in zip(all_door_ids, shuffled_targets):

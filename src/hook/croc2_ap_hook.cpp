@@ -396,11 +396,12 @@ static bool solo_location_reachable(int loc, uint64_t have) {
     if (door > 0 && g_state.lock_level_access && !(have & (1ull << (14 + door)))) return false;
     // Every village can be travelled to from the start (Hooked_MapFlags lifts the game's own gate on Pete's
     // travel menu), so a door needs nothing but its key.
-    // One exception, kept on the safe side: in the unmodified game the Inca village's last two doors come after
-    // Dante's Peak, whose door (IncaDoorTrigger) appears once the village's first two stages are cleared. How
-    // those two doors behave in a randomizer save has not been seen, so the logic assumes the worst: they need
-    // the first two Inca doors' keys, their stages cleared, and what Dante's Peak takes (Tail Whack, Butt Stomp,
-    // Climbing Claws). If the doors turn out to be open anyway, this only makes seeds a little stricter.
+    // One exception: the Inca village. It has two real stage doors; door slots 3 and 4 are through the big gate
+    // (IncaDoorTrigger), left as the game has it, which opens when Save 30 Gobbo Babies and Up the Waterfall are
+    // cleared (the door shuffle keeps those two behind the real doors), and they come after Dante's Peak. So
+    // they need the two real doors' keys, those stages cleared, and what Dante's Peak takes (Tail Whack, Butt
+    // Stomp, Climbing Claws). Nobody has played this far: how the gate hands out its destinations after the boss
+    // is not known.
     if (door == 17 || door == 18) {
         const uint64_t boss = (1ull << 0) | (1ull << 1) | (1ull << 4);
         if ((have & boss) != boss) return false;
@@ -591,6 +592,22 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     for (int v = 1; v < 4; ++v) {
         int base = v * 5;
         int idx[5] = {base + 0, base + 1, base + 2, base + 3, base + 4};
+        if (v == 3) {
+            // The Inca village has only two real stage doors. The rest (Dante's Peak, then door slots 3 and 4)
+            // is through one big gate (IncaDoorTrigger), which the game opens when Save 30 Gobbo Babies and Up
+            // the Waterfall are cleared. Behind the gate those two could never be finished, so they stay behind
+            // the two real doors, swapped; the other three slots rotate among themselves.
+            std::swap(idx[0], idx[1]);
+            if (rng() % 2 == 0) { idx[2] = base + 3; idx[3] = base + 4; idx[4] = base + 2; }
+            else                { idx[2] = base + 4; idx[3] = base + 2; idx[4] = base + 3; }
+            for (int k = 0; k < 5; ++k) {
+                int door_i = base + k;
+                g_state.door_perm[door_i] = static_cast<uint8_t>(idx[k]);
+                g_state.door_overrides[kStageDoors[door_i].door_id] = kStageDoors[idx[k]].vanilla_wad;
+                g_state.door_overrides[kStageDoors[door_i].vanilla_wad] = kStageDoors[idx[k]].vanilla_wad;
+            }
+            continue;
+        }
         for (int attempt = 0; attempt < 32; ++attempt) {
             std::shuffle(std::begin(idx), std::end(idx), rng);
             bool is_derangement = true;
@@ -792,13 +809,21 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     for (size_t i = 0; i < wc_remaining_slots.size(); ++i) {
         g_state.solo_white_crystal_items[wc_remaining_slots[i]] = wc_pool[i];
     }
-    // The trap settings: trap_weight 0 takes every trap out (Croc Crystals instead); fire_breakout_trap off
-    // swaps that one for a Tail-Knot.
-    for (int loc = 0; loc < kSoloLocations; ++loc) {
-        int& id = solo_item_at(loc);
-        if (id < 7200151 || id > 7200160) continue;
-        if (g_state.trap_weight <= 0) id = 7200149;
-        else if (id == 7200151 && !g_state.fire_breakout_trap) id = 7200157;
+    // The trap settings. trap_weight is the percent of filler that is a trap, as in the Archipelago world: every
+    // check holding Croc Crystals or a trap is rolled again, a trap with that chance and Croc Crystals otherwise.
+    // 0 means no traps at all. fire_breakout_trap off leaves that trap out.
+    {
+        std::vector<int> traps;
+        for (int t : trap_cycle) {
+            if (t != 7200151 || g_state.fire_breakout_trap) traps.push_back(t);
+        }
+        const int weight = g_state.trap_weight < 0 ? 0 : (g_state.trap_weight > 100 ? 100 : g_state.trap_weight);
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            int& id = solo_item_at(loc);
+            if (id < 7200148 || id > 7200160) continue; // Croc Crystals (1, 5, 10) and traps
+            if (!traps.empty() && static_cast<int>(rng() % 100) < weight) id = traps[rng() % traps.size()];
+            else id = filler_cycle[rng() % 3];
+        }
     }
     solo_logic_repair_locked(rng);
 }

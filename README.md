@@ -51,15 +51,13 @@ Featuring memory-hooked item injection, door locking logic, interactive player t
 - **Cleaned Item & Location Pools**:
   - Normal Gobbos excluded to preserve stage balance and level logic flow.
   - Colored Crystal HUD collection clamped to prevent phantom pickups.
-- **8 Interactive Traps (Flat 10-Second Ill Effects; No Early Removal)**:
-  1. **🔥 Fire Breakout Trap**: Instant -1 heart loss with flame animation and knockback recoil!
+- **5 Traps in the pool**:
+  1. **🔥 Fire Breakout Trap**: Croc's lava burn (bounce, tail smoke) and -1 heart.
   2. **🪢 Tail-Knot Trap**: Croc's tail gets tied in a knot, disabling Tail Whack for a flat 10 seconds (cannot be untied early).
   3. **⚓ Lead Boots Trap**: Heavy iron boots completely disable jumping and stomping for a flat 10 seconds.
-  4. **🧊 Ice Physics Trap**: Zero ground friction / ice sliding for a flat 10 seconds.
-  5. **🔄 Reverse Controls Trap**: Inverts all directional inputs for a flat 10 seconds.
-  6. **🌑 Darkness Trap**: Shrouds Croc's vision in a localized black shadow fog for a flat 10 seconds.
-  7. **😈 Dantini Ambush**: Spawns an aggressive pack of hostile Dantinis for a flat 10 seconds.
-  8. **💰 Pete's Crystal Tax**: Swap Meet Pete levies a portion of Croc's held crystals immediately.
+  4. **💰 Pete's Crystal Tax**: Swap Meet Pete takes 20 of Croc's crystals.
+  5. **💔 Health Drain Trap**: -1 heart.
+- **Not in the pool yet** (no effect in the game so far): Ice Physics, Reverse Controls, Darkness, Dantini Ambush, Speed Distortion.
 
 ---
 

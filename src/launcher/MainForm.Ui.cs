@@ -407,7 +407,7 @@ namespace Croc2Launcher
             y = Row(list, y, "Shuffle vehicles", "Vehicles need the Vehicle License", _chkVehicles);
             y = Row(list, y, "Shuffle plane guns", "Shooting needs the Airplane Ammo Feed", _chkPlaneGuns);
             y = Row(list, y, "Trap frequency", "Percent of filler that becomes a trap", _numTrapWeight);
-            y = Row(list, y, "Fire breakout trap", "Instant heart loss and knockback", _chkFireTrap);
+            y = Row(list, y, "Fire breakout trap", "Croc's lava burn and a heart lost", _chkFireTrap);
             Row(list, y, "DeathLink", "When anyone dies, everyone dies (multiworld)", _chkDeathLink);
 
             EventHandler changed = (s, e) => { if (!_applyingPreset) RefreshPresetState(); };
