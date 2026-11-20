@@ -37,9 +37,13 @@ def send(obj):
 
 def main():
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+    # Second argument: door_shuffle (0 off, 1 within each village, 2 across villages). Default 1.
+    door_mode = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     ini = os.path.join(ROOT, 'build', 'check_solo.ini')
     with open(ini, 'w') as f:
-        f.write('[ArchipelagoMod]\nenabled = true\nport = %d\n' % PORT)
+        f.write('[ArchipelagoMod]\nenabled = true\nport = %d\n[RandomizerSettings]\ndoor_shuffle = %d\n' % (PORT, door_mode))
+    bad_doors = 0       # seeds whose door layout breaks a rule
+    cross_doors = 0     # doors leading to a stage of another village, over all seeds
     def start_host():
         p = subprocess.Popen([os.path.join(ROOT, 'build', 'test_host.exe'), ini], cwd=ROOT)
         for _ in range(150):  # it can take a few seconds to start listening
@@ -88,6 +92,18 @@ def main():
             revisit_seeds += revisit
             late_revisits += late
             chains += chain
+            doors = r.get('doors', [])
+            if doors:
+                ok = (sorted(doors) == list(range(20)) and doors[0] in (0, 4) and doors[19] == 19
+                      and sorted(doors[15:17]) == [15, 16])
+                if door_mode == 0:
+                    ok = ok and doors == list(range(20))
+                if door_mode == 1:
+                    ok = ok and all(doors[d] // 5 == d // 5 for d in range(20))
+                if not ok:
+                    bad_doors += 1
+                    print('seed %d: door layout breaks a rule: %s' % (seed, doors))
+                cross_doors += sum(1 for d in range(19) if doors[d] // 5 != d // 5)
             if r['stranded_items'] or r.get('lost_items') or r.get('short_consumables'):
                 bad += 1
                 print('seed %d: consumables in logic %s' % (seed, r.get('consumables')))
@@ -112,6 +128,8 @@ def main():
         except OSError:
             pass
     print('%d of %d seeds left a needed item out of reach or lost one on a dead check' % (bad, count))
+    print('door shuffle mode %d: %d seeds broke a door rule; %.1f doors per seed lead to another village' % (
+        door_mode, bad_doors, cross_doors / max(count, 1)))
     sys.exit(1 if bad else 0)
 
 

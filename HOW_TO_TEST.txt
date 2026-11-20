@@ -19,6 +19,8 @@ START A TEST RUN
      THIS IS THE ONLY VALID MODE FOR NOW. The logic for "None", "Every 50th" and "Every 10th" is not
      built yet: a solo game in those modes is not checked for being finishable and can leave you stuck.
      Please don't test them or report problems from them yet.
+     To have doors lead to stages from other villages, also set "Door shuffle" to "Any village".
+     ("Within each village" keeps every stage in its own village.)
   4. Click "Start solo run", pick an EMPTY save slot and choose New Game.
      Saves made with an older build use old rules and old crystal numbers.
 

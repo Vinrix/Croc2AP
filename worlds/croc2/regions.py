@@ -155,10 +155,22 @@ def _fix_first_door(world_random, targets: list, vanilla_wad: str) -> None:
 # stay behind the two real doors (in either order); behind the gate they could never be finished.
 INCA_GATE_STAGE_WADS = {"T4L2M001", "T4L3M001"}
 INCA_REAL_DOOR_IDS = ("T4_D1", "T4_D2")
+# "Inca Door 5" is a demo copy of a level (T0L1M003) that no door in the game leads to. It is never shuffled: a
+# stage put behind it could never be played.
+UNSHUFFLED_DOOR_WADS = {"T4_D5": "T0L1M003"}
 
 
 def _fix_inca_gate(door_ids: list, targets: list) -> None:
-    """Swap targets so the two real Inca doors lead to the two stages that open the Inca gate."""
+    """Swap targets so the two real Inca doors lead to the two stages that open the Inca gate, and so the doors
+    in UNSHUFFLED_DOOR_WADS keep their own target."""
+    for door_id, wad in UNSHUFFLED_DOOR_WADS.items():
+        if door_id not in door_ids:
+            continue
+        i = door_ids.index(door_id)
+        for j, target in enumerate(targets):
+            if target["wad"] == wad and j != i:
+                targets[i], targets[j] = targets[j], targets[i]
+                break
     for door_id in INCA_REAL_DOOR_IDS:
         if door_id not in door_ids:
             continue

@@ -557,79 +557,77 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     // Save the Bird from the Thief (4), about 45 crystals each. The other Sailor stages have none: Get the Gobbo's
     // Sandwich opens with monkey bars, Find 5 Lost Treasure Chests is ridden on mine carts, and the boat race is
     // a vehicle.
-    int door1_target = (rng() % 2 == 0) ? 0 : 4;
-    g_state.door_perm[0] = static_cast<uint8_t>(door1_target);
-    g_state.door_overrides[kStageDoors[0].door_id] = kStageDoors[door1_target].vanilla_wad;
-    g_state.door_overrides[kStageDoors[0].vanilla_wad] = kStageDoors[door1_target].vanilla_wad;
-
-    // Doors 1..4 in Sailor Village: derange remaining stages {0, 1, 2, 3, 4} \ {door1_target}
-    std::vector<int> sailor_rem;
-    for (int k = 0; k < 5; ++k) {
-        if (k != door1_target) sailor_rem.push_back(k);
-    }
-    for (int attempt = 0; attempt < 32; ++attempt) {
-        std::shuffle(sailor_rem.begin(), sailor_rem.end(), rng);
-        bool ok = true;
-        for (int k = 0; k < 4; ++k) {
-            if (sailor_rem[k] == (k + 1)) { ok = false; break; }
-        }
-        if (ok) break;
-    }
-    for (int k = 0; k < 4; ++k) {
-        if (sailor_rem[k] == (k + 1)) {
-            std::swap(sailor_rem[k], sailor_rem[(k + 1) % 4]);
-        }
-    }
-    for (int k = 0; k < 4; ++k) {
-        int door_i = k + 1;
-        int target_s = sailor_rem[k];
-        g_state.door_perm[door_i] = static_cast<uint8_t>(target_s);
-        g_state.door_overrides[kStageDoors[door_i].door_id] = kStageDoors[target_s].vanilla_wad;
-        g_state.door_overrides[kStageDoors[door_i].vanilla_wad] = kStageDoors[target_s].vanilla_wad;
-    }
-
-    // Villages 1..3 (Cossack, Caveman, Inca): standard full derangement
-    for (int v = 1; v < 4; ++v) {
-        int base = v * 5;
-        int idx[5] = {base + 0, base + 1, base + 2, base + 3, base + 4};
-        if (v == 3) {
-            // The Inca village has only two real stage doors. The rest (Dante's Peak, then door slots 3 and 4)
-            // is through one big gate (IncaDoorTrigger), which the game opens when Save 30 Gobbo Babies and Up
-            // the Waterfall are cleared. Behind the gate those two could never be finished, so they stay behind
-            // the two real doors, swapped; the other three slots rotate among themselves.
-            std::swap(idx[0], idx[1]);
-            if (rng() % 2 == 0) { idx[2] = base + 3; idx[3] = base + 4; idx[4] = base + 2; }
-            else                { idx[2] = base + 4; idx[3] = base + 2; idx[4] = base + 3; }
-            for (int k = 0; k < 5; ++k) {
-                int door_i = base + k;
-                g_state.door_perm[door_i] = static_cast<uint8_t>(idx[k]);
-                g_state.door_overrides[kStageDoors[door_i].door_id] = kStageDoors[idx[k]].vanilla_wad;
-                g_state.door_overrides[kStageDoors[door_i].vanilla_wad] = kStageDoors[idx[k]].vanilla_wad;
-            }
-            continue;
+    // door_shuffle (croc2_mod.ini): 0 every door leads to its own stage; 1 doors are shuffled within each
+    // village; 2 a door can lead to a stage of any village. Rules that hold in every mode:
+    //  - Door 1 leads to one of those two stages.
+    //  - The Inca village's two real doors (15, 16) lead to Save 30 Gobbo Babies and Up the Waterfall, in either
+    //    order: the game opens the Inca gate (IncaDoorTrigger) when those two are cleared, and everything else
+    //    in that village is through the gate, so behind it they could never be finished.
+    //  - "Inca Door 5" (19) is never shuffled. Its entry in the door table is a demo copy of a level
+    //    (T0L1M003) that no door in the game leads to, so a stage put behind it could never be played.
+    int perm[20];
+    for (int d = 0; d < 20; ++d) perm[d] = d;
+    const int mode = g_state.door_shuffle;
+    int door1_target = 0;
+    if (mode == 1) {
+        door1_target = (rng() % 2 == 0) ? 0 : 4;
+        perm[0] = door1_target;
+        // Sailor doors 2..5: the other four Sailor stages, none behind its own door.
+        std::vector<int> sailor_rem;
+        for (int k = 0; k < 5; ++k) {
+            if (k != door1_target) sailor_rem.push_back(k);
         }
         for (int attempt = 0; attempt < 32; ++attempt) {
-            std::shuffle(std::begin(idx), std::end(idx), rng);
-            bool is_derangement = true;
-            for (int k = 0; k < 5; ++k) {
-                if (idx[k] == base + k) {
-                    is_derangement = false;
-                    break;
+            std::shuffle(sailor_rem.begin(), sailor_rem.end(), rng);
+            bool ok = true;
+            for (int k = 0; k < 4; ++k) {
+                if (sailor_rem[k] == (k + 1)) { ok = false; break; }
+            }
+            if (ok) break;
+        }
+        for (int k = 0; k < 4; ++k) {
+            if (sailor_rem[k] == (k + 1)) std::swap(sailor_rem[k], sailor_rem[(k + 1) % 4]);
+        }
+        for (int k = 0; k < 4; ++k) perm[k + 1] = sailor_rem[k];
+        // Cossack and Caveman: no stage behind its own door.
+        for (int v = 1; v < 3; ++v) {
+            const int base = v * 5;
+            int idx[5] = {base + 0, base + 1, base + 2, base + 3, base + 4};
+            for (int attempt = 0; attempt < 32; ++attempt) {
+                std::shuffle(std::begin(idx), std::end(idx), rng);
+                bool is_derangement = true;
+                for (int k = 0; k < 5; ++k) {
+                    if (idx[k] == base + k) { is_derangement = false; break; }
                 }
+                if (is_derangement) break;
             }
-            if (is_derangement) break;
-        }
-        for (int k = 0; k < 5; ++k) {
-            if (idx[k] == base + k) {
-                std::swap(idx[k], idx[(k + 1) % 5]);
+            for (int k = 0; k < 5; ++k) {
+                if (idx[k] == base + k) std::swap(idx[k], idx[(k + 1) % 5]);
             }
+            for (int k = 0; k < 5; ++k) perm[base + k] = idx[k];
         }
-        for (int k = 0; k < 5; ++k) {
-            int door_i = base + k;
-            g_state.door_perm[door_i] = static_cast<uint8_t>(idx[k]);
-            g_state.door_overrides[kStageDoors[door_i].door_id] = kStageDoors[idx[k]].vanilla_wad;
-            g_state.door_overrides[kStageDoors[door_i].vanilla_wad] = kStageDoors[idx[k]].vanilla_wad;
+        // Inca: the two real doors swap, and so do the two door slots behind the gate.
+        std::swap(perm[15], perm[16]);
+        std::swap(perm[17], perm[18]);
+    } else if (mode >= 2) {
+        door1_target = (rng() % 2 == 0) ? 0 : 4;
+        perm[0] = door1_target;
+        if (rng() % 2 == 0) std::swap(perm[15], perm[16]);
+        // Every other real door (1..14, 17, 18) gets one of the remaining sixteen stages, from any village.
+        std::vector<int> doors, stages;
+        for (int d = 1; d <= 18; ++d) {
+            if (d != 15 && d != 16) doors.push_back(d);
         }
+        for (int st = 0; st <= 18; ++st) {
+            if (st != door1_target && st != 15 && st != 16) stages.push_back(st);
+        }
+        std::shuffle(stages.begin(), stages.end(), rng);
+        for (size_t k = 0; k < doors.size(); ++k) perm[doors[k]] = stages[k];
+    }
+    for (int d = 0; d < 20; ++d) {
+        g_state.door_perm[d] = static_cast<uint8_t>(perm[d]);
+        g_state.door_overrides[kStageDoors[d].door_id] = kStageDoors[perm[d]].vanilla_wad;
+        g_state.door_overrides[kStageDoors[d].vanilla_wad] = kStageDoors[perm[d]].vanilla_wad;
     }
 
     int target_idx0 = g_state.door_perm[0] < 20 ? g_state.door_perm[0] : 0;
@@ -859,6 +857,7 @@ static void sync_state_to_save_footer_locked() {
         footer->green_jellies = static_cast<uint8_t>(g_state.green_jellies);
         footer->clockwork_gobbos = static_cast<uint8_t>(g_state.clockwork_gobbos);
         for (int k = 0; k < 4; ++k) footer->items_delivered[k] = static_cast<uint8_t>(g_state.items_delivered[k]);
+        for (int k = 0; k < 3; ++k) footer->borrowed_clear[k] = static_cast<uint8_t>(g_state.borrowed_clear >> (8 * k));
         // Bit 0 binoculars, bit 1 High Jump (the abilities byte above is full).
         footer->binoculars = static_cast<uint8_t>((g_state.binoculars ? 1 : 0) | (g_state.abilities.high_jump ? 2 : 0) |
                                                   (g_state.abilities.mine_cart ? 4 : 0)); // bit 2 Mine Cart
@@ -904,6 +903,8 @@ static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& fo
     g_state.green_jellies = footer.green_jellies;
     g_state.clockwork_gobbos = footer.clockwork_gobbos;
     for (int k = 0; k < 4; ++k) g_state.items_delivered[k] = footer.items_delivered[k];
+    g_state.borrowed_clear = 0;
+    for (int k = 0; k < 3; ++k) g_state.borrowed_clear |= static_cast<uint32_t>(footer.borrowed_clear[k]) << (8 * k);
     g_state.binoculars = (footer.binoculars & 1) != 0;
     g_state.abilities.high_jump = (footer.binoculars & 2) != 0;
     g_state.abilities.mine_cart = (footer.binoculars & 4) != 0;
@@ -973,6 +974,7 @@ static void generate_new_save_seed_locked(uint64_t seed) {
     g_state.blue_jellies = 0;
     g_state.green_jellies = 0;
     for (int k = 0; k < 4; ++k) g_state.items_delivered[k] = 0;
+    g_state.borrowed_clear = 0;
     g_state.binoculars = false;
     g_state.stage_colored_crystals.clear();
     g_state.activated_golden_gobbos.clear();
@@ -1399,6 +1401,8 @@ static void load_config_ini(const char* ini_path) {
             g_state.lock_level_access = (val == "true" || val == "1");
         } else if (key == "shuffle_white_crystals") {
             g_state.shuffle_white_crystals = std::atoi(val.c_str());
+        } else if (key == "door_shuffle") {
+            g_state.door_shuffle = std::atoi(val.c_str());
         } else if (key == "trap_weight") {
             g_state.trap_weight = std::atoi(val.c_str());
         } else if (key == "fire_breakout_trap") {
@@ -2047,7 +2051,9 @@ static std::string handle_command_locked(const std::string& req) {
         SoloHave have;
         std::vector<char> seen(kSoloLocations, 0);
         std::ostringstream ss;
-        ss << "{\"status\":\"ok\",\"door1_stage\":" << static_cast<int>(g_state.door_perm[0]) << ",\"spheres\":[";
+        ss << "{\"status\":\"ok\",\"door1_stage\":" << static_cast<int>(g_state.door_perm[0]) << ",\"doors\":[";
+        for (int d = 0; d < 20; ++d) ss << (d ? "," : "") << static_cast<int>(g_state.door_perm[d]);
+        ss << "],\"spheres\":[";
         int total = 0;
         for (int sphere = 0; sphere < 64; ++sphere) {
             // One sphere: everything reachable with what was held when the sphere began.
@@ -3489,8 +3495,30 @@ static bool map_clear_flag_set(const MapCoords& m) {
 static int g_entry_stage_idx = -1;
 static bool g_entry_stage_was_cleared = false;
 
+// The byte in the game's save data that holds a map's "cleared" bit (bit 0), or null.
+static uint8_t* map_clear_flag_byte(const MapCoords& m) {
+    int32_t idx = map_flag_index(m);
+    if (idx < 0 || idx + 0x304 >= 0x17800) return nullptr;
+    return reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE) + idx + 0x304;
+}
+
+// Puts every borrowed "cleared" mark back (see ModState::borrowed_clear). Called when a hub is loaded, which
+// also covers a save that was written while Croc was inside such a stage with the mark taken off.
+static void reassert_borrowed_clears_locked() {
+    for (int st = 0; st < 20; ++st) {
+        if (!(g_state.borrowed_clear & (1u << st))) continue;
+        MapCoords m{};
+        if (!wad_to_coords(kStageDoors[st].vanilla_wad, m)) continue;
+        if (uint8_t* f = map_clear_flag_byte(m)) *f |= 1;
+    }
+}
+
 static void remember_stage_entry_locked(const MapCoords& stage_map) {
     g_entry_stage_idx = find_stage_index_by_wad(coords_to_wad(stage_map));
+    // A borrowed "cleared" mark is taken off for the visit: the stage has not really been cleared.
+    if (g_entry_stage_idx >= 0 && (g_state.borrowed_clear & (1u << g_entry_stage_idx))) {
+        if (uint8_t* f = map_clear_flag_byte(stage_map)) *f &= static_cast<uint8_t>(~1u);
+    }
     g_entry_stage_was_cleared = g_entry_stage_idx >= 0 && map_clear_flag_set(stage_map);
 }
 
@@ -3516,6 +3544,16 @@ static void report_completion_on_exit_locked(const MapCoords& left, const MapCoo
             claim_solo_check_locked(g_entry_stage_idx, 8,
                                     std::string(kStageDoors[g_entry_stage_idx].level_name) + " - Stage Clear");
         }
+        // The stage's mark was borrowed and taken off for the visit: if the stage has now really been cleared
+        // the mark is its own from here on; if not, it goes back on.
+        if (g_state.borrowed_clear & (1u << g_entry_stage_idx)) {
+            if (map_clear_flag_set(entry)) {
+                g_state.borrowed_clear &= ~(1u << g_entry_stage_idx);
+                sync_state_to_save_footer_locked();
+            } else if (uint8_t* f = map_clear_flag_byte(entry)) {
+                *f |= 1;
+            }
+        }
         g_entry_stage_idx = -1;
     }
     if (!g_state.is_randomizer_active()) return;
@@ -3533,6 +3571,7 @@ static MapCoords resolve_map_load_locked(const MapCoords& req) {
     g_fix_spawn_this_load = false;
     inspect_and_sync_save_lifecycle_locked(req);
     report_completion_on_exit_locked(g_last_loaded, req);
+    if (is_hub_coords(req)) reassert_borrowed_clears_locked();
 
     if (!g_state.is_mod_enabled_toggle()) {
         g_in_redirected_stage = false;
@@ -3643,7 +3682,17 @@ static MapCoords resolve_map_load_locked(const MapCoords& req) {
         // the door's original stage slot to keep this village's progress (door state, boss unlock) right.
         // Within a village the set of cleared bits is already correct, so nothing is copied.
         if (g_saved_rand_stage.tribe != g_saved_orig_door.tribe && map_clear_flag_set(g_saved_rand_stage)) {
-            reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE)[map_flag_index(g_saved_orig_door) + 0x304] |= 1;
+            uint8_t* f = map_clear_flag_byte(g_saved_orig_door);
+            if (f && !(*f & 1)) {
+                *f |= 1;
+                // The door's own stage has not been cleared: remember that this mark is borrowed, so that
+                // stage still plays as uncleared and can still give its Stage Clear check.
+                const int slot_stage = find_stage_index_by_wad(coords_to_wad(g_saved_orig_door));
+                if (slot_stage >= 0) {
+                    g_state.borrowed_clear |= 1u << slot_stage;
+                    sync_state_to_save_footer_locked();
+                }
+            }
         }
         g_fix_spawn_this_load = true; // place Croc at the hub door he originally entered
         g_state.current_wad = coords_to_wad(back);
