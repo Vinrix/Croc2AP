@@ -1,0 +1,46 @@
+CROC 2 ARCHIPELAGO - TEST BUILD
+===============================
+
+This is a test build from a pull request. It is set up so you don't have to edit any files.
+
+INSTALL
+  1. Unzip the download into a folder of its own first (right-click the zip, Extract All).
+     Running files from inside the zip does not work.
+  2. Close Croc 2 and the launcher.
+  3. Double-click Install_Croc2AP.bat and say Yes when Windows asks for permission.
+     If Windows shows "Windows protected your PC", click More info, then Run anyway.
+     It keeps your existing croc2_mod.ini. Wait for "Installation Complete!".
+
+START A TEST RUN
+  1. Open your Croc 2 folder and start Croc2ArchipelagoLauncher.exe.
+  2. Choose "Solo randomizer".
+  3. On the settings page pick the Standard preset, then change "White crystal checks" to
+     "All 100 per stage (2,000 checks)".
+     THIS IS THE ONLY VALID MODE FOR NOW. The logic for "None", "Every 50th" and "Every 10th" is not
+     built yet: a solo game in those modes is not checked for being finishable and can leave you stuck.
+     Please don't test them or report problems from them yet.
+     To have doors lead to stages from other villages, also set "Door shuffle" to "Any village".
+     ("Within each village" keeps every stage in its own village.)
+  4. Click "Start solo run", pick an EMPTY save slot and choose New Game.
+     Saves made with an older build use old rules and old crystal numbers.
+
+WHAT IS DIFFERENT IN A TEST BUILD
+  - The debug log is always on. You do not need debug_watch = 1 in croc2_mod.ini.
+  - The launcher's activity list shows where each item came from, and is also saved to
+    croc2ap_activity.log in your Croc 2 folder.
+
+IF SOMETHING GOES WRONG
+  1. Do NOT start the game again yet.
+  2. Run Collect_Report.bat. It puts the logs in a folder on your Desktop and opens it.
+  3. Drag those files into the GitHub issue or pull request, with a line about what you were doing.
+
+CHECKING THE LOGIC
+  logic.md        what every check needs, stage by stage
+  crystal_ids.md  which crystal each "White Crystal N" is, and where it sits
+  Lines in croc2_ap_debug.log that start with "CRYSTALS pickup" name the numbers you collected.
+
+If a crystal listed as needing "nothing" turned out to need an ability, that is the most useful thing you
+can report: tell us the stage, the number, and what you needed.
+
+GOING BACK
+  Run Uninstall_Croc2AP.bat, or Toggle_Vanilla_Mode.bat to play without the mod.

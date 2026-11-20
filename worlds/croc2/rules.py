@@ -3,14 +3,14 @@
 from typing import List
 from BaseClasses import CollectionState, MultiWorld
 from worlds.generic.Rules import set_rule
-from .locations import LEVEL_MAPPING, LOCATION_NAME_TO_DATA
+from .locations import CONSUMABLE_NEED, LEVEL_MAPPING, LOCATION_NAME_TO_DATA, LOGIC
 from .options import ColoredCrystalsMode, Croc2Options, Goal, ShufflePeteStore
 from .regions import VEHICLE_STAGE_WADS
 
 
 def has_ability(state: CollectionState, player: int, options: Croc2Options, ability_name: str) -> bool:
     """Checks whether the player has unlocked a specific movement or interaction ability."""
-    if ability_name in ("Tail Whack", "Butt Stomp", "Long Jump", "High Jump", "Climbing Claws", "Power Gloves"):
+    if ability_name in ("Tail Whack", "Butt Stomp", "Long Jump", "High Jump", "Climbing Claws", "Power Gloves", "Mine Cart"):
         return not options.shuffle_abilities.value or state.has(ability_name, player)
     if ability_name == "Lever Wrench":
         return not options.shuffle_levers.value or state.has("Lever Wrench", player)
@@ -18,7 +18,9 @@ def has_ability(state: CollectionState, player: int, options: Croc2Options, abil
         return not options.shuffle_vehicles.value or state.has("Vehicle License", player)
     if ability_name == "Airplane Ammo Feed":
         return not options.shuffle_plane_guns.value or state.has("Airplane Ammo Feed", player)
-    return state.has(ability_name, player)
+    # Jellies and Clockwork Gobbos are used up, and the player chooses where. A check behind one of their markers
+    # is in logic once as many of that kind are held as the game has markers for it (docs/logic.md).
+    return state.has(ability_name, player, CONSUMABLE_NEED.get(ability_name, 1))
 
 
 def has_all_requirements(
@@ -28,6 +30,29 @@ def has_all_requirements(
     reqs: List[str],
 ) -> bool:
     return all(has_ability(state, player, options, r) for r in reqs)
+
+
+def meets_dnf(
+    state: CollectionState,
+    player: int,
+    options: Croc2Options,
+    dnf: List[List[str]],
+    level_prefix: str = "",
+) -> bool:
+    """True if any one alternative is fully held. "@GG" is the stage's Golden Gobbo area."""
+    for alternative in dnf:
+        ok = True
+        for name in alternative:
+            if name == "@GG":
+                if not can_activate_golden_gobbo(state, player, options, level_prefix):
+                    ok = False
+                    break
+            elif not has_ability(state, player, options, name):
+                ok = False
+                break
+        if ok:
+            return True
+    return False
 
 
 def can_activate_golden_gobbo(
@@ -55,15 +80,34 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
     """Applies entrance and location rules across all regions in the Croc 2 world."""
     hubs = LEVEL_MAPPING["hubs"]
 
-    # 1. Hub-to-Hub progression rules (requires defeating boss of previous hub)
-    for idx in range(len(hubs) - 1):
-        curr_hub = hubs[idx]
-        next_hub = hubs[idx + 1]
-        ent_name = f"{curr_hub['name']} to {next_hub['name']}"
-        boss_reqs = curr_hub["bosses"][0]["requires"]
-        set_rule(
-            multiworld.get_entrance(ent_name, player),
-            lambda state, reqs=boss_reqs: has_all_requirements(state, player, options, reqs),
+    # 1. Hub-to-Hub travel is free: the mod lifts the game's own gate on Swap Meet Pete's travel menu (it
+    #    wanted the village's second boss beaten, which needs every stage of the village cleared). A stage door
+    #    needs only its key, whichever village it is in.
+
+    # What it takes to have cleared the stages behind some of a village's doors: each door's own needs (its key,
+    # a Vehicle License for a vehicle stage) and whatever clearing the stage behind it takes (docs/logic.md).
+    clear_dnf_by_stage = {entry["stage"]: entry["clear"] for entry in LOGIC}
+
+    def door_clears(hub: dict, door_nums) -> list:
+        out = []
+        for lvl in hub["levels"]:
+            if lvl["door_num"] not in door_nums:
+                continue
+            ent = multiworld.get_entrance(f"{hub['name']} Door {lvl['door_num']} Entrance", player)
+            needs_key = bool(options.lock_level_access.value) and not (
+                hub["id"] == "sailor_village" and lvl["door_num"] == 1
+            )
+            wad = REGION_TO_WAD.get(ent.connected_region.name if ent.connected_region else "") or ""
+            out.append((f"{lvl['name']} Key" if needs_key else None, wad in VEHICLE_STAGE_WADS,
+                        clear_dnf_by_stage.get(wad[:4])))
+        return out
+
+    def clears_met(state: CollectionState, doors: list) -> bool:
+        return all(
+            (key is None or state.has(key, player))
+            and (not licence or has_ability(state, player, options, "Vehicle License"))
+            and (dnf is None or meets_dnf(state, player, options, dnf))
+            for key, licence, dnf in doors
         )
 
     # 2. Per-Hub Entrances (Pete's Store, Stage Doors, Secret Level, Bosses)
@@ -89,11 +133,21 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
             # leading to one (wherever Door Shuffle put it) needs the license in logic too.
             target_wad = REGION_TO_WAD.get(door_ent.connected_region.name if door_ent.connected_region else "")
             needs_license = target_wad in VEHICLE_STAGE_WADS
+            # The Inca village has two real doors; door slots 3 and 4 are through the big gate, which opens when
+            # the stages behind those two doors are cleared (regions.py keeps the gate's two stages there), and
+            # come after Dante's Peak. So they need those clears and what the boss takes.
+            behind_boss = []
+            boss_needs: List[str] = []
+            if hub["id"] == "inca_village" and lvl["door_num"] in (3, 4):
+                behind_boss = door_clears(hub, (1, 2))
+                boss_needs = hub["bosses"][0]["requires"]
             set_rule(
                 door_ent,
-                lambda state, kn=key_name, nk=needs_key, nl=needs_license: (
+                lambda state, kn=key_name, nk=needs_key, nl=needs_license, bb=behind_boss, bn=boss_needs: (
                     (not nk or state.has(kn, player))
                     and (not nl or has_ability(state, player, options, "Vehicle License"))
+                    and has_all_requirements(state, player, options, bn)
+                    and clears_met(state, bb)
                 ),
             )
 
@@ -110,24 +164,35 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
             ),
         )
 
-        # Boss Entrances
+        # Boss Entrances. Boss doors are left as the game has them: a boss appears only when the village's
+        # stages are cleared (Dante's Peak: the Inca village's first two). So nothing needed elsewhere can sit
+        # behind a boss unless everything those clears take is reachable first.
         for boss in hub["bosses"]:
             boss_ent = multiworld.get_entrance(f"{hub_name} -> {boss['name']}", player)
             boss_reqs = boss["requires"]
+            if boss["wad"] == "T4B1M001":
+                stage_clears = door_clears(hub, (1, 2))
+            elif hub["id"] == "inca_village":
+                stage_clears = door_clears(hub, (1, 2, 3, 4))
+            else:
+                stage_clears = door_clears(hub, (1, 2, 3, 4, 5))
             if boss["wad"] == "T4B2M001":
                 # Dante's Final Fight requires the configured Jigsaw Pieces
                 req_jigsaws = options.jigsaw_pieces_required.value
                 set_rule(
                     boss_ent,
-                    lambda state, reqs=boss_reqs, jp=req_jigsaws: (
+                    lambda state, reqs=boss_reqs, jp=req_jigsaws, sc=stage_clears: (
                         state.has("Jigsaw Piece", player, jp)
                         and has_all_requirements(state, player, options, reqs)
+                        and clears_met(state, sc)
                     ),
                 )
             else:
                 set_rule(
                     boss_ent,
-                    lambda state, reqs=boss_reqs: has_all_requirements(state, player, options, reqs),
+                    lambda state, reqs=boss_reqs, sc=stage_clears: (
+                        has_all_requirements(state, player, options, reqs) and clears_met(state, sc)
+                    ),
                 )
 
     # 3. Location-Specific Rules (Ability requirements + 5 Colored Crystal Golden Gobbo rule)
@@ -142,6 +207,22 @@ def set_croc2_rules(multiworld: MultiWorld, player: int, options: Croc2Options) 
             continue
         reqs = loc_data.get("requires", [])
         cat = loc_data.get("category", "")
+
+        # Mapped stages: the requirement written from the walkthroughs (docs/logic.md) replaces the old guesses.
+        dnf = loc_data.get("requires_dnf")
+        if dnf is not None:
+            level_prefix = loc_data.get("level_prefix") or loc.name.rpartition(" - ")[0]
+            if cat == "Golden Gobbos":
+                set_rule(
+                    loc,
+                    lambda state, d=dnf, lp=level_prefix: (
+                        meets_dnf(state, player, options, d, lp)
+                        and can_activate_golden_gobbo(state, player, options, lp)
+                    ),
+                )
+            elif dnf != [[]]:
+                set_rule(loc, lambda state, d=dnf, lp=level_prefix: meets_dnf(state, player, options, d, lp))
+            continue
 
         if cat == "Golden Gobbos":
             level_prefix = loc_data["level_prefix"]

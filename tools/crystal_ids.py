@@ -7,8 +7,8 @@ own order. A loose crystal ("crystal") takes one number; a smash box takes five 
 crystals takes eight. Whatever is left up to 100 are the stage's awarded crystals (chests, race prizes, rescued
 Gobbos, puzzle rewards: see docs/level_objects.md), numbered after the placed ones.
 
---write regenerates src/hook/crystal_ids.inc (the table the mod uses), docs/crystal_ids.md (the readable list)
-and worlds/croc2/data/crystal_ids.json (what the apworld needs: which numbers are box crystals).
+--write regenerates src/hook/crystal_ids.inc (the table the mod uses) and docs/crystal_ids.md (the readable list).
+What each number needs is in worlds/croc2/data/logic.json, compiled by tools/build_logic.py.
 """
 import glob
 import os
@@ -88,26 +88,6 @@ def main():
                 f.write('{%d, "%s", %d, %d, %d, %d, %d, %d},\n' % (si, wad, kind, x, y, z, first, count))
         with open(os.path.join(repo, 'docs', 'crystal_ids.md'), 'w', newline='\n', encoding='utf-8') as f:
             f.write('\n'.join(md) + '\n')
-        # The apworld's copy: per stage, the kind of each number 1..100 and the numbers assumed reachable with a
-        # plain jump (the first ten loose crystals of the stage's first map).
-        import json
-        stages = []
-        for si in range(len(STAGES)):
-            kinds = [AWARD] * 100
-            early = []
-            first_map = None
-            for s2, wad, kind, x, y, z, first, count in rows:
-                if s2 != si:
-                    continue
-                for n in range(first, first + count):
-                    kinds[n - 1] = kind
-                if kind == LOOSE:
-                    first_map = first_map or wad
-                    if wad == first_map and len(early) < 10:
-                        early.append(first)
-            stages.append({'stage': STAGES[si], 'kinds': kinds, 'early': early})
-        with open(os.path.join(repo, 'worlds', 'croc2', 'data', 'crystal_ids.json'), 'w', newline='\n') as f:
-            json.dump({'kinds': {'0': 'loose', '1': 'smash box', '2': 'ring', '3': 'awarded'}, 'stages': stages}, f, separators=(',', ':'))
         print('wrote %d rows' % len(rows))
 
 

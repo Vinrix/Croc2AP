@@ -31,7 +31,8 @@ jobs:
         shell: msys2 {0}
         run: |
           mkdir -p build
-          g++ -shared -std=c++17 -O2 -s -Wall -Wextra -static -static-libgcc -static-libstdc++ \
+          # CROC2AP_TEST_BUILD: the debug log is always written, so testers never edit the ini.
+          g++ -shared -std=c++17 -O2 -s -Wall -Wextra -DCROC2AP_TEST_BUILD -static -static-libgcc -static-libstdc++ \
             src/hook/croc2_ap_hook.cpp src/hook/version.def \
             -o build/croc2_ap_hook.dll \
             -lws2_32 -lwinhttp -lgdi32 -luser32
@@ -76,6 +77,10 @@ jobs:
           cp Uninstall_Croc2AP.bat dist/package/
           cp Toggle_Vanilla_Mode.bat dist/package/
           cp README.md dist/package/
+          cp HOW_TO_TEST.txt dist/package/
+          cp Collect_Report.bat dist/package/
+          cp docs/logic.md dist/package/
+          cp docs/crystal_ids.md dist/package/
 
       - name: Upload Test Package
         uses: actions/upload-artifact@v4

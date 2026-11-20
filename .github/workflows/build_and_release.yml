@@ -99,6 +99,7 @@ jobs:
           cp Uninstall_Croc2AP.bat dist/package/
           cp Toggle_Vanilla_Mode.bat dist/package/
           cp README.md dist/package/
+          cp Collect_Report.bat dist/package/
           cd dist/package && 7z a "../${ZIP_NAME}" * && cd ../..
           ls -la dist/
 

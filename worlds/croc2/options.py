@@ -105,6 +105,7 @@ class ShuffleAbilities(DefaultOnToggle):
     - **Tail Whack** (360-degree tail spin attack)
     - **Long Jump** (L1 + R1 front flip)
     - **High Jump** (holding Jump as a Butt Stomp lands: the "triple jump". Needs Butt Stomp as well)
+    - **Mine Cart** (riding the mine carts in the two mine levels and the secret mines)
     - **Climbing Claws** (ability to climb ropes, ladders, monkey bars, and climbable walls)
     - **Power Gloves** (ability to pick up and carry crates, pots, snowballs, and wheels when walking up to them)
     """
@@ -169,18 +170,14 @@ class DoorShuffle(Choice):
 class TrapWeight(Range):
     """
     Percentage chance (0 to 100) that filler items in the pool are replaced with Traps.
-    Traps include:
-    - **Fire Breakout Trap** (instant 1 heart damage with flame animation and knockback recoil)
+    Traps in the pool:
+    - **Fire Breakout Trap** (Croc's lava burn: bounce, tail smoke and 1 heart lost)
     - **Tail-Knot Trap** (ties Croc's tail, disabling tail attacks for a flat 10s; cannot be untied early)
     - **Lead Boots Trap** (weighs down Croc, suppressing jumping for a flat 10 seconds)
-    - **Ice Physics Trap** (zero surface friction for a flat 10 seconds)
-    - **Reverse Controls Trap** (inverted directional movement for a flat 10 seconds)
-    - **Darkness Trap** (shrouds visibility with darkness for a flat 10 seconds)
-    - **Dantini Ambush Trap** (hostile Dantini attack for a flat 10 seconds)
-    - **Speed Distortion Trap** (altered movement speed for a flat 10 seconds)
     - **Pete's Crystal Tax Trap** (Swap Meet Pete levies a 20 crystal tax from your wallet!)
     - **Health Drain Trap** (deducts 1 heart)
-    All timed ill effects last a flat 10 seconds with no early removal.
+    Ice Physics, Reverse Controls, Darkness, Dantini Ambush and Speed Distortion are not in the pool yet:
+    they have no effect in the game so far.
     """
     display_name = "Trap Weight"
     rich_text_doc = True

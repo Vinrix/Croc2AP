@@ -1,0 +1,249 @@
+"""Compile worlds/croc2/data/logic.json into what the apworld and the mod's solo seed use.
+
+  build_logic.py <folder with the level .WAD files>
+
+Reads the hand-written per-stage rules (logic.json) and the crystal numbering (crystal_ids.py), works out the
+requirement of every white crystal number, coloured crystal, Golden Gobbo and stage clear, and writes:
+  worlds/croc2/data/logic_compiled.json   requirement of every location, as item names (for the apworld)
+  src/hook/logic_rules.inc                the same as bit masks (for the solo seed's fill)
+  docs/logic.md                           a readable summary, grouped by requirement
+
+A requirement is a list of alternatives; each alternative is a set of items that are all needed.
+An empty list of alternatives would mean "never"; a single empty alternative means "nothing needed".
+"""
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import crystal_ids  # noqa: E402
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# atom -> (bit, apworld item name)
+ATOMS = {
+    'TW': (0, 'Tail Whack'), 'BS': (1, 'Butt Stomp'), 'HJ': (2, 'High Jump'), 'LJ': (3, 'Long Jump'),
+    'CC': (4, 'Climbing Claws'), 'PG': (5, 'Power Gloves'), 'LW': (6, 'Lever Wrench'), 'VL': (7, 'Vehicle License'),
+    'AA': (8, 'Airplane Ammo Feed'), 'JB': (9, 'Jelly Jump (Blue Jelly)'), 'JG': (10, 'High Jelly Jump (Green Jelly)'),
+    'JP': (11, 'Gummi Jump (Red Jelly)'), 'CG': (12, 'Clockwork Gobbo'), 'MC': (14, 'Mine Cart'),
+}
+GG_BIT = 13  # the stage's Golden Gobbo area: all five of its coloured crystal items
+# What an atom in logic.json expands to. The High Jump comes out of a stomp; throwing a carried object needs only
+# Power Gloves (the throw itself is not locked). In play a better jelly also works on a lesser marker, but the
+# logic does not lean on that: each marker is counted against its own kind.
+EXPAND = {
+    'HJ': 'BS&HJ',
+    'TH': 'PG',
+}
+# Consumables: atom -> index in the mod's count array (orange, lime, strawberry, Clockwork Gobbo). They are used
+# up, and the player chooses where, so a check behind a marker is in logic only once as many of that kind have
+# been collected as there are markers for it in the whole game ("markers" in logic.json).
+CONSUMABLES = ['JB', 'JG', 'JP', 'CG']
+CHECK_COLOURS = ['red', 'blue', 'green', 'yellow', 'purple']  # the mod's and the apworld's check order
+
+
+def dnf(expr):
+    """expr -> frozenset of frozensets of atoms. '&' binds tighter than '|'."""
+    expr = expr.replace(' ', '')
+    if not expr:
+        return frozenset([frozenset()])
+    alts = set()
+    for term in expr.split('|'):
+        cur = {frozenset()}
+        for atom in term.split('&'):
+            if not atom:
+                continue
+            if atom == 'GG':
+                sub = frozenset([frozenset(['GG'])])
+            elif atom in EXPAND:
+                sub = _raw(EXPAND[atom])
+            elif atom in ATOMS:
+                sub = frozenset([frozenset([atom])])
+            else:
+                raise SystemExit('unknown atom %r in %r' % (atom, expr))
+            cur = {a | b for a in cur for b in sub}
+        alts |= cur
+    return simplify(alts)
+
+
+def _raw(expr):
+    return frozenset(frozenset(t.split('&')) for t in expr.split('|'))
+
+
+def simplify(alts):
+    alts = set(alts)
+    return frozenset(a for a in alts if not any(b < a for b in alts))
+
+
+def both(a, b):
+    return simplify({x | y for x in a for y in b})
+
+
+def numbers(spec):
+    out = set()
+    for part in spec.split(','):
+        if '-' in part:
+            lo, hi = part.split('-')
+            out.update(range(int(lo), int(hi) + 1))
+        else:
+            out.add(int(part))
+    return out
+
+
+def show(req):
+    if req == frozenset([frozenset()]):
+        return 'nothing'
+    return ' or '.join(' + '.join(sorted('Golden Gobbo area' if a == 'GG' else ATOMS[a][1] for a in alt)) for alt in
+                       sorted(req, key=lambda s: sorted(s)))
+
+
+def main():
+    root = sys.argv[1]
+    logic = json.load(open(os.path.join(REPO, 'worlds', 'croc2', 'data', 'logic.json'), encoding='utf-8'))
+    need = {k: sum(logic[prefix].get('markers', {}).get(k, 0) for prefix in crystal_ids.STAGES) for k in CONSUMABLES}
+    for prefix in crystal_ids.STAGES:
+        st = logic[prefix]
+        used = set()
+        for field in ('entry', 'default', 'box', 'award', 'golden', 'clear'):
+            used |= {a for alt in dnf(st.get(field, '')) for a in alt}
+        for spec, expr, why in st.get('rules', []) + st.get('free', []):
+            used |= {a for alt in dnf(expr) for a in alt}
+        for expr in (st.get('colours') or {}).values():
+            used |= {a for alt in dnf(expr) for a in alt}
+        for k in CONSUMABLES:
+            if (k in used) != (st.get('markers', {}).get(k, 0) > 0):
+                raise SystemExit('%s: rules %s %s but "markers" says %d' % (
+                    prefix, 'use' if k in used else 'do not use', k, st.get('markers', {}).get(k, 0)))
+    compiled = []
+    terms = []      # flat list of masks
+    refs = {}       # req -> (first, count)
+    inc_rows = []
+    md = ['# Logic', '',
+          'What each check needs, by stage. Generated by `tools/build_logic.py` from `worlds/croc2/data/logic.json`,',
+          'which is written by hand from three walkthroughs (StrategyWiki, the GameFAQs guide by Robshi, and the Croc',
+          'fan wiki) matched to the crystal positions in the level files. Do not edit this file; edit logic.json.', '',
+          'Rules of thumb: a smash box needs Butt Stomp; a High Jump needs Butt Stomp as well; carrying and throwing',
+          'an object needs Power Gloves. Where the guides did not settle a point the stricter reading is used, so a',
+          'seed can ask for more than is needed but never less.', '',
+          'Jellies and Clockwork Gobbos are used up, and the player chooses where. So wherever a check below says it',
+          'needs one, it is in logic only once as many of that kind have been collected as the game has markers for',
+          'it: %d Clockwork Gobbo, %d orange ("Blue") jelly, %d lime ("Green") and %d strawberry ("Red"). Then every' % (
+              need['CG'], need['JB'], need['JG'], need['JP']),
+          'marker can be used once, in any order. A better jelly also works on a lesser marker in play; the logic',
+          'does not count on it. If one is wasted (used where it was not needed, or used again after a retry) the',
+          'spares are what cover it. When every white crystal is a check, and in Archipelago games, the pool holds',
+          'about three times the markers. In every mode Swap Meet Pete sells Clockwork Gobbos, orange jellies and',
+          'strawberry jellies (which work on any marker) again once his own check for each has been collected.', '']
+
+    def ref(req):
+        if req not in refs:
+            first = len(terms)
+            for alt in sorted(req, key=lambda s: sorted(s)):
+                mask = 0
+                for a in alt:
+                    mask |= 1 << (GG_BIT if a == 'GG' else ATOMS[a][0])
+                terms.append(mask)
+            refs[req] = (first, len(req))
+        return refs[req]
+
+    def names(req):
+        return [sorted('@GG' if a == 'GG' else ATOMS[a][1] for a in alt) for alt in sorted(req, key=lambda s: sorted(s))]
+
+    for si, prefix in enumerate(crystal_ids.STAGES):
+        st = logic[prefix]
+        src, placed = crystal_ids.stage_sources(root, prefix)
+        kind = ['award'] * 100
+        for wad, k, x, y, z, first, count, name in src:
+            for n in range(first, first + count):
+                kind[n - 1] = {crystal_ids.LOOSE: 'loose', crystal_ids.BOX: 'box', crystal_ids.RING: 'ring'}[k]
+        # 'entry': what it takes to get into the stage at all (a vehicle stage's licence, a stage that begins on a
+        # mine cart or on monkey bars). It is part of every check of the stage, whatever else that check says.
+        entry = dnf(st.get('entry', ''))
+        free = {}
+        for spec, expr, why in st.get('free', []):
+            for n in numbers(spec):
+                free[n] = dnf(expr)
+        per = []
+        for n in range(1, 101):
+            req = free[n] if n in free else dnf(st.get('default', ''))
+            if kind[n - 1] == 'box' and 'box' in st:
+                req = both(req, dnf(st['box']))
+            if kind[n - 1] == 'award':
+                req = both(req, dnf(st.get('award', '')))
+            for spec, expr, why in st.get('rules', []):
+                if n in numbers(spec):
+                    req = both(req, dnf(expr))
+            per.append(both(req, entry))
+        colours = {c: both(dnf(st.get('colours', {}).get(c, '')), entry) if st.get('colours') else None for c in CHECK_COLOURS}
+        golden = both(dnf(st.get('golden', '')), entry)
+        for c in CHECK_COLOURS:
+            if colours[c] is not None:
+                golden = both(golden, colours[c])
+        clear = both(dnf(st.get('clear', '')), entry)
+        compiled.append({'stage': prefix, 'name': st['name'], 'numbers': [names(r) for r in per],
+                         'colours': {c.capitalize(): (names(colours[c]) if colours[c] is not None else None) for c in CHECK_COLOURS},
+                         'golden': names(golden), 'clear': names(clear)})
+        row = [ref(r) for r in per]
+        crow = [ref(colours[c]) if colours[c] is not None else (0, 0) for c in CHECK_COLOURS]
+        inc_rows.append((prefix, row, crow, ref(clear)))
+
+        md += ['## %s %s' % (prefix, st['name']), '', st.get('notes', ''), '', '| Needs | White crystal numbers |', '|---|---|']
+        groups = {}
+        for n, r in enumerate(per, 1):
+            groups.setdefault(show(r), []).append(n)
+        for label, nums in sorted(groups.items(), key=lambda kv: (kv[0] != 'nothing', kv[1][0])):
+            md.append('| %s | %s (%d) |' % (label, crystal_ids_ranges(nums), len(nums)))
+        md.append('')
+        if st.get('colours'):
+            md += ['| Check | Needs |', '|---|---|']
+            for c in ['red', 'green', 'purple', 'blue', 'yellow']:
+                md.append('| %s crystal | %s |' % (c.capitalize(), show(colours[c])))
+            md.append('| Golden Gobbo | all five crystals, and %s |' % show(golden))
+        else:
+            md += ['| Check | Needs |', '|---|---|']
+        md.append('| Stage clear | %s |' % show(clear))
+        md.append('')
+        free_n = sum(1 for r in per if r == frozenset([frozenset()]))
+        print('%s %-34s free %3d  rules %2d' % (prefix, st['name'], free_n, len(groups)))
+
+    with open(os.path.join(REPO, 'worlds', 'croc2', 'data', 'logic_compiled.json'), 'w', newline='\n') as f:
+        json.dump({'atoms': {k: v[1] for k, v in ATOMS.items()},
+                   'consumable_need': {ATOMS[k][1]: need[k] for k in CONSUMABLES},
+                   'stages': compiled}, f, separators=(',', ':'))
+    with open(os.path.join(REPO, 'src', 'hook', 'logic_rules.inc'), 'w', newline='\n') as f:
+        f.write('// Generated by tools/build_logic.py from worlds/croc2/data/logic.json. Do not edit.\n')
+        f.write('// Bits: ' + ', '.join('%d %s' % (v[0], v[1]) for v in sorted(ATOMS.values())) + ', %d Golden Gobbo area.\n' % GG_BIT)
+        f.write('// Consumables, in the order orange jelly, lime jelly, strawberry jelly, Clockwork Gobbo: the bit each one\n')
+        f.write('// stands for above, and how many markers the game has for it (a check behind one is in logic once that many\n')
+        f.write('// have been collected).\n')
+        f.write('static const int kConsumableBit[4] = {%s};\n' % ', '.join(str(ATOMS[k][0]) for k in CONSUMABLES))
+        f.write('static const int kConsumableNeed[4] = {%s};\n' % ', '.join(str(need[k]) for k in CONSUMABLES))
+        f.write('static const uint32_t kLogicTerms[] = {%s};\n' % ', '.join('0x%X' % t for t in terms))
+        f.write('struct LogicRef { uint16_t first; uint8_t count; };\n')
+        f.write('// [stage][crystal number - 1]\nstatic const LogicRef kCrystalLogic[%d][100] = {\n' % len(inc_rows))
+        for prefix, row, crow, cl in inc_rows:
+            f.write('  /* %s */ {%s},\n' % (prefix, ','.join('{%d,%d}' % r for r in row)))
+        f.write('};\n// [stage][Red, Blue, Green, Yellow, Purple]; count 0 = the stage has no coloured crystals\n')
+        f.write('static const LogicRef kColourLogic[%d][5] = {\n' % len(inc_rows))
+        for prefix, row, crow, cl in inc_rows:
+            f.write('  /* %s */ {%s},\n' % (prefix, ','.join('{%d,%d}' % r for r in crow)))
+        f.write('};\nstatic const LogicRef kClearLogic[%d] = {%s};\n' % (len(inc_rows), ','.join('{%d,%d}' % r[3] for r in inc_rows)))
+    with open(os.path.join(REPO, 'docs', 'logic.md'), 'w', newline='\n', encoding='utf-8') as f:
+        f.write('\n'.join(md) + '\n')
+    print('terms', len(terms), 'distinct requirements', len(refs))
+
+
+def crystal_ids_ranges(nums):
+    nums = sorted(nums)
+    out, a, b = [], nums[0], nums[0]
+    for n in nums[1:]:
+        if n == b + 1:
+            b = n
+        else:
+            out.append((a, b)); a = b = n
+    out.append((a, b))
+    return ', '.join(str(a) if a == b else '%d-%d' % (a, b) for a, b in out)
+
+
+if __name__ == '__main__':
+    main()

@@ -186,8 +186,14 @@ struct Croc2RandoSaveFooter {
     // Added later; zero on older saves. Bits: 0..19 Golden Gobbo per stage, 20..23 Jigsaw per village,
     // 24..43 Pete's Store slot (village*5 + slot), 44..51 bosses. See EXTRA_CHECK_* in croc2_ap_hook.cpp.
     uint8_t extra_checks[8] = {0};
+    // Added later; zero on older saves. See ModState::items_delivered.
+    uint8_t items_delivered[4] = {0};
+    // Added later; zero on older saves. See ModState::borrowed_clear (bit = stage index, low byte first).
+    uint8_t borrowed_clear[3] = {0};
 };
 #pragma pack(pop)
+// The footer sits at RVA_RANDO_SAVE_FOOTER_OFF (0x17800) inside the game's 0x17A30-byte save table.
+static_assert(sizeof(Croc2RandoSaveFooter) <= 0x17A30 - 0x17800, "the randomizer footer must fit in the save table");
 
 // Archipelago Text Client Importance Color Classification
 enum class ItemImportance : uint8_t {
@@ -248,6 +254,7 @@ struct PlayerAbilities {
     bool airplane_ammo_feed = false;
     bool long_jump = false;
     bool high_jump = false; // the jump out of a stomp (the "triple jump")
+    bool mine_cart = false; // riding the mine carts
 };
 
 struct ServerConnectionConfig {
@@ -330,6 +337,11 @@ struct ModState {
     bool shuffle_vehicles = true;
     bool shuffle_plane_guns = true;
     int shuffle_pete_store = 1;
+    // Solo seeds: 0 leaves every trap out of the pool; fire_breakout_trap false leaves that one out.
+    // Solo seeds: 0 doors lead to their own stages, 1 shuffled within each village, 2 across all villages.
+    int door_shuffle = 1;
+    int trap_weight = 20;
+    bool fire_breakout_trap = true;
 
     // Solo / Seed-linked check pool (180 logical checks + 2000 individual white crystal checks across all 20 stages)
     uint8_t door_perm[20] = {0};
@@ -354,6 +366,15 @@ struct ModState {
     int red_jellies = 0;
     int blue_jellies = 0;
     int green_jellies = 0;
+    // How many of the received jellies / Clockwork Gobbos have been put into Croc's backpack so far, in the order
+    // strawberry ("red"), orange ("blue"), lime ("green"), Clockwork Gobbo. The rest wait in reserve.
+    int items_delivered[4] = {0, 0, 0, 0};
+    // Cross-village door shuffle. When a stage from another village is cleared, its door's own stage is marked
+    // cleared in the game's save data as well, so the village the door stands in counts it (boss doors).
+    // Bit N set here means stage N's "cleared" mark is such a borrowed one: stage N itself has not been
+    // cleared. While Croc is inside stage N the mark is taken off, so the stage plays normally and its Stage
+    // Clear check can still be earned.
+    uint32_t borrowed_clear = 0;
     bool binoculars = false;
 
     PlayerAbilities abilities;

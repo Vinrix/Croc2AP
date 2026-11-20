@@ -131,19 +131,56 @@ def create_croc2_regions(
 
 # Must match is_vehicle_stage_wad() in src/hook/croc2_ap_hook.cpp. The hook refuses entry to these
 # without a Vehicle License, so none of them may sit behind Sailor Village Door 1 (open from the start).
-VEHICLE_STAGE_WADS = {"T1L3M001", "T1L5M001", "T2L3M001", "T2L6M001", "T3L4M001", "T3L5M001", "T4L3M001"}
+# The stages played entirely in a vehicle: the boat race, the hang glider and the kart race. (Four on-foot stages
+# used to be listed here too; the mod has the same list in is_vehicle_stage_wad.)
+VEHICLE_STAGE_WADS = {"T1L5M001", "T2L6M001", "T3L4M001"}
+
+# The Sailor stages with plenty to collect on a plain jump (docs/logic.md): the only ones that may sit behind
+# Door 1, which is open from the start. The others need Climbing Claws, Mine Cart or Vehicle License at once.
+START_STAGE_WADS = {"T1L2M001", "T1L6M001"}
 
 
 def _fix_first_door(world_random, targets: list, vanilla_wad: str) -> None:
-    """Swap a non-vanilla, non-vehicle stage into slot 0 if slot 0 is vanilla or a vehicle stage."""
-    first = targets[0]["wad"]
-    if first != vanilla_wad and first not in VEHICLE_STAGE_WADS:
+    """Make slot 0 (Door 1) one of START_STAGE_WADS, swapping one in if it is not."""
+    if targets[0]["wad"] in START_STAGE_WADS:
         return
-    ok = [i for i in range(1, len(targets))
-          if targets[i]["wad"] != vanilla_wad and targets[i]["wad"] not in VEHICLE_STAGE_WADS]
+    ok = [i for i in range(1, len(targets)) if targets[i]["wad"] in START_STAGE_WADS]
     if ok:
         j = world_random.choice(ok)
         targets[0], targets[j] = targets[j], targets[0]
+
+
+# The Inca village has only two real stage doors. Everything else there (Dante's Peak, then the stages of door
+# slots 3 and 4) is through one big gate, which the game opens when these two stages are cleared. So they always
+# stay behind the two real doors (in either order); behind the gate they could never be finished.
+INCA_GATE_STAGE_WADS = {"T4L2M001", "T4L3M001"}
+INCA_REAL_DOOR_IDS = ("T4_D1", "T4_D2")
+# "Inca Door 5" is a demo copy of a level (T0L1M003) that no door in the game leads to. It is never shuffled: a
+# stage put behind it could never be played.
+UNSHUFFLED_DOOR_WADS = {"T4_D5": "T0L1M003"}
+
+
+def _fix_inca_gate(door_ids: list, targets: list) -> None:
+    """Swap targets so the two real Inca doors lead to the two stages that open the Inca gate, and so the doors
+    in UNSHUFFLED_DOOR_WADS keep their own target."""
+    for door_id, wad in UNSHUFFLED_DOOR_WADS.items():
+        if door_id not in door_ids:
+            continue
+        i = door_ids.index(door_id)
+        for j, target in enumerate(targets):
+            if target["wad"] == wad and j != i:
+                targets[i], targets[j] = targets[j], targets[i]
+                break
+    for door_id in INCA_REAL_DOOR_IDS:
+        if door_id not in door_ids:
+            continue
+        i = door_ids.index(door_id)
+        if targets[i]["wad"] in INCA_GATE_STAGE_WADS:
+            continue
+        for j, target in enumerate(targets):
+            if target["wad"] in INCA_GATE_STAGE_WADS and door_ids[j] not in INCA_REAL_DOOR_IDS:
+                targets[i], targets[j] = targets[j], targets[i]
+                break
 
 
 def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str, dict], Dict[str, str]]:
@@ -176,6 +213,7 @@ def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str,
             targets = [lvl_copy for _, lvl_copy in hub_doors]
             shuffled = list(targets)
             world_random.shuffle(shuffled)
+            _fix_inca_gate([d_id for d_id, _ in hub_doors], shuffled)
             # Ensure Door 1 in Sailor Village is visibly shuffled to a non-vanilla stage
             if hub_id == "sailor_village" and len(shuffled) > 1:
                 _fix_first_door(world_random, shuffled, targets[0]["wad"])
@@ -188,6 +226,7 @@ def compute_door_pairing(world_random, options: Croc2Options) -> Tuple[Dict[str,
         all_targets = [lvl_copy for _, lvl_copy in all_doors]
         shuffled_targets = list(all_targets)
         world_random.shuffle(shuffled_targets)
+        _fix_inca_gate(all_door_ids, shuffled_targets)
         if len(shuffled_targets) > 1:
             _fix_first_door(world_random, shuffled_targets, all_targets[0]["wad"])
         for door_id, target in zip(all_door_ids, shuffled_targets):

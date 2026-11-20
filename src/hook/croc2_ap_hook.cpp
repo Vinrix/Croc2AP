@@ -76,7 +76,6 @@ static void clear_coloured_crystal_state(const MapCoords& m);
 static void set_wallet_patches(bool enable);
 static void clear_held_objects(); // Power Gloves / Lever Wrench lists, per map
 static void release_unlocked_objects();
-static std::vector<int> early_loose_crystal_numbers(int stage, size_t want);
 // Move locks, set in Hooked_ReadInput and applied in Hooked_StratReadValue (see there).
 static std::atomic<bool> g_jump_lock_active{false}; // Butt Stomp (and the High Jump out of it)
 static std::atomic<bool> g_tail_lock_active{false}; // Tail Whack (locked, or the Tail Knot trap)
@@ -85,6 +84,7 @@ static std::atomic<bool> g_high_jump_lock_active{false}; // High Jump (the jump 
 static std::atomic<bool> g_lead_boots_active{false};     // Lead Boots trap: no jumping at all
 static std::atomic<bool> g_gloves_lock_active{false};    // Power Gloves: picking up carryable objects (Hooked_SetPickable)
 static std::atomic<bool> g_lever_lock_active{false};     // Lever Wrench: tail-hit levers (Hooked_RegisterEvent)
+static std::atomic<bool> g_cart_lock_active{false};      // Mine Cart: the carts ignore Croc standing on them
 struct QueuedCrystal { void* strat; DWORD spawned; };
 static std::vector<QueuedCrystal> g_crystal_spawn_queue; // crystal strats seen at spawn, checked again once settled
 static std::vector<void*> g_crystals_collecting; // strats that ran GainCrystal this visit: let them finish
@@ -314,80 +314,320 @@ static void unpack_abilities_mask(uint8_t m, PlayerAbilities& a) {
     a.long_jump          = (m & (1 << 7)) != 0;
 }
 
+// The stages played entirely in a vehicle: the boat race, the hang glider and the kart race. (This list used to
+// include Find 5 Lost Treasure Chests, Chase the Choo Choo Train, Climb The Devil's Tower and Up the Waterfall,
+// which are on foot, and locked their doors behind Vehicle License.)
 static bool is_vehicle_stage_wad(const std::string& wad) {
-    return (wad == "T1L3M001" || // Sailor Glider
-            wad == "T1L5M001" || // Sailor Speedboat
-            wad == "T2L3M001" || // Cossack Train Chase
-            wad == "T2L6M001" || // Cossack Hang Glider
-            wad == "T3L4M001" || // Caveman Minecart Race
-            wad == "T3L5M001" || // Caveman Devil's Tower
-            wad == "T4L3M001");  // Inca Waterfall (Plane/Boat)
+    return wad == "T1L5M001" || wad == "T2L6M001" || wad == "T3L4M001";
+}
+
+// ---- Solo seed logic. logic_rules.inc is generated from worlds/croc2/data/logic.json (tools/build_logic.py): what
+// every white crystal number, coloured crystal and stage clear needs, as alternatives of item bits.
+#include "logic_rules.inc"
+static constexpr int kLogicStages = static_cast<int>(sizeof(kClearLogic) / sizeof(kClearLogic[0]));
+static constexpr uint32_t kLogicGoldenBit = 1u << 13;
+// Item -> bit, for abilities and door keys. Abilities use the bits of logic_rules.inc; the key to door d is bit
+// 14 + d. Jellies and Clockwork Gobbos are not here: they are counted (solo_consumable_kind).
+static uint64_t logic_item_bit(int id) {
+    switch (id) {
+        case 7200001: return 1ull << 0;   // Tail Whack
+        case 7200002: return 1ull << 1;   // Butt Stomp
+        case 7200162: return 1ull << 2;   // High Jump
+        case 7200161: return 1ull << 3;   // Long Jump
+        case 7200003: return 1ull << 4;   // Climbing Claws
+        case 7200004: return 1ull << 5;   // Power Gloves
+        case 7200005: return 1ull << 6;   // Lever Wrench
+        case 7200006: return 1ull << 7;   // Vehicle License
+        case 7200007: return 1ull << 8;   // Airplane Ammo Feed
+        case 7200163: return 1ull << 14;  // Mine Cart (bit 13 is the Golden Gobbo area; door keys start at 15)
+        default: break;
+    }
+    if (id >= 7200023 && id <= 7200041) return 1ull << (14 + (id - 7200022)); // key to door 1..19
+    return 0;
+}
+// Consumables, in the order of kConsumableNeed / kConsumableBit (logic_rules.inc): orange jelly, lime jelly,
+// strawberry jelly, Clockwork Gobbo. -1 for anything else.
+static int solo_consumable_kind(int id) {
+    switch (id) {
+        case 7200144: return 0; // "Jelly Jump (Blue Jelly)": the orange one
+        case 7200145: return 1; // "High Jelly Jump (Green Jelly)": lime
+        case 7200143: return 2; // "Gummi Jump (Red Jelly)": strawberry
+        case 7200142: return 3; // Clockwork Gobbo
+        default: return -1;
+    }
+}
+// What the player holds at some point of a walk through the seed: abilities and keys as bits, consumables as
+// how many have been collected.
+struct SoloHave {
+    uint64_t bits = 0;
+    int count[4] = {0, 0, 0, 0};
+    // A consumable is spent where it is used, and the player chooses where. So a check behind a marker only
+    // counts as reachable once as many of that kind have been collected as there are markers for it in the whole
+    // game: then every marker can be used once, in any order. (A better jelly also works on a lesser marker in
+    // play; the logic does not lean on that. Waste is covered by the spare copies in the pool and by the shop,
+    // not by the logic.)
+    uint64_t effective() const {
+        uint64_t b = bits;
+        for (int k = 0; k < 4; ++k) if (count[k] >= kConsumableNeed[k]) b |= 1ull << kConsumableBit[k];
+        return b;
+    }
+};
+static bool logic_met(const LogicRef& r, uint64_t have) {
+    for (int i = 0; i < r.count; ++i) {
+        const uint32_t t = kLogicTerms[r.first + i];
+        if ((t & kLogicGoldenBit) == 0 && (static_cast<uint64_t>(t) & ~have) == 0) return true;
+    }
+    return false; // no alternative, or only ones inside a Golden Gobbo area (never used to hold a needed item)
+}
+// A solo seed's checks, as one list: 0..179 are stage*9 + sub (0-2 crystal-count milestones, 3-7 coloured
+// crystals Red, Blue, Green, Yellow, Purple, 8 stage clear); 180..2179 are stage*100 + (crystal number - 1).
+static constexpr int kSoloLocations = SOLO_CHECK_POOL_SIZE + 2000;
+static int& solo_item_at(int loc) {
+    return loc < SOLO_CHECK_POOL_SIZE ? g_state.solo_check_items[loc] : g_state.solo_white_crystal_items[loc - SOLO_CHECK_POOL_SIZE];
+}
+// `have` is SoloHave::effective().
+static bool solo_location_reachable(int loc, uint64_t have) {
+    const bool white = loc >= SOLO_CHECK_POOL_SIZE;
+    const int stage = white ? (loc - SOLO_CHECK_POOL_SIZE) / 100 : loc / 9;
+    if (stage < 0 || stage >= kLogicStages) return false; // the 20th door has no real stage behind it
+    int door = -1;
+    for (int d = 0; d < 20; ++d) if (g_state.door_perm[d] == stage) { door = d; break; }
+    if (door < 0) return false;
+    if (door > 0 && g_state.lock_level_access && !(have & (1ull << (14 + door)))) return false;
+    // Every village can be travelled to from the start (Hooked_MapFlags lifts the game's own gate on Pete's
+    // travel menu), so a door needs nothing but its key.
+    // One exception: the Inca village. It has two real stage doors; door slots 3 and 4 are through the big gate
+    // (IncaDoorTrigger), left as the game has it, which opens when Save 30 Gobbo Babies and Up the Waterfall are
+    // cleared (the door shuffle keeps those two behind the real doors), and they come after Dante's Peak. So
+    // they need the two real doors' keys, those stages cleared, and what Dante's Peak takes (Tail Whack, Butt
+    // Stomp, Climbing Claws). Nobody has played this far: how the gate hands out its destinations after the boss
+    // is not known.
+    if (door == 17 || door == 18) {
+        const uint64_t boss = (1ull << 0) | (1ull << 1) | (1ull << 4);
+        if ((have & boss) != boss) return false;
+        for (int d = 15; d <= 16; ++d) {
+            const int st = g_state.door_perm[d];
+            if (g_state.lock_level_access && !(have & (1ull << (14 + d)))) return false;
+            if (st >= 0 && st < kLogicStages && !logic_met(kClearLogic[st], have)) return false;
+        }
+    }
+    if (white) {
+        if (g_state.shuffle_white_crystals != 3) return false; // only "every crystal is a check" is by number
+        return logic_met(kCrystalLogic[stage][(loc - SOLO_CHECK_POOL_SIZE) % 100], have);
+    }
+    const int sub = loc % 9;
+    if (sub < 3) return false; // crystal-count milestones: not used to hold a needed item
+    if (sub < 8) return logic_met(kColourLogic[stage][sub - 3], have);
+    return logic_met(kClearLogic[stage], have);
+}
+// Croc Crystals, Extra Lives and traps: the only items that may sit on a check nobody can ever collect.
+static bool solo_item_is_filler(int id) {
+    return id == 0 || (id >= 7200147 && id <= 7200160);
+}
+// A check the walk can never collect, whatever is held: the 20th door's (no real stage); the crystal-count
+// milestones (sub 0..2), which only exist when white crystals are not checks; and any check with no rule that can
+// be met (crystal numbers a stage does not have, coloured crystals of the stages that have none, checks inside a
+// Golden Gobbo area).
+static bool solo_location_is_dead(int loc) {
+    const uint64_t everything = ~0ull;
+    if (loc >= SOLO_CHECK_POOL_SIZE) {
+        const int stage = (loc - SOLO_CHECK_POOL_SIZE) / 100;
+        return stage >= kLogicStages || !logic_met(kCrystalLogic[stage][(loc - SOLO_CHECK_POOL_SIZE) % 100], everything);
+    }
+    const int stage = loc / 9, sub = loc % 9;
+    if (stage >= kLogicStages || sub < 3) return true;
+    return !logic_met(sub < 8 ? kColourLogic[stage][sub - 3] : kClearLogic[stage], everything);
+}
+// Collects everything reachable, repeatedly, until nothing new opens. `taken` marks the checks already collected.
+// Returns the number of checks collected by this call.
+static int solo_walk(SoloHave& have, std::vector<char>& taken) {
+    int collected = 0;
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        const uint64_t eff = have.effective();
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            if (taken[loc] || !solo_location_reachable(loc, eff)) continue;
+            taken[loc] = 1;
+            ++collected;
+            const int id = solo_item_at(loc);
+            const int kind = solo_consumable_kind(id);
+            if (kind >= 0) ++have.count[kind];
+            have.bits |= logic_item_bit(id);
+            grew = true;
+        }
+    }
+    return collected;
+}
+// Is this item still wanted by the walk: an ability or key not yet held, or a consumable of a kind still short?
+static bool solo_item_wanted(int id, const SoloHave& have) {
+    const uint64_t bit = logic_item_bit(id);
+    if (bit) return !(have.bits & bit);
+    const int kind = solo_consumable_kind(id);
+    return kind >= 0 && have.count[kind] < kConsumableNeed[kind];
+}
+// Makes the seed beatable. The pools are shuffled without regard to what each check needs; this walks the seed the
+// way a player would (collect everything reachable, see what that opens, repeat) and, whenever the walk stops with
+// abilities, keys or consumables still out of reach, swaps one in from where it was stranded. Each swap goes to a
+// random check reachable at that moment that holds only filler, so items end up spread through the game in the
+// order they are needed, not piled up by the first door. Revisits are implicit: a late item can open leftovers
+// anywhere.
+static void solo_logic_repair_locked(std::mt19937_64& rng) {
+    // The numbered-crystal logic only exists for "every white crystal is a check". In the other modes most white
+    // crystal slots are never collected, so mixing them with the 180 main checks would throw items away: leave
+    // those modes' layout exactly as it was.
+    if (g_state.shuffle_white_crystals != 3) return;
+    // First undo the old "safe" placement, which put every ability on a handful of checks in the first stage:
+    // shuffle every item over every check. What has to be early is then decided by the walk below alone.
+    {
+        std::vector<int> all(kSoloLocations);
+        for (int loc = 0; loc < kSoloLocations; ++loc) all[loc] = solo_item_at(loc);
+        std::shuffle(all.begin(), all.end(), rng);
+        for (int loc = 0; loc < kSoloLocations; ++loc) solo_item_at(loc) = all[loc];
+    }
+    // Anything that matters (not just what the walk tracks: also jigsaw pieces, coloured crystals, trophies,
+    // heart pots, VIP passes) is moved off dead checks, swapping with filler on live ones.
+    {
+        std::vector<int> live_filler;
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            if (!solo_location_is_dead(loc) && solo_item_is_filler(solo_item_at(loc))) live_filler.push_back(loc);
+        }
+        std::shuffle(live_filler.begin(), live_filler.end(), rng);
+        for (int loc = 0; loc < kSoloLocations && !live_filler.empty(); ++loc) {
+            if (solo_location_is_dead(loc) && !solo_item_is_filler(solo_item_at(loc))) {
+                std::swap(solo_item_at(loc), solo_item_at(live_filler.back()));
+                live_filler.pop_back();
+            }
+        }
+    }
+    SoloHave have;
+    std::vector<char> taken(kSoloLocations, 0);
+    int swaps = 0;
+    for (int round = 0; round < 600; ++round) {
+        solo_walk(have, taken);
+        const uint64_t eff = have.effective();
+        // Stranded: a wanted item on a live check the walk has not reached. Open: a reached check holding filler
+        // (it has been "collected" already, so whatever is swapped onto it is collected at once).
+        std::vector<int> stranded_bits, stranded_consumables, open;
+        int reach_now = 0;
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            const int id = solo_item_at(loc);
+            if (taken[loc]) {
+                ++reach_now;
+                if (solo_item_is_filler(id)) open.push_back(loc);
+            } else if (!solo_location_is_dead(loc) && solo_item_wanted(id, have)) {
+                (logic_item_bit(id) ? stranded_bits : stranded_consumables).push_back(loc);
+            }
+        }
+        if ((stranded_bits.empty() && stranded_consumables.empty()) || open.empty()) break;
+        std::shuffle(stranded_bits.begin(), stranded_bits.end(), rng);
+        std::shuffle(stranded_consumables.begin(), stranded_consumables.end(), rng);
+        // Which to bring in: first an ability or key that opens something new by itself; failing that any ability
+        // or key (two may be needed together); consumables once no ability or key is left out of reach, so the
+        // few open checks of the first stage are not spent on them.
+        int pick = -1;
+        for (int cand : stranded_bits) {
+            const uint64_t with = eff | logic_item_bit(solo_item_at(cand));
+            int n = 0;
+            for (int loc = 0; loc < kSoloLocations; ++loc) if (solo_location_reachable(loc, with)) ++n;
+            if (n > reach_now) { pick = cand; break; }
+        }
+        if (pick < 0 && !stranded_bits.empty()) pick = stranded_bits[0];
+        if (pick < 0) pick = stranded_consumables[0];
+        const int target = open[rng() % open.size()];
+        std::swap(solo_item_at(pick), solo_item_at(target));
+        // The target was already collected holding filler; it now holds the wanted item, so collect that.
+        const int id = solo_item_at(target);
+        const int kind = solo_consumable_kind(id);
+        if (kind >= 0) ++have.count[kind];
+        have.bits |= logic_item_bit(id);
+        ++swaps;
+    }
+    int reachable = 0;
+    for (int loc = 0; loc < kSoloLocations; ++loc) reachable += taken[loc] ? 1 : 0;
+    debug_log_locked("LOGIC solo seed: " + std::to_string(swaps) + " items moved into reach; " + std::to_string(reachable) +
+                     " checks in logic with everything collected");
 }
 
 static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     std::mt19937_64 rng(seed ^ 0xA5A5F0F05A5A0F0FULL);
 
-    // 1. Sailor Village (v = 0):
-    // Door 1 (index 0) is open from the start (Sphere 1).
-    // It MUST be an on-foot platforming stage (Stage 2: "Get the Gobbo's Sandwich!" or Stage 4: "Save the Bird from the Thief").
-    // It must NEVER be a vehicle stage (1 or 3) or vanilla Stage 0!
-    int door1_target = (rng() % 2 == 0) ? 2 : 4;
-    g_state.door_perm[0] = static_cast<uint8_t>(door1_target);
-    g_state.door_overrides[kStageDoors[0].door_id] = kStageDoors[door1_target].vanilla_wad;
-    g_state.door_overrides[kStageDoors[0].vanilla_wad] = kStageDoors[door1_target].vanilla_wad;
-
-    // Doors 1..4 in Sailor Village: derange remaining stages {0, 1, 2, 3, 4} \ {door1_target}
-    std::vector<int> sailor_rem;
-    for (int k = 0; k < 5; ++k) {
-        if (k != door1_target) sailor_rem.push_back(k);
-    }
-    for (int attempt = 0; attempt < 32; ++attempt) {
-        std::shuffle(sailor_rem.begin(), sailor_rem.end(), rng);
-        bool ok = true;
-        for (int k = 0; k < 4; ++k) {
-            if (sailor_rem[k] == (k + 1)) { ok = false; break; }
+    // 1. Sailor Village (v = 0): Door 1 (index 0) is open from the start.
+    // Door 1 must lead somewhere with plenty to collect on a plain jump: Find the Key! Save the Gobbo! (0) or
+    // Save the Bird from the Thief (4), about 45 crystals each. The other Sailor stages have none: Get the Gobbo's
+    // Sandwich opens with monkey bars, Find 5 Lost Treasure Chests is ridden on mine carts, and the boat race is
+    // a vehicle.
+    // door_shuffle (croc2_mod.ini): 0 every door leads to its own stage; 1 doors are shuffled within each
+    // village; 2 a door can lead to a stage of any village. Rules that hold in every mode:
+    //  - Door 1 leads to one of those two stages.
+    //  - The Inca village's two real doors (15, 16) lead to Save 30 Gobbo Babies and Up the Waterfall, in either
+    //    order: the game opens the Inca gate (IncaDoorTrigger) when those two are cleared, and everything else
+    //    in that village is through the gate, so behind it they could never be finished.
+    //  - "Inca Door 5" (19) is never shuffled. Its entry in the door table is a demo copy of a level
+    //    (T0L1M003) that no door in the game leads to, so a stage put behind it could never be played.
+    int perm[20];
+    for (int d = 0; d < 20; ++d) perm[d] = d;
+    const int mode = g_state.door_shuffle;
+    int door1_target = 0;
+    if (mode == 1) {
+        door1_target = (rng() % 2 == 0) ? 0 : 4;
+        perm[0] = door1_target;
+        // Sailor doors 2..5: the other four Sailor stages, none behind its own door.
+        std::vector<int> sailor_rem;
+        for (int k = 0; k < 5; ++k) {
+            if (k != door1_target) sailor_rem.push_back(k);
         }
-        if (ok) break;
-    }
-    for (int k = 0; k < 4; ++k) {
-        if (sailor_rem[k] == (k + 1)) {
-            std::swap(sailor_rem[k], sailor_rem[(k + 1) % 4]);
-        }
-    }
-    for (int k = 0; k < 4; ++k) {
-        int door_i = k + 1;
-        int target_s = sailor_rem[k];
-        g_state.door_perm[door_i] = static_cast<uint8_t>(target_s);
-        g_state.door_overrides[kStageDoors[door_i].door_id] = kStageDoors[target_s].vanilla_wad;
-        g_state.door_overrides[kStageDoors[door_i].vanilla_wad] = kStageDoors[target_s].vanilla_wad;
-    }
-
-    // Villages 1..3 (Cossack, Caveman, Inca): standard full derangement
-    for (int v = 1; v < 4; ++v) {
-        int base = v * 5;
-        int idx[5] = {base + 0, base + 1, base + 2, base + 3, base + 4};
         for (int attempt = 0; attempt < 32; ++attempt) {
-            std::shuffle(std::begin(idx), std::end(idx), rng);
-            bool is_derangement = true;
-            for (int k = 0; k < 5; ++k) {
-                if (idx[k] == base + k) {
-                    is_derangement = false;
-                    break;
+            std::shuffle(sailor_rem.begin(), sailor_rem.end(), rng);
+            bool ok = true;
+            for (int k = 0; k < 4; ++k) {
+                if (sailor_rem[k] == (k + 1)) { ok = false; break; }
+            }
+            if (ok) break;
+        }
+        for (int k = 0; k < 4; ++k) {
+            if (sailor_rem[k] == (k + 1)) std::swap(sailor_rem[k], sailor_rem[(k + 1) % 4]);
+        }
+        for (int k = 0; k < 4; ++k) perm[k + 1] = sailor_rem[k];
+        // Cossack and Caveman: no stage behind its own door.
+        for (int v = 1; v < 3; ++v) {
+            const int base = v * 5;
+            int idx[5] = {base + 0, base + 1, base + 2, base + 3, base + 4};
+            for (int attempt = 0; attempt < 32; ++attempt) {
+                std::shuffle(std::begin(idx), std::end(idx), rng);
+                bool is_derangement = true;
+                for (int k = 0; k < 5; ++k) {
+                    if (idx[k] == base + k) { is_derangement = false; break; }
                 }
+                if (is_derangement) break;
             }
-            if (is_derangement) break;
-        }
-        for (int k = 0; k < 5; ++k) {
-            if (idx[k] == base + k) {
-                std::swap(idx[k], idx[(k + 1) % 5]);
+            for (int k = 0; k < 5; ++k) {
+                if (idx[k] == base + k) std::swap(idx[k], idx[(k + 1) % 5]);
             }
+            for (int k = 0; k < 5; ++k) perm[base + k] = idx[k];
         }
-        for (int k = 0; k < 5; ++k) {
-            int door_i = base + k;
-            g_state.door_perm[door_i] = static_cast<uint8_t>(idx[k]);
-            g_state.door_overrides[kStageDoors[door_i].door_id] = kStageDoors[idx[k]].vanilla_wad;
-            g_state.door_overrides[kStageDoors[door_i].vanilla_wad] = kStageDoors[idx[k]].vanilla_wad;
+        // Inca: the two real doors swap, and so do the two door slots behind the gate.
+        std::swap(perm[15], perm[16]);
+        std::swap(perm[17], perm[18]);
+    } else if (mode >= 2) {
+        door1_target = (rng() % 2 == 0) ? 0 : 4;
+        perm[0] = door1_target;
+        if (rng() % 2 == 0) std::swap(perm[15], perm[16]);
+        // Every other real door (1..14, 17, 18) gets one of the remaining sixteen stages, from any village.
+        std::vector<int> doors, stages;
+        for (int d = 1; d <= 18; ++d) {
+            if (d != 15 && d != 16) doors.push_back(d);
         }
+        for (int st = 0; st <= 18; ++st) {
+            if (st != door1_target && st != 15 && st != 16) stages.push_back(st);
+        }
+        std::shuffle(stages.begin(), stages.end(), rng);
+        for (size_t k = 0; k < doors.size(); ++k) perm[doors[k]] = stages[k];
+    }
+    for (int d = 0; d < 20; ++d) {
+        g_state.door_perm[d] = static_cast<uint8_t>(perm[d]);
+        g_state.door_overrides[kStageDoors[d].door_id] = kStageDoors[perm[d]].vanilla_wad;
+        g_state.door_overrides[kStageDoors[d].vanilla_wad] = kStageDoors[perm[d]].vanilla_wad;
     }
 
     int target_idx0 = g_state.door_perm[0] < 20 ? g_state.door_perm[0] : 0;
@@ -395,13 +635,18 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         std::string("Door 1 (") + kStageDoors[0].level_name + ") -> " +
         kStageDoors[target_idx0].level_name + " (Seed #" + g_state.current_seed_hex + ")";
 
-    // 2. Build a logically solvable 180-check item/move/trap pool (9 checks per stage across 20 stages):
-    //    Sub-checks 0..2: 15, 30, 45 White Crystals collected in stage (always reachable without abilities!)
+    // 2. Build the 180-check pool (9 checks per stage across 20 stages):
+    //    Sub-checks 0..2: 10, 25, 40 White Crystals collected in stage (only when white crystals are not checks)
     //    Sub-checks 3..7: Colored Crystal slots 1..5 in stage
     //    Sub-check  8:    Stage Completion
     //
-    // Sphere 1: 15 early White Crystal checks (0..2) across the 5 Sailor Village stages (stages 0..4).
-    // Guarantees all 5 core abilities + Vehicle License + Sailor Village Stage Keys so the player CAN NEVER GET SOFTLOCKED!
+    // The abilities, the Vehicle License and the Sailor Village keys start on the 15 crystal-count checks of the
+    // Sailor Village stages. That is all the modes without a logic walk (white crystals not every-one-a-check)
+    // get: it keeps these items early, but it is not a guarantee. Those 15 checks include the boat race's (needs
+    // the Vehicle License) and others with a requirement of their own, and an item can land behind itself; in the
+    // two milestone modes these crystal-count checks do not exist at all. Only "every white crystal is a check"
+    // mode is checked for being beatable: there solo_logic_repair_locked (called at the end) reshuffles
+    // everything and places by the logic instead.
     std::vector<int> sphere1_slots;
     std::vector<int> remaining_slots;
     for (int s = 0; s < 20; ++s) {
@@ -418,79 +663,69 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     std::shuffle(sphere1_slots.begin(), sphere1_slots.end(), rng);
     std::shuffle(remaining_slots.begin(), remaining_slots.end(), rng);
 
-    // Sphere 1 items (15 items):
-    // 5 core abilities: Tail Whack (7200001), Butt Stomp (7200002), Climbing Claws (7200003),
-    //                   Power Gloves (7200004), Lever Wrench (7200005)
-    // Vehicle License (7200006)
-    // 3 Sailor Village Stage Door Keys (7200023, 7200024, 7200025)
-    // Useful inventory items + Heart Pot + Colored Crystal + 1 Trap
     const int sphere1_items[15] = {
-        7200001, 7200002, 7200003, 7200004, 7200005, // 5 core abilities
-        7200006,                                     // Vehicle License!
-        7200023, 7200024, 7200025,                   // 3 Sailor Village Stage Door Keys!
+        7200001, 7200002, 7200003, 7200004, 7200005, // Tail Whack, Butt Stomp, Climbing Claws, Power Gloves, Lever Wrench
+        7200006,                                     // Vehicle License
+        7200023, 7200024, 7200025,                   // 3 Sailor Village Stage Door Keys
         7200142, 7200143, 7200144,                   // Clockwork Gobbo, Red Jelly, Blue Jelly
-        7200021,                                     // Heart Pot
-        7200042,                                     // Red Crystal
-        7200161                                      // Long Jump
+        7200161, 7200162, 7200163                    // Long Jump, High Jump, Mine Cart
     };
     for (size_t i = 0; i < 15 && i < sphere1_slots.size(); ++i) {
         g_state.solo_check_items[sphere1_slots[i]] = sphere1_items[i];
     }
 
-    // Remaining 165 items:
-    // - Remaining 16 Stage Keys (7200026..7200041)
-    // - Airplane Ammo Feed (7200007), Binoculars (7200146)
-    // - 4 Village VIP Passes (7200008..7200011)
-    // - 4 Jigsaw Pieces (7200012..7200015)
-    // - 16 Trophies (7200017)
-    // - 97 remaining Colored Crystals (7200045..7200141)
-    // - 8 Heart Pots (7200021)
-    // - 6 Silver Keys (7200019) + 4 Gold Keys (7200020)
-    // - 4 Clockwork Gobbos (7200142), 4 Red Jellies (7200143), 4 Blue Jellies (7200144), 4 Green Jellies (7200145)
-    // - Traps (Fire Breakout, Ice Physics, Reverse Controls, Dantini Ambush, Speed)
+    // The other 165 checks get exactly 165 items (16 keys, Airplane Ammo Feed, Binoculars, 4 VIP Passes, 4 Jigsaw
+    // Pieces, 16 Trophies, the Red Crystal and 97 more Colored Crystals, 9 Heart Pots, 16 consumables). There is
+    // no room to spare: anything added here must take a Heart Pot's place, or it pushes a random item out.
     std::vector<int> pool;
     pool.reserve(remaining_slots.size());
     for (int key_id = 7200026; key_id <= 7200041; ++key_id) {
         pool.push_back(key_id); // All remaining Stage Keys in pool!
     }
     pool.push_back(7200007); // Airplane Ammo Feed
-    pool.push_back(7200162); // High Jump
     pool.push_back(7200146); // Binoculars
+    pool.push_back(7200042); // Find the Key! Save the Gobbo! - Red Crystal
     for (int id = 7200008; id <= 7200015; ++id) pool.push_back(id); // 4 VIP Passes + 4 Jigsaw Pieces
     for (int i = 0; i < 16; ++i) pool.push_back(7200017); // 16 Trophies
     for (int id = 7200045; id <= 7200141; ++id) pool.push_back(id); // Colored Crystals
-    for (int i = 0; i < 8; ++i) pool.push_back(7200021); // 8 Heart Pots
-    for (int i = 0; i < 6; ++i) pool.push_back(7200019); // 6 Silver Keys
-    for (int i = 0; i < 4; ++i) pool.push_back(7200020); // 4 Gold Keys
-    for (int i = 0; i < 4; ++i) {
-        pool.push_back(7200142); // Clockwork Gobbo
-        pool.push_back(7200143); // Gummi Jump (Red Jelly)
-        pool.push_back(7200144); // Jelly Jump (Blue Jelly)
-        pool.push_back(7200145); // High Jelly Jump (Green Jelly)
-    }
-    const int trap_cycle[5] = {7200151, 7200152, 7200153, 7200154, 7200155};
+    for (int i = 0; i < 9; ++i) pool.push_back(7200021); // 9 Heart Pots
+    // Consumables, in proportion to the markers the levels have (13 Clockwork Gobbo, 9 orange, 4 lime, 1
+    // strawberry). With the three above that is 8 Clockwork Gobbos, 6 orange, 4 lime and 1 strawberry on the 180
+    // checks: fewer than the markers, because there is no room for more. When white crystals are not checks
+    // these are all there is, and Swap Meet Pete is where more come from (after his check has been collected a
+    // purchase is an ordinary purchase). In "every white crystal is a check" mode the crystal pool below adds
+    // enough to make three times the markers.
+    for (int i = 0; i < 7; ++i) pool.push_back(7200142); // Clockwork Gobbo
+    for (int i = 0; i < 5; ++i) pool.push_back(7200144); // orange ("Blue") jelly
+    for (int i = 0; i < 4; ++i) pool.push_back(7200145); // lime ("Green") jelly
+    // Only traps that do something: Fire Breakout, Tail-Knot, Lead Boots, Pete's Crystal Tax, Health Drain.
+    // Ice Physics, Dantini Ambush, Speed Distortion and Darkness have no effect yet, and Reverse Controls only
+    // flips the D-pad, so they stay out of the pool until they work.
+    const int trap_cycle[5] = {7200151, 7200157, 7200158, 7200160, 7200156};
     while (pool.size() < remaining_slots.size()) {
         pool.push_back(trap_cycle[pool.size() % 5]);
     }
+    // Nothing may fall off the end: if the list above ever outgrows the checks, say so loudly in the log.
+    if (pool.size() > remaining_slots.size()) {
+        debug_log_locked("SEED ERROR: " + std::to_string(pool.size()) + " items for " +
+                         std::to_string(remaining_slots.size()) + " checks; some are left out");
+    }
     std::shuffle(pool.begin(), pool.end(), rng);
-    for (size_t i = 0; i < remaining_slots.size(); ++i) {
+    for (size_t i = 0; i < remaining_slots.size() && i < pool.size(); ++i) {
         g_state.solo_check_items[remaining_slots[i]] = pool[i];
     }
 
-    // 3. Build the 2,000-entry Individual White Crystal check pool (100 crystals per stage * 20 stages):
-    //    Ensure the starting stage (door1_target, behind Sailor Village Door 1) has core abilities,
-    //    Stage Keys, and inventory wheel items in its first 20 White Crystals so the player can never softlock!
+    // 3. Build the 2,000-entry Individual White Crystal check pool (100 crystals per stage * 20 stages).
+    //    (The "first 20 crystals of the starting stage" grouping below is from before crystals had fixed numbers.
+    //    It no longer decides anything: in the one mode where every crystal is a check, solo_logic_repair_locked
+    //    reshuffles the lot and places by the logic.)
     std::vector<int> wc_start_stage_slots;
     std::vector<int> wc_sphere1_slots;
     std::vector<int> wc_remaining_slots;
-    // The start stage's 20 "safe" checks hold the abilities and keys. Crystal checks are now specific crystals, so
-    // these must be ones Croc can pick up with a plain jump: loose crystals in the stage's first map, never a
-    // smash box's (those need Butt Stomp). Stages without enough loose crystals fall back to the lowest numbers.
-    const std::vector<int> start_numbers = early_loose_crystal_numbers(door1_target, 20);
     for (int s = 0; s < 20; ++s) {
         for (int c = 0; c < 100; ++c) {
             int wc_idx = s * 100 + c;
-            if (s == door1_target && std::find(start_numbers.begin(), start_numbers.end(), c + 1) != start_numbers.end()) {
+            if (s == door1_target && c < 20) {
                 wc_start_stage_slots.push_back(wc_idx);
             } else if (s < 5 && c < 20) {
                 wc_sphere1_slots.push_back(wc_idx);
@@ -512,7 +747,7 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200144,                                     // Jelly Jump Blue Jelly (Inventory Wheel)
         7200145,                                     // High Jelly Jump Green Jelly (Inventory Wheel)
         7200146,                                     // Binoculars (HUD / Inventory)
-        7200019, 7200020,                            // Silver Key + Gold Key (Inventory Wheel & HUD)
+        7200150, 7200150,                            // Croc Crystals (10) x2 (were Silver Key + Gold Key)
         7200021,                                     // Heart Pot
         7200042,                                     // Find the Key! Save the Gobbo! - Red Crystal
         7200161                                      // Long Jump
@@ -526,11 +761,11 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
         7200143, 7200143,                            // 2 Gummi Jump Red Jellies
         7200144, 7200144,                            // 2 Jelly Jump Blue Jellies
         7200145, 7200145,                            // 2 High Jelly Jump Green Jellies
-        7200019, 7200020,                            // Silver Key + Gold Key
+        7200150, 7200150,                            // Croc Crystals (10) x2 (were Silver Key + Gold Key)
         7200012, 7200018,                            // 1 Jigsaw Piece + 1 Golden Gobbo
         7200021, 7200021,                            // 2 Heart Pots
         7200043, 7200044, 7200045, 7200046,          // Sailor Door 1 Colored Crystals
-        7200151, 7200152, 7200155                    // Early traps
+        7200151, 7200157, 7200158                    // Early traps (Fire Breakout, Tail-Knot, Lead Boots)
     };
     const int early_wheel_cycle[6] = {7200143, 7200144, 7200145, 7200142, 7200148, 7200149};
     while (wc_sphere1_items.size() < wc_sphere1_slots.size()) {
@@ -548,18 +783,21 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     wc_pool.push_back(7200006); // Vehicle License
     wc_pool.push_back(7200007); // Airplane Ammo Feed
     wc_pool.push_back(7200162); // High Jump
+    wc_pool.push_back(7200163); // Mine Cart
     for (int id = 7200008; id <= 7200015; ++id) wc_pool.push_back(id); // VIP Passes + Jigsaw Pieces
     for (int i = 0; i < 16; ++i) wc_pool.push_back(7200017); // 16 Trophies
     for (int id = 7200047; id <= 7200141; ++id) wc_pool.push_back(id); // Colored Crystals
     for (int i = 0; i < 8; ++i) wc_pool.push_back(7200021); // 8 Heart Pots
-    for (int i = 0; i < 6; ++i) wc_pool.push_back(7200019); // 6 Silver Keys
-    for (int i = 0; i < 4; ++i) wc_pool.push_back(7200020); // 4 Gold Keys
-    for (int i = 0; i < 10; ++i) {
-        wc_pool.push_back(7200142); // Clockwork Gobbo
-        wc_pool.push_back(7200143); // Red Jelly
-        wc_pool.push_back(7200144); // Blue Jelly
-        wc_pool.push_back(7200145); // Green Jelly
-    }
+    // (Silver Keys and Gold Keys used to be here. They open nothing in the game; the pool is topped up with
+    // Croc Crystals below instead.)
+    // Consumables: about three times what the levels need, so spending one in the wrong place doesn't lock a
+    // check out. The levels have 13 Clockwork Gobbo markers, 9 orange jelly markers, 4 lime and 1 strawberry
+    // (docs/logic.md). Counting the copies placed above and on the 180 checks, these bring the totals to at
+    // least 43 Clockwork Gobbos, 29 orange jellies, 13 lime and 6 strawberry.
+    for (int i = 0; i < 32; ++i) wc_pool.push_back(7200142); // Clockwork Gobbo
+    for (int i = 0; i < 20; ++i) wc_pool.push_back(7200144); // orange ("Blue") jelly
+    for (int i = 0; i < 6; ++i) wc_pool.push_back(7200145);  // lime ("Green") jelly
+    for (int i = 0; i < 2; ++i) wc_pool.push_back(7200143);  // strawberry ("Red") jelly
     for (int i = 0; i < 45; ++i) wc_pool.push_back(trap_cycle[i % 5]); // 45 Traps
     const int filler_cycle[3] = {7200148, 7200149, 7200150};
     while (wc_pool.size() < wc_remaining_slots.size()) {
@@ -569,6 +807,23 @@ static void build_logical_item_pool_for_seed_locked(uint64_t seed) {
     for (size_t i = 0; i < wc_remaining_slots.size(); ++i) {
         g_state.solo_white_crystal_items[wc_remaining_slots[i]] = wc_pool[i];
     }
+    // The trap settings. trap_weight is the percent of filler that is a trap, as in the Archipelago world: every
+    // check holding Croc Crystals or a trap is rolled again, a trap with that chance and Croc Crystals otherwise.
+    // 0 means no traps at all. fire_breakout_trap off leaves that trap out.
+    {
+        std::vector<int> traps;
+        for (int t : trap_cycle) {
+            if (t != 7200151 || g_state.fire_breakout_trap) traps.push_back(t);
+        }
+        const int weight = g_state.trap_weight < 0 ? 0 : (g_state.trap_weight > 100 ? 100 : g_state.trap_weight);
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            int& id = solo_item_at(loc);
+            if (id < 7200148 || id > 7200160) continue; // Croc Crystals (1, 5, 10) and traps
+            if (!traps.empty() && static_cast<int>(rng() % 100) < weight) id = traps[rng() % traps.size()];
+            else id = filler_cycle[rng() % 3];
+        }
+    }
+    solo_logic_repair_locked(rng);
 }
 
 static void sync_state_to_save_footer_locked() {
@@ -601,8 +856,11 @@ static void sync_state_to_save_footer_locked() {
         footer->blue_jellies = static_cast<uint8_t>(g_state.blue_jellies);
         footer->green_jellies = static_cast<uint8_t>(g_state.green_jellies);
         footer->clockwork_gobbos = static_cast<uint8_t>(g_state.clockwork_gobbos);
+        for (int k = 0; k < 4; ++k) footer->items_delivered[k] = static_cast<uint8_t>(g_state.items_delivered[k]);
+        for (int k = 0; k < 3; ++k) footer->borrowed_clear[k] = static_cast<uint8_t>(g_state.borrowed_clear >> (8 * k));
         // Bit 0 binoculars, bit 1 High Jump (the abilities byte above is full).
-        footer->binoculars = static_cast<uint8_t>((g_state.binoculars ? 1 : 0) | (g_state.abilities.high_jump ? 2 : 0));
+        footer->binoculars = static_cast<uint8_t>((g_state.binoculars ? 1 : 0) | (g_state.abilities.high_jump ? 2 : 0) |
+                                                  (g_state.abilities.mine_cart ? 4 : 0)); // bit 2 Mine Cart
         footer->ap_items_applied = static_cast<uint32_t>(g_state.ap_items_applied);
     } else {
         footer->magic = VANILLA_SAVE_MAGIC;
@@ -644,8 +902,12 @@ static void restore_state_from_save_footer_locked(const Croc2RandoSaveFooter& fo
     g_state.blue_jellies = footer.blue_jellies;
     g_state.green_jellies = footer.green_jellies;
     g_state.clockwork_gobbos = footer.clockwork_gobbos;
+    for (int k = 0; k < 4; ++k) g_state.items_delivered[k] = footer.items_delivered[k];
+    g_state.borrowed_clear = 0;
+    for (int k = 0; k < 3; ++k) g_state.borrowed_clear |= static_cast<uint32_t>(footer.borrowed_clear[k]) << (8 * k);
     g_state.binoculars = (footer.binoculars & 1) != 0;
     g_state.abilities.high_jump = (footer.binoculars & 2) != 0;
+    g_state.abilities.mine_cart = (footer.binoculars & 4) != 0;
 
     g_state.stage_colored_crystals.clear();
     g_state.activated_golden_gobbos.clear();
@@ -694,6 +956,7 @@ static void generate_new_save_seed_locked(uint64_t seed) {
         g_state.abilities.power_gloves = true;
         g_state.abilities.long_jump = true;
         g_state.abilities.high_jump = true;
+        g_state.abilities.mine_cart = true;
     }
     if (!g_state.shuffle_levers) g_state.abilities.lever_wrench = true;
     if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
@@ -710,6 +973,8 @@ static void generate_new_save_seed_locked(uint64_t seed) {
     g_state.red_jellies = 0;
     g_state.blue_jellies = 0;
     g_state.green_jellies = 0;
+    for (int k = 0; k < 4; ++k) g_state.items_delivered[k] = 0;
+    g_state.borrowed_clear = 0;
     g_state.binoculars = false;
     g_state.stage_colored_crystals.clear();
     g_state.activated_golden_gobbos.clear();
@@ -1136,6 +1401,12 @@ static void load_config_ini(const char* ini_path) {
             g_state.lock_level_access = (val == "true" || val == "1");
         } else if (key == "shuffle_white_crystals") {
             g_state.shuffle_white_crystals = std::atoi(val.c_str());
+        } else if (key == "door_shuffle") {
+            g_state.door_shuffle = std::atoi(val.c_str());
+        } else if (key == "trap_weight") {
+            g_state.trap_weight = std::atoi(val.c_str());
+        } else if (key == "fire_breakout_trap") {
+            g_state.fire_breakout_trap = (val == "true" || val == "1");
         } else if (key == "shuffle_pete_store") {
             g_state.shuffle_pete_store = std::atoi(val.c_str());
         } else if (key == "shuffle_abilities") {
@@ -1161,6 +1432,7 @@ static void load_config_ini(const char* ini_path) {
             g_state.abilities.power_gloves = true;
             g_state.abilities.long_jump = true;
             g_state.abilities.high_jump = true;
+            g_state.abilities.mine_cart = true;
         } else {
             g_state.abilities.tail_whack = false;
             g_state.abilities.butt_stomp = false;
@@ -1168,6 +1440,7 @@ static void load_config_ini(const char* ini_path) {
             g_state.abilities.power_gloves = false;
             g_state.abilities.long_jump = false;
             g_state.abilities.high_jump = false;
+            g_state.abilities.mine_cart = false;
         }
         g_state.abilities.lever_wrench = !g_state.shuffle_levers;
         g_state.abilities.vehicle_license = !g_state.shuffle_vehicles;
@@ -1325,6 +1598,7 @@ static void get_ap_item_info(int item_id, std::string& out_name, ItemImportance&
         case 7200007: out_name = "Airplane Ammo Feed"; return;
         case 7200161: out_name = "Long Jump"; return;
         case 7200162: out_name = "High Jump"; return;
+        case 7200163: out_name = "Mine Cart"; return;
         case 7200008: out_name = "Sailor Village VIP Pass"; return;
         case 7200009: out_name = "Cossack Village VIP Pass"; return;
         case 7200010: out_name = "Caveman Village VIP Pass"; return;
@@ -1415,6 +1689,7 @@ static void apply_ap_item_by_id_locked(int item_id,
         case 7200006: g_state.abilities.vehicle_license = true; g_state.add_log("Unlocked Ability: Vehicle License!"); break;
         case 7200007: g_state.abilities.airplane_ammo_feed = true; g_state.add_log("Unlocked Ability: Airplane Ammo Feed!"); break;
         case 7200162: g_state.abilities.high_jump = true; g_state.add_log("Unlocked Ability: High Jump!"); break;
+        case 7200163: g_state.abilities.mine_cart = true; g_state.add_log("Unlocked Ability: Mine Cart!"); break;
         case 7200161: g_state.abilities.long_jump = true; g_state.add_log("Unlocked Ability: Long Jump!"); break;
         case 7200008: g_state.vip_passes.insert("Sailor Village"); g_state.add_log("Received Pete's VIP Pass (Sailor Village)!"); break;
         case 7200009: g_state.vip_passes.insert("Cossack Village"); g_state.add_log("Received Pete's VIP Pass (Cossack Village)!"); break;
@@ -1689,6 +1964,7 @@ static std::string build_state_json_locked() {
        << "\"butt_stomp\":" << (g_state.abilities.butt_stomp ? "true" : "false") << ","
        << "\"long_jump\":" << (g_state.abilities.long_jump ? "true" : "false") << ","
        << "\"high_jump\":" << (g_state.abilities.high_jump ? "true" : "false") << ","
+       << "\"mine_cart\":" << (g_state.abilities.mine_cart ? "true" : "false") << ","
        << "\"climbing_claws\":" << (g_state.abilities.climbing_claws ? "true" : "false") << ","
        << "\"power_gloves\":" << (g_state.abilities.power_gloves ? "true" : "false") << ","
        << "\"lever_wrench\":" << (g_state.abilities.lever_wrench ? "true" : "false") << ","
@@ -1768,6 +2044,66 @@ static std::string handle_command_locked(const std::string& req) {
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
     }
 
+    // Plays the current solo seed in logic and reports it sphere by sphere: how many checks open up, in which
+    // stages, and which abilities, keys and consumables are found there. Used to check the seed is beatable and
+    // well spread (tools/check_solo_seeds.py).
+    if (cmd == "debug_solo_logic") {
+        SoloHave have;
+        std::vector<char> seen(kSoloLocations, 0);
+        std::ostringstream ss;
+        ss << "{\"status\":\"ok\",\"door1_stage\":" << static_cast<int>(g_state.door_perm[0]) << ",\"doors\":[";
+        for (int d = 0; d < 20; ++d) ss << (d ? "," : "") << static_cast<int>(g_state.door_perm[d]);
+        ss << "],\"spheres\":[";
+        int total = 0;
+        for (int sphere = 0; sphere < 64; ++sphere) {
+            // One sphere: everything reachable with what was held when the sphere began.
+            const uint64_t eff = have.effective();
+            std::vector<int> fresh;
+            for (int loc = 0; loc < kSoloLocations; ++loc) {
+                if (!seen[loc] && solo_location_reachable(loc, eff)) fresh.push_back(loc);
+            }
+            if (fresh.empty()) break;
+            int per_stage[20] = {0};
+            for (int loc : fresh) ++per_stage[loc >= SOLO_CHECK_POOL_SIZE ? (loc - SOLO_CHECK_POOL_SIZE) / 100 : loc / 9];
+            ss << (sphere ? "," : "") << "{\"checks\":" << fresh.size() << ",\"stages\":[";
+            for (int s = 0; s < 20; ++s) ss << (s ? "," : "") << per_stage[s];
+            ss << "],\"items\":[";
+            bool first = true;
+            for (int loc : fresh) {
+                seen[loc] = 1;
+                const int id = solo_item_at(loc);
+                const uint64_t bit = logic_item_bit(id);
+                const int kind = solo_consumable_kind(id);
+                bool report = false;
+                if (bit && !(have.bits & bit)) { have.bits |= bit; report = true; }
+                if (kind >= 0) {
+                    ++have.count[kind];
+                    report = have.count[kind] == kConsumableNeed[kind]; // the copy that makes the kind usable in logic
+                }
+                if (report) {
+                    ss << (first ? "" : ",") << id;
+                    first = false;
+                }
+            }
+            ss << "]}";
+            total += static_cast<int>(fresh.size());
+        }
+        // Abilities and keys the walk never reached, and consumable kinds it never collected enough of.
+        int stranded = 0, short_kinds = 0, lost = 0;
+        for (int loc = 0; loc < kSoloLocations; ++loc) {
+            const int id = solo_item_at(loc);
+            const uint64_t bit = logic_item_bit(id);
+            if (bit && !(have.bits & bit)) ++stranded;
+            // Items that matter sitting on checks that can never be collected (there should be none).
+            if (solo_location_is_dead(loc) && !solo_item_is_filler(id)) ++lost;
+        }
+        for (int k = 0; k < 4; ++k) if (have.count[k] < kConsumableNeed[k]) ++short_kinds;
+        ss << "],\"reachable\":" << total << ",\"stranded_items\":" << stranded << ",\"short_consumables\":" << short_kinds
+           << ",\"consumables\":[" << have.count[0] << "," << have.count[1] << "," << have.count[2] << "," << have.count[3]
+           << "],\"lost_items\":" << lost << "}";
+        return ss.str();
+    }
+
     if (cmd == "get_state") {
         return "{\"status\":\"ok\",\"state\":" + build_state_json_locked() + "}";
     }
@@ -1818,6 +2154,7 @@ static std::string handle_command_locked(const std::string& req) {
             g_state.abilities.power_gloves = true;
             g_state.abilities.long_jump = true;
             g_state.abilities.high_jump = true;
+            g_state.abilities.mine_cart = true;
         }
         if (!g_state.shuffle_levers) g_state.abilities.lever_wrench = true;
         if (!g_state.shuffle_vehicles) g_state.abilities.vehicle_license = true;
@@ -2017,6 +2354,7 @@ static std::string handle_command_locked(const std::string& req) {
         else if (item_name == "Airplane Ammo Feed") g_state.abilities.airplane_ammo_feed = true;
         else if (item_name == "Long Jump") g_state.abilities.long_jump = true;
         else if (item_name == "High Jump") g_state.abilities.high_jump = true;
+        else if (item_name == "Mine Cart") g_state.abilities.mine_cart = true;
         else if (item_name == "Jigsaw Piece" || group == "Jigsaw Pieces") {
             g_state.jigsaw_pieces += 1;
             g_pending_jigsaws.fetch_add(1);
@@ -3157,8 +3495,30 @@ static bool map_clear_flag_set(const MapCoords& m) {
 static int g_entry_stage_idx = -1;
 static bool g_entry_stage_was_cleared = false;
 
+// The byte in the game's save data that holds a map's "cleared" bit (bit 0), or null.
+static uint8_t* map_clear_flag_byte(const MapCoords& m) {
+    int32_t idx = map_flag_index(m);
+    if (idx < 0 || idx + 0x304 >= 0x17800) return nullptr;
+    return reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE) + idx + 0x304;
+}
+
+// Puts every borrowed "cleared" mark back (see ModState::borrowed_clear). Called when a hub is loaded, which
+// also covers a save that was written while Croc was inside such a stage with the mark taken off.
+static void reassert_borrowed_clears_locked() {
+    for (int st = 0; st < 20; ++st) {
+        if (!(g_state.borrowed_clear & (1u << st))) continue;
+        MapCoords m{};
+        if (!wad_to_coords(kStageDoors[st].vanilla_wad, m)) continue;
+        if (uint8_t* f = map_clear_flag_byte(m)) *f |= 1;
+    }
+}
+
 static void remember_stage_entry_locked(const MapCoords& stage_map) {
     g_entry_stage_idx = find_stage_index_by_wad(coords_to_wad(stage_map));
+    // A borrowed "cleared" mark is taken off for the visit: the stage has not really been cleared.
+    if (g_entry_stage_idx >= 0 && (g_state.borrowed_clear & (1u << g_entry_stage_idx))) {
+        if (uint8_t* f = map_clear_flag_byte(stage_map)) *f &= static_cast<uint8_t>(~1u);
+    }
     g_entry_stage_was_cleared = g_entry_stage_idx >= 0 && map_clear_flag_set(stage_map);
 }
 
@@ -3184,6 +3544,16 @@ static void report_completion_on_exit_locked(const MapCoords& left, const MapCoo
             claim_solo_check_locked(g_entry_stage_idx, 8,
                                     std::string(kStageDoors[g_entry_stage_idx].level_name) + " - Stage Clear");
         }
+        // The stage's mark was borrowed and taken off for the visit: if the stage has now really been cleared
+        // the mark is its own from here on; if not, it goes back on.
+        if (g_state.borrowed_clear & (1u << g_entry_stage_idx)) {
+            if (map_clear_flag_set(entry)) {
+                g_state.borrowed_clear &= ~(1u << g_entry_stage_idx);
+                sync_state_to_save_footer_locked();
+            } else if (uint8_t* f = map_clear_flag_byte(entry)) {
+                *f |= 1;
+            }
+        }
         g_entry_stage_idx = -1;
     }
     if (!g_state.is_randomizer_active()) return;
@@ -3201,6 +3571,7 @@ static MapCoords resolve_map_load_locked(const MapCoords& req) {
     g_fix_spawn_this_load = false;
     inspect_and_sync_save_lifecycle_locked(req);
     report_completion_on_exit_locked(g_last_loaded, req);
+    if (is_hub_coords(req)) reassert_borrowed_clears_locked();
 
     if (!g_state.is_mod_enabled_toggle()) {
         g_in_redirected_stage = false;
@@ -3311,7 +3682,17 @@ static MapCoords resolve_map_load_locked(const MapCoords& req) {
         // the door's original stage slot to keep this village's progress (door state, boss unlock) right.
         // Within a village the set of cleared bits is already correct, so nothing is copied.
         if (g_saved_rand_stage.tribe != g_saved_orig_door.tribe && map_clear_flag_set(g_saved_rand_stage)) {
-            reinterpret_cast<uint8_t*>(g_exe_base + RVA_SAVE_DATA_TABLE)[map_flag_index(g_saved_orig_door) + 0x304] |= 1;
+            uint8_t* f = map_clear_flag_byte(g_saved_orig_door);
+            if (f && !(*f & 1)) {
+                *f |= 1;
+                // The door's own stage has not been cleared: remember that this mark is borrowed, so that
+                // stage still plays as uncleared and can still give its Stage Clear check.
+                const int slot_stage = find_stage_index_by_wad(coords_to_wad(g_saved_orig_door));
+                if (slot_stage >= 0) {
+                    g_state.borrowed_clear |= 1u << slot_stage;
+                    sync_state_to_save_footer_locked();
+                }
+            }
         }
         g_fix_spawn_this_load = true; // place Croc at the hub door he originally entered
         g_state.current_wad = coords_to_wad(back);
@@ -3589,18 +3970,37 @@ static void drain_pending_native_inventory_grants() {
         }
     };
 
-    // Gummi Jump (Red Jelly) -> Wheel item_type 5 (0x140BA9B48)
-    sync_item(i32(RVA_INV_STRAWBERRY_JELLIES), g_state.red_jellies, 5);
-
-    // Jelly Jump (Blue Jelly) -> Wheel item_type 7 (0x140BA9B4C)
-    sync_item(i32(RVA_INV_ORANGE_JELLIES), g_state.blue_jellies, 7);
-
-    // High Jelly Jump (Green Jelly) -> Wheel item_type 6 (0x140BA9B50)
-    sync_item(i32(RVA_INV_LIME_JELLIES), g_state.green_jellies, 6);
-
-    // Clockwork Gobbo -> item type 8 (0x140BA9B58). (This used to also write 0x140BA9B38, taken for a HUD
-    // clockwork count; that address is the jigsaw piece counter.)
-    sync_item(i32(RVA_INV_CLOCKWORK), g_state.clockwork_gobbos, 8);
+    // Jellies and Clockwork Gobbos are consumables, as in the unmodified game: using one uses it up.
+    // Each one received is handed to the backpack exactly once. The backpack holds 9 of a kind; anything received
+    // beyond that waits in reserve and is handed over as room appears, so nothing is lost. The backpack counts
+    // live in the game's own save data (0x140BA9B48.. is inside the save table), and the number handed over so far
+    // is kept in the randomizer footer beside them, so the two always describe the same moment.
+    // (Before, the count was simply kept topped up to the number received, so a kind never ran out once the first
+    // one had arrived.)
+    // Order: strawberry ("Gummi Jump (Red Jelly)"), orange ("Jelly Jump (Blue Jelly)"), lime ("High Jelly Jump
+    // (Green Jelly)"), Clockwork Gobbo (item type 8, 0x140BA9B58. This used to also write 0x140BA9B38, taken for
+    // a HUD clockwork count; that address is the jigsaw piece counter.)
+    static const uintptr_t kCountRva[4] = {RVA_INV_STRAWBERRY_JELLIES, RVA_INV_ORANGE_JELLIES, RVA_INV_LIME_JELLIES, RVA_INV_CLOCKWORK};
+    static const int32_t kItemType[4] = {5, 7, 6, 8};
+    int hand_over[4] = {0, 0, 0, 0};
+    bool delivered_any = false;
+    {
+        // The received totals are changed by the network and command threads, so the bookkeeping is done under
+        // the lock; the game's own function is called after it is released.
+        std::lock_guard<std::mutex> lock(g_mutex);
+        const int received[4] = {g_state.red_jellies, g_state.blue_jellies, g_state.green_jellies, g_state.clockwork_gobbos};
+        for (int k = 0; k < 4; ++k) {
+            const int reserve = received[k] - g_state.items_delivered[k];
+            const int room = 9 - i32(kCountRva[k]);
+            if (reserve <= 0 || room <= 0) continue;
+            hand_over[k] = reserve < room ? reserve : room;
+            g_state.items_delivered[k] += hand_over[k];
+            delivered_any = true;
+        }
+    }
+    for (int k = 0; k < 4; ++k) {
+        if (hand_over[k] > 0) fn_add_item(kItemType[k], 0, hand_over[k], 0, 0);
+    }
 
     // Golden Gobbos: the game's counter is 0x140BA9B30 (opcode 249). Received Golden Gobbos are not written to
     // it yet: whether a village's Golden Gobbo door reads this counter or per-level state is not known. The
@@ -3632,6 +4032,10 @@ static void drain_pending_native_inventory_grants() {
 
     reset_pending_native_grants();
     g_need_full_inventory_sync.store(false);
+    if (delivered_any) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        sync_state_to_save_footer_locked(); // the handed-over counts go into the save data with the backpack counts
+    }
 }
 
 static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
@@ -3834,6 +4238,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             g_lead_boots_active.store(false);
             g_gloves_lock_active.store(false);
             g_lever_lock_active.store(false);
+            g_cart_lock_active.store(false);
         }
         if (g_state.is_randomizer_active() && paused == 0 && curr->map_type != 3) {
             bool has_tail_knot = false;
@@ -3869,6 +4274,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
             g_lead_boots_active.store(has_lead_boots);
             g_gloves_lock_active.store(!g_state.abilities.power_gloves);
             g_lever_lock_active.store(!g_state.abilities.lever_wrench);
+            g_cart_lock_active.store(!g_state.abilities.mine_cart);
 
             if (g_state.debug_watch) {
                 static int32_t s_prev_state = -1;
@@ -3901,9 +4307,23 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                         if (cv && readable_memory(cv + 175, 4)) script_climbing = cv[175] == 49152 || cv[175] == 53248;
                     }
                 }
-                if (wall_climbing != 0 || bar_climbing != 0 || script_climbing) {
-                    *reinterpret_cast<int32_t*>(g_exe_base + RVA_CLIMB_ACTIVE_STATE_FLAG) = 0;
-                    *reinterpret_cast<int32_t*>(g_exe_base + 0x00BD1B60) = 0;
+                // Only Croc's own script state decides that he is climbing. The two native values used to trigger
+                // this as well, and were cleared here; but one of them is set in Sailor Village while Croc is just
+                // standing talking to the first Gobbo (state 4096, on foot), which showed "Climbing Claws
+                // Required!" there. What they really hold is not known, so they are no longer acted on or
+                // written; a change is logged so it can be worked out.
+                if (g_state.debug_watch && !script_climbing) {
+                    static int32_t s_prev_wall = 0, s_prev_bar = 0;
+                    if (wall_climbing != s_prev_wall || bar_climbing != s_prev_bar) {
+                        char nb[128];
+                        std::snprintf(nb, sizeof(nb), "CLIMB native values while not climbing: BD19A0 %d -> %d, BD1B60 %d -> %d",
+                                      s_prev_wall, wall_climbing, s_prev_bar, bar_climbing);
+                        debug_log_locked(nb);
+                        s_prev_wall = wall_climbing;
+                        s_prev_bar = bar_climbing;
+                    }
+                }
+                if (script_climbing) {
                     // g_mutex is already held here (this whole block runs under the lock taken at the top of
                     // Hooked_ReadInput). Locking it again threw std::system_error ("resource deadlock would
                     // occur") and crashed the game whenever Croc touched a climbable surface without claws.
@@ -3963,7 +4383,7 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
     }
 
     // Croc's lava-hurt routine. Traced in-game (debug_watch script tracer): when Croc touches lava his own
-    // strat script jumps to a routine that starts with "124 652720 / 94 0 2 8 0" and, 0x68 bytes later,
+    // strat script jumps to a routine that starts with "124 <a per-level value> / 94 0 2 8 0" and, 0x68 bytes later,
     // "181 0 / 7 16 / 10 4096". It plays the bounce, the tail smoke and the flash, removes a heart through
     // opcode 154, then jumps back into the main script. Script addresses move on every load, so the routine
     // is found by these contents inside the memory region that holds Croc's script, then Croc's script
@@ -3977,7 +4397,10 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
         if (player && in_level && state == 0 && paused == 0 && *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT) > 0) {
             g_pending_lava_hurt.fetch_sub(1);
             uintptr_t script_pos = *reinterpret_cast<uintptr_t*>(player);
-            static const int32_t kHead[7] = {124, 652720, 94, 0, 2, 8, 0};
+            // The second word is different in every level's file (652720 is Save the Bird's, where this was
+            // first traced; with it compared, the routine was only ever found there and every other level fell
+            // back to the plain hit). It is not compared.
+            static const int32_t kHead[7] = {124, 0, 94, 0, 2, 8, 0};
             static const int32_t kBody[6] = {181, 0, 7, 16, 10, 4096};
             uintptr_t found = 0;
             // Search every committed region of the allocation that holds Croc's script (the routine sat in an
@@ -3992,7 +4415,8 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                         const uint8_t* lo = static_cast<const uint8_t*>(r.BaseAddress);
                         const uint8_t* hi = lo + r.RegionSize - (0x68 + sizeof(kBody));
                         for (const uint8_t* q = lo; q < hi; q += 4) {
-                            if (std::memcmp(q, kHead, sizeof(kHead)) == 0 && std::memcmp(q + 0x68, kBody, sizeof(kBody)) == 0) {
+                            if (std::memcmp(q, kHead, 4) == 0 && std::memcmp(q + 8, kHead + 2, sizeof(kHead) - 8) == 0 &&
+                                std::memcmp(q + 0x68, kBody, sizeof(kBody)) == 0) {
                                 found = reinterpret_cast<uintptr_t>(q);
                                 break;
                             }
@@ -4002,6 +4426,14 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 }
             }
             int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+            // The routine ends by playing the burn animation: "var 177 = var 71; set animation (opcode 68)".
+            // Croc's script fills var 71 when the level starts, and leaves it 0 in levels that have no lava
+            // (Chase the Choo Choo Train, the hubs, some secret and boss maps). Opcode 68 does not check for 0:
+            // running the routine there crashed the game at croc2.exe+0x6743F. Those levels get the plain hit.
+            int32_t* croc_vars_check = *reinterpret_cast<int32_t**>(reinterpret_cast<uint8_t*>(player) + 0x118);
+            const bool has_burn_anim = croc_vars_check && readable_memory(croc_vars_check + 71, 4) && croc_vars_check[71] != 0;
+            const bool routine_found = found != 0;
+            if (!has_burn_anim) found = 0;
             if (found) {
                 // The routine is a subroutine: it ends with opcode 127, which pops a 64-bit return address off
                 // the strat's value stack (high half first, then low; see 0x14005DB80). Push Croc's current
@@ -4021,9 +4453,10 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 using FnHurt = void(__fastcall*)(void*);
                 reinterpret_cast<FnHurt>(g_exe_base + RVA_FN_HURT_CROC_HIT)(player);
             }
-            char buf[160];
+            char buf[224];
             std::snprintf(buf, sizeof(buf), "LAVA HURT: routine %s (script %p -> %p), hearts before %d",
-                          found ? "found" : "NOT found, used opcode 154", reinterpret_cast<void*>(script_pos),
+                          found ? "found" : routine_found ? "found but this level has no burn animation, used opcode 154"
+                                                          : "NOT found, used opcode 154", reinterpret_cast<void*>(script_pos),
                           reinterpret_cast<void*>(found), before);
             std::lock_guard<std::mutex> lock(g_mutex);
             debug_log_locked(buf);
@@ -4131,6 +4564,9 @@ static bool handle_pickup_locked(Pickup kind, const std::string& desc) {
             slot = SHOP_JELLY_JUMP;
         }
         if (slot < 0) return false;
+        // Jellies and Clockwork Gobbos are used up. Once Pete's check for one has been collected, buying it again
+        // is an ordinary purchase: that is where more come from if a seed's own supply has been spent.
+        if (kind != Pickup::HeartPot && extra_check_claimed_locked(EXTRA_CHECK_SHOP + village * 5 + slot)) return false;
         static const char* kSlotNames[5] = {"Heart Pot Purchase 1", "Heart Pot Purchase 2", "Clockwork Gobbo Purchase",
                                             "Gummi Jump Purchase", "Jelly Jump Purchase"};
         claim_extra_check_locked(EXTRA_CHECK_SHOP + village * 5 + slot,
@@ -4217,6 +4653,38 @@ static void __fastcall Hooked_Reward100(void* strat) {
         debug_log_locked("100-crystal reward (opcode 270) in " + g_state.current_wad);
     }
     if (g_orig_op_reward_100) g_orig_op_reward_100(strat);
+}
+
+// Opcode 276 (handler 0x140063400): pops tribe, level and kind (0 a stage, 1 a boss) and pushes that map's flag
+// byte from the save data, times 4096; scripts test "& 4096", the "cleared" bit. Two of the game's own gates are
+// lifted with it in randomizer saves, so that stage door keys are the only thing a door needs:
+//  - Swap Meet Pete's travel menu. In each village's shop an object offers the next village only when this
+//    village's second boss is flagged beaten ("276(N, 2, 1) & 4096"; the four shops use the opcode for nothing
+//    else). The boss needs every stage of the village cleared first, so without this a seed could not use a
+//    later village until the whole of the earlier one was done. Every such read in a shop now says "beaten".
+//  - "hub3 gold rock door" in the Caveman village (the kart race's door slot) stays shut until the stages in
+//    the village's first two door slots are cleared. Its reads say "cleared" too.
+// Everything else is left as the game has it: the boss doors (CBKDoorTrigger, IncaDoorTrigger, the last hub3
+// door) still count the village's cleared stages, and the Gobbos by the doors still know what has been done.
+static FnStratVmHandler g_orig_op_map_flags = nullptr;
+static void __fastcall Hooked_MapFlags(void* strat) {
+    if (g_orig_op_map_flags) g_orig_op_map_flags(strat);
+    const MapCoords* cur = reinterpret_cast<const MapCoords*>(g_exe_base + RVA_CURR_MAP_TRIBE);
+    bool lift = false;
+    if (is_shop_coords(*cur)) {
+        lift = true;
+    } else if (is_hub_coords(*cur)) {
+        const char* nm = *reinterpret_cast<const char* const*>(static_cast<uint8_t*>(strat) + 0x30);
+        lift = nm && readable_memory(nm, 20) && std::strcmp(nm, "hub3 gold rock door") == 0;
+    }
+    if (!lift) return;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (!g_state.is_mod_enabled_toggle() || !g_state.is_randomizer_active()) return;
+    }
+    // The result is the top of the strat's value stack: int32 entries, +0x130 points past the last one.
+    int32_t* top = *reinterpret_cast<int32_t**>(static_cast<uint8_t*>(strat) + 0x130);
+    if (top && *reinterpret_cast<int32_t*>(static_cast<uint8_t*>(strat) + 0x138) > 0) top[-1] |= 4096;
 }
 
 // Opcode 172 <type>: GiveInventoryItem -> AddInventoryItem(type, 1, 1, 0) at 0x140041600. The type is the next
@@ -4313,12 +4781,18 @@ static void __fastcall Hooked_HurtOp4(void* s) { log_hurt_op(4, s); g_orig_hurt_
 // Wallet: in vanilla, leaving a level adds that level's crystal counter (0xBA9B3C) to the wallet (0xBA9A9C) in
 // two places: 0x14002BE51 "add eax, [counter]" in OnDoorTransition (wallet = min(9999, wallet + counter)) and
 // 0x14002EFB6 "add [wallet], eax" in the map loader. In randomizer saves crystals are checks, not currency, so
-// both 6-byte instructions are replaced with NOPs; the original bytes are restored for vanilla saves.
+// those instructions are replaced with NOPs; the original bytes are restored for vanilla saves.
+// There are two more, found when the wallet was seen to grow by the stage's count on every walk out of a stage
+// (the mod restores the count on the way in, so it was banked again each time):
+// 0x140034F61 "add ecx, eax" in the function at 0x140034F50 (wallet += counter, capped at 9999, counter = 0;
+// called from four places), and 0x14005CD90 "add [wallet], eax" in the routine at 0x14005CD80.
 // ============================================================================
-struct CodePatch { uintptr_t rva; uint8_t expect[6]; bool applied; };
-static CodePatch g_wallet_patches[2] = {
-    {0x0002BE51, {0x03, 0x05, 0xE5, 0xDC, 0xB7, 0x00}, false},
-    {0x0002EFB6, {0x01, 0x05, 0xE0, 0xAA, 0xB7, 0x00}, false},
+struct CodePatch { uintptr_t rva; int len; uint8_t expect[6]; bool applied; };
+static CodePatch g_wallet_patches[4] = {
+    {0x0002BE51, 6, {0x03, 0x05, 0xE5, 0xDC, 0xB7, 0x00}, false},
+    {0x0002EFB6, 6, {0x01, 0x05, 0xE0, 0xAA, 0xB7, 0x00}, false},
+    {0x00034F61, 2, {0x01, 0xC1, 0, 0, 0, 0}, false},
+    {0x0005CD90, 6, {0x01, 0x05, 0x06, 0xCD, 0xB4, 0x00}, false},
 };
 
 static void set_wallet_patches(bool enable) {
@@ -4326,12 +4800,15 @@ static void set_wallet_patches(bool enable) {
         if (pt.applied == enable) continue;
         uint8_t* code = reinterpret_cast<uint8_t*>(g_exe_base + pt.rva);
         static const uint8_t kNop6[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
-        if (std::memcmp(code, enable ? pt.expect : kNop6, 6) != 0) continue; // unexpected bytes: leave alone
+        static const uint8_t kNop2[2] = {0x66, 0x90};
+        const uint8_t* nop = pt.len == 2 ? kNop2 : kNop6;
+        const size_t len = static_cast<size_t>(pt.len);
+        if (std::memcmp(code, enable ? pt.expect : nop, len) != 0) continue; // unexpected bytes: leave alone
         DWORD old = 0;
-        VirtualProtect(code, 6, PAGE_EXECUTE_READWRITE, &old);
-        std::memcpy(code, enable ? kNop6 : pt.expect, 6);
-        VirtualProtect(code, 6, old, &old);
-        FlushInstructionCache(GetCurrentProcess(), code, 6);
+        VirtualProtect(code, len, PAGE_EXECUTE_READWRITE, &old);
+        std::memcpy(code, enable ? nop : pt.expect, len);
+        VirtualProtect(code, len, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), code, len);
         pt.applied = enable;
         debug_log_locked(std::string("WALLET level-crystal transfer ") + (enable ? "disabled" : "restored") +
                          " at croc2.exe+" + [&] { char b[16]; std::snprintf(b, sizeof(b), "0x%llX", (unsigned long long)pt.rva); return std::string(b); }());
@@ -4601,7 +5078,7 @@ static void __fastcall Hooked_CrystalSpawn329(void* strat) { remove_if_collected
 //     in the front flip                    4 44 10 16384 138 130 <skip> 7 16 10 0 18 5 178 10 0 18 5 177 1 78 18
 //   Tail Whack (8192), Square = 32768 newly pressed:
 //     on foot                              4 44 10 32768 138 3 18 10 0 19 135 130
-//     swimming (tail attack)               4 44 10 32768 138 130 <skip> 5 177 1 116 18
+//   (the throw of a carried object is a different Square check, in the carrying state; see MOVE_GATES)
 //   Long Jump (front flip, 36864), L1 = 1024 and R1 = 2048 both held:
 //     on foot                              4 42 10 1024 138 4 42 10 2048 138 135 130
 // While a move is locked, its button bit is cleared from those reads only, so the script never takes the branch.
@@ -4624,7 +5101,10 @@ static const MoveGate MOVE_GATES[] = {
     {"Butt Stomp (flip)", &g_jump_lock_active, 44, 0x4000, 20,
      {10, 16384, 138, 130, ANYW, 7, 16, 10, 0, 18, 5, 178, 10, 0, 18, 5, 177, 1, 78, 18}},
     {"Tail Whack", &g_tail_lock_active, 44, 0x8000, 10, {10, 32768, 138, 3, 18, 10, 0, 19, 135, 130}},
-    {"Tail Whack (swim)", &g_tail_lock_active, 44, 0x8000, 10, {10, 32768, 138, 130, ANYW, 5, 177, 1, 116, 18}},
+    // (A second Square check, "4 44 10 32768 138 130 <skip> 5 177 1 116 18", sits in state 32768. That state is
+    // "carrying something" - the script enters it when global 13, the game's "Croc is holding an object" flag at
+    // 0x140BC82C0 + 13*4, is set - and the check is the throw. It is deliberately not locked: picking the object up
+    // already needed Power Gloves.)
     {"Long Jump", &g_flip_lock_active, 42, 0x0400, 10, {10, 1024, 138, 4, 42, 10, 2048, 138, 135, 130}},
     // High Jump: in the stomp's bounce (state 24576, sub-state 12288) Jump held launches it; a Jump press while
     // the stomp is falling is remembered in var 181 for the same launch.
@@ -4633,6 +5113,26 @@ static const MoveGate MOVE_GATES[] = {
 };
 static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t which) {
     g_orig_strat_read_value(strat, source, which);
+    // Mine Cart lock: a rideable cart ("MineCartFlat", "BoneMineCartFlat") sets off when its script reads value 32,
+    // "Croc is on me", as set. While Mine Cart is locked the cart reads 0, so Croc can stand on it but it stays put.
+    if (which == 32 && g_cart_lock_active.load(std::memory_order_relaxed)) {
+        uint8_t* cs = static_cast<uint8_t*>(strat);
+        const char* nm = *reinterpret_cast<const char* const*>(cs + 0x30);
+        // Many platforms read value 32 every frame. Names are strings in the level data, shared by every object
+        // of a kind, so the answer for a name pointer is remembered until the next map load.
+        static const char* s_seen = nullptr;
+        static bool s_seen_is_cart = false;
+        static DWORD s_seen_load = 0;
+        if (nm != s_seen || s_seen_load != g_last_map_load_tick) {
+            s_seen = nm;
+            s_seen_load = g_last_map_load_tick;
+            s_seen_is_cart = nm && readable_memory(nm, 20) &&
+                             (!std::strcmp(nm, "MineCartFlat") || !std::strcmp(nm, "BoneMineCartFlat"));
+        }
+        if (s_seen_is_cart && *reinterpret_cast<int32_t*>(cs + 0x138) > 0) {
+            *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(cs + 0x130) - 4) = 0;
+        }
+    }
     // Lead Boots trap: Croc's own script never sees Jump (every jump, on foot, swimming or climbing, starts from
     // one of his reads of values 42, 44 or 144). The controller is left alone.
     if ((which == 42 || which == 44 || which == 144) && g_lead_boots_active.load(std::memory_order_relaxed) &&
@@ -4643,24 +5143,6 @@ static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t 
         }
     }
     if (which != 44 && which != 42) return;
-    // Research: which scripts act on Circle (0x2000) - carrying, pushing, levers. Logged once per script position.
-    if (g_state.debug_watch) {
-        uint8_t* rs = static_cast<uint8_t*>(strat);
-        if (*reinterpret_cast<int32_t*>(rs + 0x138) > 0) {
-            const int32_t v = *reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(rs + 0x130) - 4);
-            const int32_t* rpc = *reinterpret_cast<const int32_t**>(rs);
-            static const int32_t* s_last_pc = nullptr;
-            if ((v & 0x2000) && rpc != s_last_pc && readable_memory(rpc, 6 * sizeof(int32_t))) {
-                s_last_pc = rpc;
-                const char* nm = *reinterpret_cast<const char**>(rs + 0x30);
-                char b[160];
-                std::snprintf(b, sizeof(b), "CIRCLE read %d by %.40s next=%d %d %d %d %d %d", which,
-                              (nm && readable_memory(nm, 1)) ? nm : "?", rpc[0], rpc[1], rpc[2], rpc[3], rpc[4], rpc[5]);
-                std::lock_guard<std::mutex> lock(g_mutex);
-                debug_log_locked(b);
-            }
-        }
-    }
     uint8_t* sp = static_cast<uint8_t*>(strat);
     if (*reinterpret_cast<int32_t*>(sp + 0x138) <= 0) return;
     int32_t* top = reinterpret_cast<int32_t*>(*reinterpret_cast<uintptr_t*>(sp + 0x130) - 4);
@@ -4679,12 +5161,6 @@ static void __fastcall Hooked_StratReadValue(void* strat, void* source, int32_t 
         bool match = true;
         for (int i = 0; i < g.n && match; ++i) match = g.sig[i] == ANYW || g.sig[i] == q[i];
         if (!match) continue;
-        // Square on foot is also "throw what Croc is carrying" (the script picks the throw when var 27 is set).
-        // The Tail Whack lock must not stop a throw.
-        if (g.locked == &g_tail_lock_active) {
-            const int32_t* cv = *reinterpret_cast<int32_t* const*>(sp + 0x118);
-            if (cv && readable_memory(cv + 27, 4) && cv[27] != 0) return;
-        }
         *top &= ~g.bit;
         if (g_state.debug_watch) {
             char b[64];
@@ -4787,20 +5263,6 @@ enum { CRYSTAL_LOOSE = 0, CRYSTAL_BOX = 1, CRYSTAL_RING = 2, CRYSTAL_AWARD = 3 }
 static const CrystalSource kCrystalSources[] = {
 #include "crystal_ids.inc"
 };
-static std::vector<int> early_loose_crystal_numbers(int stage, size_t want) {
-    std::vector<int> out;
-    const char* first_map = nullptr;
-    for (const CrystalSource& s : kCrystalSources) {
-        if (s.stage != stage || s.kind != CRYSTAL_LOOSE) continue;
-        if (!first_map) first_map = s.wad;
-        if (std::strcmp(first_map, s.wad) != 0) break;
-        if (out.size() < want) out.push_back(s.first);
-    }
-    for (int n = 1; n <= 100 && out.size() < want; ++n) {
-        if (std::find(out.begin(), out.end(), n) == out.end()) out.push_back(n);
-    }
-    return out;
-}
 static bool crystal_number_claimed_locked(int stage, int n) {
     return (g_state.white_crystals_claimed[stage][(n - 1) / 8] & (1u << ((n - 1) % 8))) != 0;
 }
@@ -4809,25 +5271,46 @@ static int unclaimed_in_source_locked(const CrystalSource& s) {
     for (int n = s.first; n < s.first + s.count; ++n) if (!crystal_number_claimed_locked(s.stage, n)) ++left;
     return left;
 }
-// Where a white crystal pickup came from: the loose crystal at that exact spot, the nearest smash box or ring for
-// one of their crystals (those land in a different place every time), or nullptr for crystals the level awards.
+// Where a white crystal pickup came from:
+// - a loose crystal: the table entry at the same x and z. Height is not compared: a placed crystal's height in
+//   the level file is nominal (4096 for a whole row) and the game sets the real one, up to a few thousand away.
+//   Where several share a spot, the nearest in height that is still unclaimed.
+// - otherwise the nearest smash box or ring, for one of their crystals. Those land somewhere different every
+//   time, and they are named "Blank" while flying and "crystal" once settled, so the name can't tell them apart
+//   from a loose crystal; only the position can.
+// - nullptr: a crystal the level awards.
 static const CrystalSource* find_crystal_source_locked(const uint8_t* sp, int stage) {
-    const char* nm = *reinterpret_cast<const char* const*>(sp + 0x30);
-    const bool loose = nm && readable_memory(nm, 8) && !std::strcmp(nm, "crystal");
     const int32_t x = *reinterpret_cast<const int32_t*>(sp + 0x4C), y = *reinterpret_cast<const int32_t*>(sp + 0x50),
                   z = *reinterpret_cast<const int32_t*>(sp + 0x54);
-    const CrystalSource* best = nullptr;
-    int64_t best_d = INT64_MAX;
+    const CrystalSource* loose = nullptr;
+    int64_t loose_dy = INT64_MAX;
+    bool loose_free = false;
+    const CrystalSource* box = nullptr;
+    int64_t box_d = INT64_MAX;
     for (const CrystalSource& s : kCrystalSources) {
         if (s.stage != stage || s.kind == CRYSTAL_AWARD || g_state.current_wad != s.wad) continue;
-        if (loose != (s.kind == CRYSTAL_LOOSE)) continue;
         const int64_t dx = s.x - x, dy = s.y - y, dz = s.z - z;
-        const int64_t d = dx * dx + dz * dz + (loose ? dy * dy : 0);
-        if (d < best_d) { best_d = d; best = &s; }
+        if (s.kind == CRYSTAL_LOOSE) {
+            if (std::llabs(dx) > 96 || std::llabs(dz) > 96) continue;
+            const bool free_now = !crystal_number_claimed_locked(stage, s.first);
+            const int64_t ady = std::llabs(dy);
+            if (!loose || (free_now && !loose_free) || (free_now == loose_free && ady < loose_dy)) {
+                loose = &s;
+                loose_dy = ady;
+                loose_free = free_now;
+            }
+        } else {
+            const int64_t d = dx * dx + dz * dz;
+            if (d < box_d) { box_d = d; box = &s; }
+        }
     }
-    if (!best) return nullptr;
-    const int64_t reach = loose ? 1024 : 16384; // a loose crystal sits on its spot; box crystals scatter a few thousand units
-    return best_d <= reach * reach ? best : nullptr;
+    const int64_t reach = 16384; // box and ring crystals scatter a few thousand units from their source
+    const bool box_near = box && box_d <= reach * reach;
+    // A box crystal can come to rest on a loose crystal's spot. If that loose crystal is already collected and a
+    // box in range still has numbers left, this pickup is the box's.
+    if (loose && !loose_free && box_near && unclaimed_in_source_locked(*box) > 0) return box;
+    if (loose) return loose;
+    return box_near ? box : nullptr;
 }
 // Send the checks for `amount` crystals from `src` (nullptr = the stage's awarded crystals).
 static void claim_crystal_numbers_locked(int stage, const CrystalSource* src, int amount) {
@@ -5364,6 +5847,7 @@ static void install_croc2_engine_hooks() {
     hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 173 * 8, 0x00066030, reinterpret_cast<uintptr_t>(&Hooked_GainCrystal), g_orig_gain_crystal);
     hook_strat_slot(RVA_STRAT_VM_INV_ITEM_SLOT, RVA_FN_GIVE_INV_ITEM_NAT, reinterpret_cast<uintptr_t>(&Hooked_GiveInventoryItem), g_orig_give_inv_item);
     hook_strat_slot(RVA_STRAT_VM_REWARD_100_SLOT, RVA_FN_OP_REWARD_100, reinterpret_cast<uintptr_t>(&Hooked_Reward100), g_orig_op_reward_100);
+    hook_strat_slot(RVA_STRAT_VM_DISPATCH_TABLE + 276 * 8, 0x00063400, reinterpret_cast<uintptr_t>(&Hooked_MapFlags), g_orig_op_map_flags);
 
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
     if (g_state.debug_watch) {
@@ -5440,6 +5924,11 @@ __declspec(dllexport) void __cdecl Croc2AP_Initialize(const char* ini_path) {
         std::lock_guard<std::mutex> lock(croc2_ap::g_mutex);
         croc2_ap::g_state = croc2_ap::ModState{};
         croc2_ap::load_config_ini(ini_path);
+#ifdef CROC2AP_TEST_BUILD
+        // Pull-request test builds always write croc2_ap_debug.log, whatever the ini says, so a tester never has
+        // to edit a file before sending a report. Release builds follow debug_watch in croc2_mod.ini.
+        croc2_ap::g_state.debug_watch = true;
+#endif
         croc2_ap::init_default_door_shuffle_locked();
         croc2_ap::load_yaml_player_names();
         croc2_ap::check_cmdline_flags();

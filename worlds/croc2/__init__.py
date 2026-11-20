@@ -95,7 +95,7 @@ class Croc2World(World):
 
         # 1. Core Abilities
         if self.options.shuffle_abilities.value:
-            for ab in ("Tail Whack", "Butt Stomp", "Long Jump", "High Jump", "Climbing Claws", "Power Gloves"):
+            for ab in ("Tail Whack", "Butt Stomp", "Long Jump", "High Jump", "Climbing Claws", "Power Gloves", "Mine Cart"):
                 pool.append(self.create_item(ab))
 
         if self.options.shuffle_levers.value:
@@ -120,6 +120,19 @@ class Croc2World(World):
                         continue
                     key_name = f"{lvl['name']} Key"
                     pool.append(self.create_item(key_name))
+
+        # 3b. Jellies and Clockwork Gobbos gate checks (docs/logic.md): markers above jelly points, and every
+        #     Clockwork Gobbo section. They are progression, and are always in the pool. They are consumables
+        #     (using one uses it up), so the pool holds three times what the levels need: 13 Clockwork Gobbo
+        #     markers, 9 orange ("Blue") jelly markers, 4 lime ("Green") and 1 strawberry ("Red").
+        for consumable, copies in (
+            ("Jelly Jump (Blue Jelly)", 27),
+            ("High Jelly Jump (Green Jelly)", 12),
+            ("Gummi Jump (Red Jelly)", 3),
+            ("Clockwork Gobbo", 39),
+        ):
+            for _ in range(copies):
+                pool.append(self.create_item(consumable))
 
         # 4. Jigsaw Pieces (4 total: 1 per Village Hub), Trophies (16), and Golden Gobbos (20)
         for _ in range(4):

@@ -104,6 +104,9 @@ def _install_ap_shims_if_needed() -> None:
             self.prog_items = {}
 
         def collect(self, item: Item):
+            # Like Archipelago's own CollectionState: only progression items count towards rules.
+            if not item.advancement:
+                return
             p_items = self.prog_items.setdefault(item.player, {})
             p_items[item.name] = p_items.get(item.name, 0) + 1
 
@@ -412,12 +415,9 @@ class TestCroc2Archipelago(unittest.TestCase):
         # + 2000 White Crystal checks (100 per stage * 20 stages) = 2172
         self.assertEqual(len(unfilled), 2172)
 
-        # Verify that Sailor Village Door 1 (T1_D1) is shuffled (not vanilla T1L2M001) when door_shuffle is enabled
-        self.assertNotEqual(
-            world.slot_door_map["T1_D1"],
-            "T1L2M001",
-            "Sailor Village Door 1 must be shuffled to a non-vanilla level when door_shuffle is enabled",
-        )
+        # Door 1 is open from the start, so it must lead to a stage with checks reachable on a plain jump:
+        # Find the Key! Save the Gobbo! or Save the Bird from the Thief (docs/logic.md).
+        self.assertIn(world.slot_door_map["T1_D1"], ("T1L2M001", "T1L6M001"))
 
         # Verify authentic in-game level naming for items and locations
         self.assertIn("Find the Key! Save the Gobbo! - Blue Crystal", ITEM_NAME_TO_DATA)
@@ -436,6 +436,13 @@ class TestCroc2Archipelago(unittest.TestCase):
         # Grant Tail Whack, Power Gloves, and Sailor Village Door Keys so Croc can reach Find the Key! Save the Gobbo!
         state.collect(world.create_item("Tail Whack"))
         state.collect(world.create_item("Power Gloves"))
+        # The yellow crystal in this stage sits above an orange jelly marker (docs/logic.md). Jellies are used
+        # up, so one is in logic only once as many are held as the game has orange markers.
+        from worlds.croc2.locations import CONSUMABLE_NEED
+        self.assertEqual(CONSUMABLE_NEED, {"Jelly Jump (Blue Jelly)": 9, "High Jelly Jump (Green Jelly)": 4,
+                                           "Gummi Jump (Red Jelly)": 1, "Clockwork Gobbo": 13})
+        for _ in range(CONSUMABLE_NEED["Jelly Jump (Blue Jelly)"]):
+            state.collect(world.create_item("Jelly Jump (Blue Jelly)"))
         for item in mw.itempool:
             if item.name.endswith(" Key"):
                 state.collect(item)
@@ -618,7 +625,9 @@ class TestCroc2Archipelago(unittest.TestCase):
                     st = save_res["state"]
                     self.assertTrue(st["save_locked_to_mod"], "Mod must lock ON when a randomizer save is created")
                     self.assertTrue(st["in_active_save"])
-                    self.assertNotEqual(st["door_1_target"], "T1L2M001", "Door 1 must never be vanilla T1L2M001")
+                    # Door 1 leads to one of the two Sailor stages with plenty reachable on a plain jump (which
+                    # includes its own vanilla stage): see build_logical_item_pool_for_seed_locked.
+                    self.assertIn(st["door_1_target"], ("T1L2M001", "T1L6M001"))
                     door1_targets.add(st["door_1_target"])
                     seeds_seen.add(st["current_seed_hex"])
 
@@ -636,21 +645,16 @@ class TestCroc2Archipelago(unittest.TestCase):
                 self.assertTrue(locked_toggle["mod_enabled_toggle"])
                 self.assertTrue(locked_toggle["save_locked_to_mod"])
 
-                # Claiming all 15 Sphere 1 checks (white crystals across Sailor Village stages 0..4)
-                # must logically unlock all 5 core progression abilities (Tail Whack, Butt Stomp, Climbing Claws, Power Gloves, Lever Wrench)!
-                for s_idx in range(5):
-                    for c_idx in range(3):
-                        chk_res = await bridge.send_command({
-                            "command": "claim_solo_check",
-                            "stage_idx": s_idx,
-                            "sub_check_idx": c_idx,
-                        })
-                final_ab = chk_res["state"]["abilities"]
-                self.assertTrue(final_ab["tail_whack"], "Sphere 1 checks must logically grant Tail Whack")
-                self.assertTrue(final_ab["butt_stomp"], "Sphere 1 checks must logically grant Butt Stomp")
-                self.assertTrue(final_ab["climbing_claws"], "Sphere 1 checks must logically grant Climbing Claws")
-                self.assertTrue(final_ab["power_gloves"], "Sphere 1 checks must logically grant Power Gloves")
-                self.assertTrue(final_ab["lever_wrench"], "Sphere 1 checks must logically grant Lever Wrench")
+                # A solo seed must be beatable in logic: playing it sphere by sphere (collect everything in reach,
+                # see what that opens, repeat) must find every ability, key and consumable, and must not hand
+                # them all out in the first sphere.
+                logic = await bridge.send_command({"command": "debug_solo_logic"})
+                self.assertEqual(logic["status"], "ok")
+                self.assertEqual(logic["stranded_items"], 0, "Every needed item must be reachable in logic")
+                self.assertEqual(logic["short_consumables"], 0, "Enough of every consumable must be reachable in logic")
+                self.assertEqual(logic["lost_items"], 0, "Nothing but filler may sit on a check that cannot be collected")
+                self.assertGreater(len(logic["spheres"]), 2, "Needed items must be spread over several spheres")
+                self.assertGreater(logic["spheres"][0]["checks"], 20, "The first stage must have checks reachable with a plain jump")
 
                 # 8. Verify every regular White Crystal (1..100) is a one-time check:
                 #    First time collecting White Crystal #7 in Stage 0 sends a check AND adds currency;
@@ -1224,7 +1228,7 @@ class TestCroc2Archipelago(unittest.TestCase):
             for seed in range(300):
                 _, door_map = compute_door_pairing(random.Random(seed), opts)
                 self.assertNotIn(door_map["T1_D1"], VEHICLE_STAGE_WADS, "mode %d seed %d" % (mode, seed))
-                self.assertNotEqual(door_map["T1_D1"], "T1L2M001", "mode %d seed %d" % (mode, seed))
+                self.assertIn(door_map["T1_D1"], ("T1L2M001", "T1L6M001"), "mode %d seed %d" % (mode, seed))
                 self.assertEqual(len(set(door_map.values())), 20, "door shuffle must stay a permutation")
 
 
