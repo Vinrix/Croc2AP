@@ -4377,6 +4377,14 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 }
             }
             int before = *reinterpret_cast<int32_t*>(g_exe_base + RVA_HEALTH_STRUCT + 4);
+            // The routine ends by playing the burn animation: "var 177 = var 71; set animation (opcode 68)".
+            // Croc's script fills var 71 when the level starts, and leaves it 0 in levels that have no lava
+            // (Chase the Choo Choo Train, the hubs, some secret and boss maps). Opcode 68 does not check for 0:
+            // running the routine there crashed the game at croc2.exe+0x6743F. Those levels get the plain hit.
+            int32_t* croc_vars_check = *reinterpret_cast<int32_t**>(reinterpret_cast<uint8_t*>(player) + 0x118);
+            const bool has_burn_anim = croc_vars_check && readable_memory(croc_vars_check + 71, 4) && croc_vars_check[71] != 0;
+            const bool routine_found = found != 0;
+            if (!has_burn_anim) found = 0;
             if (found) {
                 // The routine is a subroutine: it ends with opcode 127, which pops a 64-bit return address off
                 // the strat's value stack (high half first, then low; see 0x14005DB80). Push Croc's current
@@ -4396,9 +4404,10 @@ static uint32_t __fastcall Hooked_ReadInput(void* input_ctx) {
                 using FnHurt = void(__fastcall*)(void*);
                 reinterpret_cast<FnHurt>(g_exe_base + RVA_FN_HURT_CROC_HIT)(player);
             }
-            char buf[160];
+            char buf[224];
             std::snprintf(buf, sizeof(buf), "LAVA HURT: routine %s (script %p -> %p), hearts before %d",
-                          found ? "found" : "NOT found, used opcode 154", reinterpret_cast<void*>(script_pos),
+                          found ? "found" : routine_found ? "found but this level has no burn animation, used opcode 154"
+                                                          : "NOT found, used opcode 154", reinterpret_cast<void*>(script_pos),
                           reinterpret_cast<void*>(found), before);
             std::lock_guard<std::mutex> lock(g_mutex);
             debug_log_locked(buf);
